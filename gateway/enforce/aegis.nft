@@ -1,0 +1,27 @@
+#!/usr/sbin/nft -f
+# Aegis zero-trust enforcement on the gateway (needs a kernel with nf_tables: aegis-netfilter.cfg).
+# The gateway must sit in the traffic path: endpoints behind a second port or on a quarantine VLAN,
+# the gateway routing between that segment ($ENDPOINT_IF) and the rest of the network.
+# Policy: an endpoint may forward traffic only while its address is in @admitted. Attestation
+# itself always works (the gateway connects to the endpoints; DHCP is allowed).
+# Loaded by aegis-enforce.sh init; the set is filled by fleet.py via aegis-enforce.sh admit|quarantine.
+table inet aegis
+delete table inet aegis
+table inet aegis {
+    set admitted {
+        type ipv4_addr
+        comment "endpoints that passed attestation in the last cycle"
+    }
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+        ct state established,related accept
+        iifname $ENDPOINT_IF ip saddr @admitted accept
+        oifname $ENDPOINT_IF ip daddr @admitted ct state new accept
+        iifname $ENDPOINT_IF counter log prefix "aegis-quarantine " limit rate 5/second drop
+    }
+    chain input {
+        type filter hook input priority filter; policy accept;
+        iifname $ENDPOINT_IF udp dport 67 accept comment "DHCP for endpoints"
+        iifname $ENDPOINT_IF ip saddr != @admitted tcp dport != { 7443 } counter drop comment "quarantined: nothing but the quote service"
+    }
+}
