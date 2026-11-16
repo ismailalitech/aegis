@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""Aegis gateway identity and quote service (Phase 1).
+
+  aegisd.py init   [--state DIR]          create the gateway identity (once)
+  aegisd.py show   [--state DIR]          print the identity record
+  aegisd.py serve  [--state DIR] [--port 7443]
+
+Hardware facts come from the PolarFire system controller through the
+read-only tool aegis_sysserv.py (serial number, Microchip device certificate,
+design info, design digests, security locks). The identity key is ML-DSA-65,
+generated in software from the kernel random pool and stored in DIR with mode
+0600. On this chip (MPFS095T, non-S) no hardware service can hold or use the
+key, so it is protected only by Linux file permissions.
+
+The mpfs-generic-service module is loaded if missing and NEVER unloaded:
+its driver has no remove path and an rmmod corrupts the kernel's misc list.
+"""
+import argparse
+import hashlib
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+for p in (HERE, os.path.join(HERE, "..", "sysserv"), os.path.join(HERE, "..", "..", "common")):
+    sys.path.insert(0, os.path.abspath(p))
+
+import mldsa  # noqa: E402
+import wire  # noqa: E402
+
+DEFAULT_STATE = "/var/lib/aegis"
+
+
+class HardwareSource:
+    """Live system-controller reads on the board."""
+
+    def __init__(self):
+        import aegis_sysserv
+        self.ss = aegis_sysserv
+        if not os.path.exists(aegis_sysserv.DEVICE):
+            subprocess.run(["modprobe", "mpfs-generic-service"], check=True)
+
+    def read(self, name):
+        return self.ss.call(name)
+
+
+def device_cert_der(raw):
+    n = int.from_bytes(raw[2:4], "big") + 4
+    if raw[0] != 0x30 or raw[1] != 0x82 or n > len(raw):
+        raise ValueError("device certificate is not a DER SEQUENCE")
+    return raw[:n]
+
+
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def own_code_sha256():
+    files = [os.path.join(HERE, "aegisd.py"),
+             os.path.join(HERE, "..", "sysserv", "aegis_sysserv.py"),
+             os.path.join(HERE, "..", "..", "common", "mldsa.py"),
+             os.path.join(HERE, "..", "..", "common", "wire.py")]
+    h = hashlib.sha256()
+    for f in files:
+        h.update(file_sha256(f).encode())
+    return h.hexdigest()
+
+
+def init_identity(state, hw, force=False):
+    os.makedirs(state, mode=0o700, exist_ok=True)
+    skf = os.path.join(state, "identity.sk")
+    if os.path.exists(skf) and not force:
+        raise SystemExit("identity exists in %s (use --force to replace)" % state)
+    cert = device_cert_der(hw.read("device_cert"))
+    pk, sk = mldsa.keypair()
+    body = {
+        "v": 1,
+        "type": "identity",
+        "dsn": hw.read("serial").hex(),
+        "device_cert_sha256": hashlib.sha256(cert).hexdigest(),
+        "design_info": hw.read("design_info").hex(),
+        "pk_alg": "ML-DSA-65",
+        "pk": pk.hex(),
+        "key_storage": "software, Linux file mode 0600 (no hardware key service on MPFS095T non-S)",
+    }
+    rec = {"body": body, "sig": mldsa.sign(sk, wire.LABEL_IDENTITY, wire.canonical(body)).hex(),
+           "device_cert": cert.hex()}
+    fd = os.open(skf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(sk)
+    with open(os.path.join(state, "identity.json"), "w") as f:
+        json.dump(rec, f, indent=1)
+    return rec
+
+
+def load_identity(state):
+    with open(os.path.join(state, "identity.json")) as f:
+        rec = json.load(f)
+    with open(os.path.join(state, "identity.sk"), "rb") as f:
+        sk = f.read()
+    return rec, sk
+
+
+def measurements(hw):
+    m = {
+        "design_info": hw.read("design_info").hex(),
+        "usercode": hw.read("usercode").hex(),
+        "security_locks": hw.read("security").hex(),
+        "design_digests_sha256": hashlib.sha256(hw.read("digest")).hexdigest(),
+        "aegisd_code_sha256": own_code_sha256(),
+    }
+    try:
+        m["kernel"] = os.uname().release
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            m["boot_id"] = f.read().strip()
+    except OSError:
+        pass
+    return m
+
+
+def make_quote(rec, sk, hw, nonce_hex):
+    nonce = bytes.fromhex(nonce_hex)
+    if len(nonce) != 32:
+        raise ValueError("nonce must be 32 bytes")
+    body = {
+        "v": 1,
+        "type": "quote",
+        "nonce": nonce.hex(),
+        "identity_sha256": wire.digest(rec["body"]),
+        "measurements": measurements(hw),
+        "gw_monotonic_s": round(time.monotonic(), 3),
+    }
+    return {"body": body, "sig": mldsa.sign(sk, wire.LABEL_QUOTE, wire.canonical(body)).hex()}
+
+
+def handle(conn, rec, sk, hw):
+    req = wire.recv(conn)
+    kind = req.get("type")
+    if kind == "identity":
+        wire.send(conn, rec)
+    elif kind == "quote":
+        wire.send(conn, make_quote(rec, sk, hw, str(req.get("nonce", ""))))
+    else:
+        wire.send(conn, {"error": "unknown request"})
+
+
+def serve(state, port, hw, once=False, ready=None):
+    rec, sk = load_identity(state)
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("0.0.0.0", port))
+    srv.listen(4)
+    if ready:
+        ready(srv.getsockname()[1])
+    while True:
+        conn, peer = srv.accept()
+        conn.settimeout(10)
+        try:
+            handle(conn, rec, sk, hw)
+        except Exception as e:  # one bad client must not stop the service
+            try:
+                wire.send(conn, {"error": str(e)})
+            except OSError:
+                pass
+        finally:
+            conn.close()
+        if once:
+            break
+    srv.close()
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Aegis gateway identity and quote service")
+    ap.add_argument("cmd", choices=["init", "show", "serve"])
+    ap.add_argument("--state", default=DEFAULT_STATE)
+    ap.add_argument("--port", type=int, default=7443)
+    ap.add_argument("--force", action="store_true")
+    a = ap.parse_args(argv)
+    if a.cmd == "show":
+        rec, _ = load_identity(a.state)
+        body = dict(rec["body"], pk=rec["body"]["pk"][:32] + "...")
+        print(json.dumps(body, indent=1))
+        return 0
+    hw = HardwareSource()
+    if a.cmd == "init":
+        rec = init_identity(a.state, hw, a.force)
+        print("identity created, sha256", wire.digest(rec["body"]))
+        return 0
+    serve(a.state, a.port, hw)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

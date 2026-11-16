@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .venv/
 vectors/acvp/*.json
+host/enrolled/
