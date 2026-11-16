@@ -11,7 +11,7 @@
 #   3. a TAMPERED Non-Secure image (signed with the trusted key, boots normally) is flashed
 #      -> the gateway QUARANTINES it and revokes its credential
 #   4. the good image is flashed back -> ADMITTED again with a NEW session
-# Needs: STM32 reachable by the gateway (today via host/serial_bridge.py on this PC),
+# Needs: the STM32 on the LAN (policy host = its Ethernet address),
 # STM32CubeProgrammer, the artifacts in endpoints/stm32h573/artifacts/.
 set -eu
 REPO=$(cd "$(dirname "$0")/.." && pwd)

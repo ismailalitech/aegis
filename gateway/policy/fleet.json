@@ -1,11 +1,11 @@
 {
  "timeout_s": 20,
- "note": "STM32 reached through the PC serial relay (host/serial_bridge.py) until its Ethernet port has a link. ML-DSA-65 key enrolled by trust on first use (fleet.py enroll-pq). The ES256 token key is TF-M's published development key, so only the ML-DSA check is security-relevant.",
+ "note": "STM32 reached directly over Ethernet (DHCP address 192.0.2.20, MAC <mac>). ML-DSA-65 key enrolled by trust on first use. The ES256 token key is TF-M's published development key; only the ML-DSA check is security-relevant.",
  "endpoints": [
   {
    "name": "stm32h573-dk",
    "kind": "aegis-pq",
-   "host": "192.0.2.30",
+   "host": "192.0.2.20",
    "port": 7444,
    "pq_pub_file": "keys/stm32h573-dk.mldsa65.pub",
    "iak_pub_pem": "keys/tfm-dev-iak.pub.pem",
