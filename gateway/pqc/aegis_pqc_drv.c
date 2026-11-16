@@ -34,7 +34,7 @@
 #define R_NCYC    (0x10 / 4)
 #define R_NIDX    (0x14 / 4)
 #define R_NDATA   (0x18 / 4)
-#define R_LANES   (0x40 / 4)
+#define R_LANES   (0x38 / 4)  /* lane i: low word 0x38+8i, high 0x3C+8i; lane 24 ends at 0xFF */
 
 static volatile uint32_t *regs;
 static unsigned long n_hw, n_checked, n_sw;
