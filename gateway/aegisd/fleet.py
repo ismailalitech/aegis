@@ -272,7 +272,12 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE):
         with open(meta) as f:
             m = json.load(f)
         if m["body"]["expires"] - time.time() > 300:
-            return "valid"
+            try:  # the endpoint's secure side must still report the same session
+                sid, ch = query_session(ep)
+            except (OSError, ValueError):
+                sid, ch = None, None
+            if sid == m["session_id"] and ch == m["credential_sha3_256"]:
+                return "valid"
     sk, gid = load_gateway_identity(state)
     try:
         r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}))
@@ -341,6 +346,11 @@ def main(argv=None):
         print(json.dumps(run_once(policy, base, ev), indent=1))
         return 0
     while True:
+        try:  # reload every cycle, so policy updates apply without a restart
+            with open(a.policy) as f:
+                policy = json.load(f)
+        except (OSError, ValueError) as e:
+            print("policy reload failed, keeping the previous one: %s" % e, flush=True)
         res = run_once(policy, base, ev)
         tmp = a.state + ".tmp"
         with open(tmp, "w") as f:

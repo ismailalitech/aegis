@@ -27,6 +27,10 @@
  *                      session = SHA3-256("aegis-session-v1" || K || nonce || SHA3-256(ct))
  *                      out[0] <- tag = SHA3-256("aegis-confirm-v1" || K || nonce || SHA3-256(ct)
  *                                                || SHA3-256(credential))
+ *                      Mutual authentication: the credential must be "<canonical JSON body>\n<ML-DSA-65
+ *                      signature>" signed by the gateway key pinned in this image (gateway_pk.h,
+ *                      label "aegis-credential-v1"), and its body must name SHA3-256(ct) in
+ *                      "kem_ct_sha3_256"; otherwise PSA_ERROR_INVALID_SIGNATURE and no session.
  *   type 5 SESSION:    out[0] <- SHA3-256("aegis-session-id-v1" || session) || SHA3-256(credential)
  * The Non-Secure world can ask for quotes and run provisioning but never sees the seed, the
  * secret keys, K or the session key.
@@ -43,6 +47,7 @@
 #include "psa_manifest/sid.h"
 #include "stm32h5xx_hal.h"
 #include "tfm_attest_defs.h"
+#include "gateway_pk.h"
 
 #define AEGIS_PQ_GET_PUBKEY 1
 #define AEGIS_PQ_QUOTE      2
@@ -79,6 +84,7 @@ static uint8_t cred[CRED_MAX];
 static uint8_t session_key[32];
 static uint8_t cred_hash[32];
 static int session_ready;
+static const uint8_t gateway_pk[MLDSA_PUBLICKEYBYTES(65)] = AEGIS_GATEWAY_PK;
 
 /* ---- SHA3-256 (FIPS 202), small and simple -------------------------------------------- */
 
@@ -280,10 +286,48 @@ static psa_status_t do_kem_init(const psa_msg_t *msg)
 		return PSA_ERROR_GENERIC_ERROR;
 	}
 	kem_pending = 1;
-	session_ready = 0;
+	/* The established session stays valid until a new exchange completes (a stray or hostile
+	 * KEM_INIT must not tear it down; found by review 2026-11-16). */
 	psa_write(msg->handle, 0, kem_ek, KEM_EK_LEN);
 	psa_write(msg->handle, 1, sig, sizeof(sig));
 	return PSA_SUCCESS;
+}
+
+/* Credential = body || '\n' || ML-DSA-65 signature by the pinned gateway key over
+ * "aegis-credential-v1\0" || body (pure ML-DSA, empty context). The body must contain
+ * "kem_ct_sha3_256":"<hex of SHA3-256(ct)>" (canonical JSON), binding it to this exchange. */
+static int check_credential(const uint8_t *c, size_t len, const uint8_t h_ct[32])
+{
+	static const char lbl[] = "aegis-credential-v1";
+	static const char key[] = "\"kem_ct_sha3_256\":\"";
+	static const char hx[] = "0123456789abcdef";
+	const uint8_t pre[2] = {0, 0};
+	char want[sizeof(key) - 1 + 64 + 1];
+	size_t body_len = 0, i;
+
+	while (body_len < len && c[body_len] != '\n') body_len++;
+	if (body_len == len || len - body_len - 1 != MLDSA_BYTES(65) ||
+	    sizeof(lbl) + body_len > sizeof(signed_msg)) {
+		return -1;
+	}
+	memcpy(signed_msg, lbl, sizeof(lbl));
+	memcpy(signed_msg + sizeof(lbl), c, body_len);
+	if (aegis_mldsa_verify_internal(c + body_len + 1, signed_msg, sizeof(lbl) + body_len, pre, sizeof(pre),
+					gateway_pk, 0) != 0) {
+		return -1;
+	}
+	memcpy(want, key, sizeof(key) - 1);
+	for (i = 0; i < 32; i++) {
+		want[sizeof(key) - 1 + 2 * i] = hx[h_ct[i] >> 4];
+		want[sizeof(key) - 1 + 2 * i + 1] = hx[h_ct[i] & 15];
+	}
+	want[sizeof(want) - 1] = '"';
+	for (i = 0; i + sizeof(want) <= body_len; i++) {
+		if (memcmp(c + i, want, sizeof(want)) == 0) {
+			return 0;
+		}
+	}
+	return -1;
 }
 
 static psa_status_t do_kem_finish(const psa_msg_t *msg)
@@ -304,12 +348,16 @@ static psa_status_t do_kem_finish(const psa_msg_t *msg)
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
 	kem_pending = 0;
+	sha3_256(kem_ct, KEM_CT_LEN, h_ct);
+	if (check_credential(cred, cred_len, h_ct) != 0) {
+		wipe(kem_dk, sizeof(kem_dk));
+		return PSA_ERROR_INVALID_SIGNATURE;
+	}
 	if (aegis_mlkem_dec(k, kem_ct, kem_dk) != 0) {
 		wipe(kem_dk, sizeof(kem_dk));
 		return PSA_ERROR_GENERIC_ERROR;
 	}
 	wipe(kem_dk, sizeof(kem_dk));
-	sha3_256(kem_ct, KEM_CT_LEN, h_ct);
 	sha3_256(cred, cred_len, cred_hash);
 	sha3_init(&h);
 	sha3_update(&h, (const uint8_t *)l_sess, sizeof(l_sess) - 1);

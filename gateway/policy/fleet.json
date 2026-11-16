@@ -12,9 +12,9 @@
    "allowed": [
     {
      "type": "SPE",
-     "measurement_value": "227e3c8a5c40dd66e15ea5d0e050ceddcc3e5665a36dca8a645d354ada42a4fc",
+     "measurement_value": "380513d6dea9004871a3ad2a1ef8ba6765353ec2e9e3136d60a6fec9d7498f63",
      "signer_id": "e30466f6b8470c1f29070b17f1e2d3e94d445e3f608087fdc711e4382bb538b6",
-     "image": "TF-M v2.3.0 + Aegis PQ partition with ML-KEM provisioning"
+     "image": "TF-M v2.3.0 + Aegis PQ partition, ML-KEM provisioning, gateway key pinned (mutual auth)"
     },
     {
      "type": "NSPE",

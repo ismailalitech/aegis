@@ -135,3 +135,24 @@ deterministic and hedged).
 ML-KEM-768 keyGen 25, encaps 25, decaps 10; ML-DSA-65 keyGen 25, sigGen 120 (8 groups),
 sigVer 60 (4 groups). Afterwards the prover image was written back; the gateway had quarantined the
 STM32 (credential revoked) while the test image ran, then re-admitted it with a new session.
+
+## Mutual authentication (2026-11-16)
+
+The STM32 secure partition now accepts a provisioning credential only if it is signed with the
+gateway's ML-DSA-65 key, pinned into the secure image at build time (`tools/gen_gateway_pin.py`,
+key sha256 0c1d7820...), and its canonical body names SHA3-256 of this exchange's ciphertext.
+Otherwise PSA_ERROR_INVALID_SIGNATURE (-149), no session.
+
+Found while preparing the negative tests: a new KEM_INIT used to drop the established session, so
+anyone reaching the prover's port could tear a session down. Fixed: the session is replaced only
+when a new exchange completes. The gateway also re-checks the endpoint's session every cycle and
+re-provisions on mismatch. And `fleet.py watch` now reloads the policy file every cycle (the
+service kept quarantining with an outdated SPE measurement after an image update until restarted).
+
+`tests/board/mutual_auth_checks.py` on the real STM32 (logs/stm32/mutual-*/):
+
+| Case | Result |
+|---|---|
+| credential signed by a foreign key (from the PC) | refused, ERR pq -149 |
+| credential signed by the real gateway key, bound to another ciphertext (on the gateway) | refused, ERR pq -149 |
+| established session after both | unchanged (fac9a735...), gateway and STM32 agree |
