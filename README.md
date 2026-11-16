@@ -32,4 +32,4 @@ Copy `bench.env.example` to `bench.env` and set your addresses. Then:
 `endpoints/` firmware for the prover nodes, `hw/` fabric RTL, `tests/`, `vectors/` (ACVP
 checksums), `docs/` (architecture, threat model, phase notes).
 
-MIT licensed. Not security-certified; do not use it to protect anything real.
+Apache-2.0 licensed (see `LICENSE`; source files carry SPDX headers). Not security-certified; do not use it to protect anything real.

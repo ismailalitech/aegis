@@ -8,8 +8,8 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 [ -f "$REPO/bench.env" ] && { set -a; . "$REPO/bench.env"; set +a; }
 PY=.venv/bin/python
-GATEWAY=${GATEWAY:?set GATEWAY in bench.env (see bench.env.example)}
-STM32=${STM32:?set STM32 in bench.env (see bench.env.example)}
+GATEWAY=${GATEWAY:-}
+STM32=${STM32:-}
 OUT=logs/regression/$(date +%Y%m%d-%H%M%S)
 mkdir -p "$OUT"
 pass=0; fail=0
@@ -23,6 +23,7 @@ stage rtl-simulation       hw/tb/run_all.sh --fast
 stage acvp-pc-software     $PY tools/run_acvp_commands.py build/acvp/commands.jsonl "$HOME/aegis-tools/liboqs-src/build/tests"
 stage acvp-vectors-intact  sh -c 'cd vectors/acvp && sha256sum -c --quiet SHA256SUMS'
 if [ "${1:-}" = --board ]; then
+    : "${GATEWAY:?set GATEWAY in bench.env (see bench.env.example)}" "${STM32:?set STM32 in bench.env (see bench.env.example)}"
     B=root@$GATEWAY
     stage gateway-phase1       env BOARD=$GATEWAY $PY tests/board/phase1_board_checks.py
     stage fabric-selftest      ssh -o BatchMode=yes $B /root/aegis/pqc_selftest 200
