@@ -1,0 +1,15 @@
+# Aegis fleet verifier: re-attest every endpoint in the policy every 30 s.
+# State: /var/lib/aegis/fleet-state.json; verdict log in the journal (journalctl -u aegis-fleet).
+[Unit]
+Description=Aegis fleet verifier (periodic re-attestation)
+After=network-online.target aegisd.service
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/root/aegis/gateway/aegisd
+ExecStart=/usr/bin/python3 /root/aegis/gateway/aegisd/fleet.py watch /root/aegis/gateway/policy/fleet.json --interval 30 --state /var/lib/aegis/fleet-state.json
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

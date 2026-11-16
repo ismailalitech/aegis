@@ -63,3 +63,15 @@ Consequences for Aegis:
 - no signature with the factory key KFP, no PUF emulation, no user crypto processor (TeraFire AES/SHA/ECC);
 - available hardware anchors: device serial number (DSN), the Microchip-signed device certificate (system controller checks DSN and key consistency on export), design info and digests, security lock state, and the nonce service (SRAM-PUF start-up states) behind /dev/hwrng;
 - the gateway's own identity key must be generated and held in software; documents must say so.
+
+## Services at boot, and the gateway noticing its own FPGA change (2026-11-16)
+
+`gateway/systemd/` (aegisd.service, aegis-fleet.service, install.sh; undo: `install.sh remove`
+and reboot). After a reboot both came back by themselves; the fleet verifier admitted the STM32
+every 30 s.
+
+The PC verifier then REFUSED the gateway's quote: "measurement changed: design_digests_sha256,
+design_info". Correct: since enrolment the gateway's fabric had been reprogrammed (pfdaq v0.5.1,
+design version 6 -> Aegis dv101, version 0x65). Signature and identity unchanged. The fabric change
+was intended, so the reference was re-enrolled (old enrolment kept in
+logs/phase1/enrolment-history/); board checks 6/6 again.

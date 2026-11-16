@@ -1,0 +1,14 @@
+# Aegis gateway identity and quote service (TCP 7443).
+# Loads mpfs-generic-service if needed (never unloaded: its driver cannot be removed safely).
+[Unit]
+Description=Aegis gateway identity and quote service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /root/aegis/gateway/aegisd/aegisd.py serve --state /var/lib/aegis --port 7443
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
