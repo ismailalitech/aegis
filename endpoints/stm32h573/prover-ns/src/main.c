@@ -131,6 +131,7 @@ static int parse_hex(const char *s, uint8_t *out, size_t len)
 #define AEGIS_PQ_KEM_INIT   3
 #define AEGIS_PQ_KEM_FINISH 4
 #define AEGIS_PQ_SESSION    5
+#define AEGIS_PQ_HEARTBEAT  6
 #define KEM_EK_LEN  1184u
 #define KEM_CT_LEN  1088u
 #define CRED_MAX    6144u
@@ -228,6 +229,34 @@ static size_t handle_pq(const char *line, char *out, size_t max)
 		}
 		k = (size_t)snprintf(out, max, "PQKEMOK ");
 		k += put_hex_into(out + k, tag, 32);
+		memcpy(out + k, " END\r\n", 6);
+		return k + 6;
+	}
+	if (strncmp(line, "PQHB ", 5) == 0) {
+		uint8_t nonce[32], r[40];
+		char status[96];
+		int sl;
+
+		if (parse_hex(line + 5, nonce, 32) != 0) {
+			return (size_t)snprintf(out, max, "ERR bad-request\r\n");
+		}
+		sl = snprintf(status, sizeof(status), "uptime_s=%lu;link=%d;fw=%s", (unsigned long)(ticks_ms / 1000u),
+			      aegis_eth_link_up(), AEGIS_PROVER_VERSION);
+		{
+			psa_invec i[2] = {{nonce, 32}, {status, (size_t)sl}};
+			psa_outvec o[1] = {{r, sizeof(r)}};
+
+			st = psa_call(AEGIS_PQ_SERVICE_HANDLE, AEGIS_PQ_HEARTBEAT, i, 2, o, 1);
+		}
+		if (st != PSA_SUCCESS) {
+			return (size_t)snprintf(out, max, "ERR pq %ld\r\n", (long)st);
+		}
+		k = (size_t)snprintf(out, max, "PQHB ");
+		k += put_hex_into(out + k, (const uint8_t *)status, (size_t)sl);
+		out[k++] = ' ';
+		k += put_hex_into(out + k, r, 8);
+		out[k++] = ' ';
+		k += put_hex_into(out + k, r + 8, 32);
 		memcpy(out + k, " END\r\n", 6);
 		return k + 6;
 	}

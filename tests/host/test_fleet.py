@@ -120,6 +120,14 @@ class FakeEndpoint:
             self.cred = cred
             c.sendall(b"PQKEMOK %s END\r\n" % tag.hex().encode())
             return
+        if line.startswith("PQHB "):
+            nonce = bytes.fromhex(line.split()[1])
+            self.hb = getattr(self, "hb", 0) + 1
+            ctr = self.hb.to_bytes(8, "little")
+            status = b"uptime_s=1;link=1;fw=test"
+            tag = sha3(b"aegis-hb-v1", self.session, nonce, ctr, status)
+            c.sendall(b"PQHB %s %s %s END\r\n" % (status.hex().encode(), ctr.hex().encode(), tag.hex().encode()))
+            return
         if line == "PQSESSION":
             sid = sha3(b"aegis-session-id-v1", self.session)
             c.sendall(b"PQSESSION %s %s END\r\n" % (sid.hex().encode(), sha3(self.cred).hex().encode()))
@@ -258,7 +266,8 @@ class Fleet(unittest.TestCase):
             f.write(gw_sk)
         st = fleet.credential_step(conf, {"admitted": True, "measurements": {}}, self.dir, state=state)
         self.assertTrue(st.startswith("issued"), st)
-        self.assertEqual(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state), "valid")
+        self.assertTrue(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state).startswith("valid, heartbeat 1"))
+        self.assertTrue(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state).startswith("valid, heartbeat 2"))
         self.assertEqual(fleet.credential_step(conf, {"admitted": False}, self.dir, state=state), "revoked")
         self.assertFalse(os.path.exists(os.path.join(state, "credentials", "kem-good.session")))
 

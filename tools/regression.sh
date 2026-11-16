@@ -28,6 +28,7 @@ if [ "${1:-}" = --board ]; then
     stage fabric-acvp          ssh -o BatchMode=yes $B 'cd /root/aegis/oqs-fabric && LD_LIBRARY_PATH=$PWD AEGIS_PQC_KECCAK=hw python3 run_acvp_commands.py commands.jsonl $PWD'
     stage fleet-once           ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 fleet.py once ../policy/fleet.json | grep -q "\"admitted\": true"'
     stage fleet-session        ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 fleet.py session ../policy/fleet.json | grep -q "\"same_session\": true"'
+    stage fleet-heartbeat      ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 -c "import sys,json; sys.path.insert(0,\"../../common\"); import fleet; ep=json.load(open(\"../policy/fleet.json\"))[\"endpoints\"][0]; print(fleet.heartbeat(ep, open(\"/var/lib/aegis/credentials/\"+ep[\"name\"]+\".session\",\"rb\").read()))"'
     stage device-redteam       $PY tests/redteam/fuzz_devices.py --stm32 "$STM32" --gateway "$GATEWAY" --n 40
 fi
 echo "passed $pass, failed $fail -> $OUT"

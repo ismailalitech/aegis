@@ -156,6 +156,20 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
             "credential_sha3_256": _sha3(cred).hex()}
 
 
+def heartbeat(ep, session_key, timeout=10.0):
+    """Fresh nonce -> (status bytes, counter); raises ValueError unless the endpoint's tag equals
+    SHA3-256("aegis-hb-v1" || session || nonce || counter || status)."""
+    import hmac
+    nonce = secrets.token_bytes(32)
+    p = _exchange(ep["host"], int(ep["port"]), "PQHB " + nonce.hex(), timeout).split()
+    if len(p) != 5 or p[0] != "PQHB" or p[4] != "END":
+        raise ValueError("no heartbeat: %r" % " ".join(p)[:40])
+    status, ctr, tag = bytes.fromhex(p[1]), bytes.fromhex(p[2]), bytes.fromhex(p[3])
+    if len(ctr) != 8 or not hmac.compare_digest(tag, _sha3(b"aegis-hb-v1", session_key, nonce, ctr, status)):
+        raise ValueError("heartbeat tag invalid")
+    return status, int.from_bytes(ctr, "little")
+
+
 def query_session(ep, timeout=10.0):
     p = _exchange(ep["host"], int(ep["port"]), "PQSESSION", timeout).split()
     if len(p) != 4 or p[0] != "PQSESSION" or p[3] != "END":
@@ -272,12 +286,18 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE):
         with open(meta) as f:
             m = json.load(f)
         if m["body"]["expires"] - time.time() > 300:
-            try:  # the endpoint's secure side must still report the same session
-                sid, ch = query_session(ep)
+            # the endpoint must prove it still holds the session key: fresh nonce, MAC, rising counter
+            try:
+                with open(keyf, "rb") as f:
+                    status, ctr = heartbeat(ep, f.read())
+                if ctr > m.get("hb_counter", 0):
+                    m["hb_counter"] = ctr
+                    m["last_status"] = status.decode(errors="replace")
+                    with open(meta, "w") as f:
+                        json.dump(m, f, indent=1)
+                    return "valid, heartbeat %d (%s)" % (ctr, m["last_status"])
             except (OSError, ValueError):
-                sid, ch = None, None
-            if sid == m["session_id"] and ch == m["credential_sha3_256"]:
-                return "valid"
+                pass
     sk, gid = load_gateway_identity(state)
     try:
         r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}))

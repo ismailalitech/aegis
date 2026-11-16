@@ -32,6 +32,10 @@
  *                      label "aegis-credential-v1"), and its body must name SHA3-256(ct) in
  *                      "kem_ct_sha3_256"; otherwise PSA_ERROR_INVALID_SIGNATURE and no session.
  *   type 5 SESSION:    out[0] <- SHA3-256("aegis-session-id-v1" || session) || SHA3-256(credential)
+ *   type 6 HEARTBEAT:  in[0] = 32-byte gateway nonce, in[1] = up to 128 bytes of NS status data
+ *                      out[0] <- counter (8 bytes LE, increases every call)
+ *                                || SHA3-256("aegis-hb-v1" || session || nonce || counter || data)
+ *                      A light, symmetric proof of the session between full attestations.
  * The Non-Secure world can ask for quotes and run provisioning but never sees the seed, the
  * secret keys, K or the session key.
  */
@@ -54,6 +58,7 @@
 #define AEGIS_PQ_KEM_INIT   3
 #define AEGIS_PQ_KEM_FINISH 4
 #define AEGIS_PQ_SESSION    5
+#define AEGIS_PQ_HEARTBEAT  6
 #define KEM_EK_LEN          MLKEM_PUBLICKEYBYTES(768)
 #define KEM_DK_LEN          MLKEM_SECRETKEYBYTES(768)
 #define KEM_CT_LEN          MLKEM_CIPHERTEXTBYTES(768)
@@ -378,6 +383,38 @@ static psa_status_t do_kem_finish(const psa_msg_t *msg)
 	return PSA_SUCCESS;
 }
 
+static uint64_t hb_counter;
+
+static psa_status_t do_heartbeat(const psa_msg_t *msg)
+{
+	static const char lbl[] = "aegis-hb-v1";
+	uint8_t nonce[32], data[128], out[40], ctr[8];
+	size_t dlen = msg->in_size[1];
+	struct sha3 h;
+
+	if (!session_ready) {
+		return PSA_ERROR_BAD_STATE;
+	}
+	if (msg->in_size[0] != 32 || dlen > sizeof(data) || msg->out_size[0] < sizeof(out)) {
+		return PSA_ERROR_INVALID_ARGUMENT;
+	}
+	if (psa_read(msg->handle, 0, nonce, 32) != 32 || (dlen && psa_read(msg->handle, 1, data, dlen) != dlen)) {
+		return PSA_ERROR_INVALID_ARGUMENT;
+	}
+	hb_counter++;
+	for (int i = 0; i < 8; i++) ctr[i] = (uint8_t)(hb_counter >> (8 * i));
+	sha3_init(&h);
+	sha3_update(&h, (const uint8_t *)lbl, sizeof(lbl) - 1);
+	sha3_update(&h, session_key, 32);
+	sha3_update(&h, nonce, 32);
+	sha3_update(&h, ctr, 8);
+	sha3_update(&h, data, dlen);
+	memcpy(out, ctr, 8);
+	sha3_final(&h, out + 8);
+	psa_write(msg->handle, 0, out, sizeof(out));
+	return PSA_SUCCESS;
+}
+
 static psa_status_t do_session(const psa_msg_t *msg)
 {
 	static const char l_id[] = "aegis-session-id-v1";
@@ -419,6 +456,8 @@ psa_status_t aegis_pq_service_sfn(const psa_msg_t *msg)
 		return do_kem_finish(msg);
 	case AEGIS_PQ_SESSION:
 		return do_session(msg);
+	case AEGIS_PQ_HEARTBEAT:
+		return do_heartbeat(msg);
 	default:
 		return PSA_ERROR_NOT_SUPPORTED;
 	}

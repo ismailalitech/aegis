@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import stm32_console as sc  # noqa: E402
 
 
-REPLIES = ("TOKEN ", "PQTOKEN ", "PQKEY ", "PQKEMEK ", "PQKEMOK ", "PQSESSION ", "ERR")
+REPLIES = ("TOKEN ", "PQTOKEN ", "PQKEY ", "PQKEMEK ", "PQKEMOK ", "PQSESSION ", "PQHB ", "ERR")
 
 
 def wait_reply(con, seconds):

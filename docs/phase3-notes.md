@@ -156,3 +156,18 @@ service kept quarantining with an outdated SPE measurement after an image update
 | credential signed by a foreign key (from the PC) | refused, ERR pq -149 |
 | credential signed by the real gateway key, bound to another ciphertext (on the gateway) | refused, ERR pq -149 |
 | established session after both | unchanged (fac9a735...), gateway and STM32 agree |
+
+## Session-key heartbeats (2026-11-16)
+
+Partition type 6 HEARTBEAT: counter (8 bytes, rising) and SHA3-256("aegis-hb-v1" || session ||
+nonce || counter || status), where status is a short text from the Non-Secure side
+(uptime, link, firmware). Prover command `PQHB <nonce>`. The gateway uses it every cycle to check
+that a valid credential's session is still held by the endpoint (replaces the session-id query,
+which was not bound to a fresh challenge and could be replayed); a failed heartbeat triggers
+re-provisioning. MAC construction: SHA3-256 over key-prefixed data (SHA-3 has no length
+extension; KMAC256 would be the standard choice).
+
+Board: after provisioning, the gateway journal shows "valid, heartbeat 1, 2, 3 ..." with the
+authenticated status ("uptime_s=81;link=0;..."). Timing on the gateway through the relay
+(median of 5): heartbeat 0.131 s, full ML-DSA-65 re-attestation 1.064 s (the 7.7 KB quote crosses the
+115200-baud console; over Ethernet both will be shorter).

@@ -12,15 +12,15 @@
    "allowed": [
     {
      "type": "SPE",
-     "measurement_value": "380513d6dea9004871a3ad2a1ef8ba6765353ec2e9e3136d60a6fec9d7498f63",
+     "measurement_value": "1793b3fb1ff472188e311aa01aa46de00fc709188583ef6c904be147f9457c98",
      "signer_id": "e30466f6b8470c1f29070b17f1e2d3e94d445e3f608087fdc711e4382bb538b6",
-     "image": "TF-M v2.3.0 + Aegis PQ partition, ML-KEM provisioning, gateway key pinned (mutual auth)"
+     "image": "TF-M v2.3.0 + Aegis PQ partition (KEM, mutual auth, heartbeat)"
     },
     {
      "type": "NSPE",
-     "measurement_value": "56ec5b078c0373172395c504f8d3dba72be00686a599b7c364082429fe49c3ab",
+     "measurement_value": "1502cd360d05e525fb3ead694985aa624c9e8cb12b8a77e0c0eefeb9fac22226",
      "signer_id": "82a5b443594853d4bf0fdd89a914a5dc16f867548207d7077e74d80c063efda9",
-     "image": "aegis prover-ns with PQ and KEM commands"
+     "image": "aegis prover-ns 0.4.0 (heartbeat)"
     }
    ],
    "provision": true
