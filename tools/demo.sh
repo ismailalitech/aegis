@@ -16,8 +16,9 @@
 set -eu
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
+[ -f "$REPO/bench.env" ] && { set -a; . "$REPO/bench.env"; set +a; }
 PY=.venv/bin/python
-GW=root@${GATEWAY:-192.0.2.10}
+GW=root@${GATEWAY:?set GATEWAY in bench.env (see bench.env.example)}
 CLI=${CLI:-$HOME/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin/STM32_Programmer_CLI}
 A=endpoints/stm32h573/artifacts
 GOOD=$A/prover-ns-0.4.0-hb.hex
@@ -41,7 +42,7 @@ flash() { "$CLI" -c port=SWD mode=UR -d "$1" -v 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
 [ -f "$BAD" ] || { echo "missing $BAD (build: SPE=... prover-ns/build.sh -DAEGIS_PROVER_VERSION=0.4.0-tampered)"; exit 1; }
 
 say "1. The PC verifies the gateway's own quote (ML-DSA-65, fresh nonce)"
-$PY host/aegis_verify.py quote ${GATEWAY:-192.0.2.10} | tee "$LOG/1-gateway-quote.json" | grep -E 'accepted|sig_bytes'
+$PY host/aegis_verify.py quote ${GATEWAY:?set GATEWAY in bench.env (see bench.env.example)} | tee "$LOG/1-gateway-quote.json" | grep -E 'accepted|sig_bytes'
 
 say "2. The gateway attests the STM32 and keeps its ML-KEM session alive"
 ssh -o BatchMode=yes $GW 'cd /root/aegis/gateway/aegisd && python3 fleet.py once ../policy/fleet.json --no-credentials' \

@@ -1,11 +1,11 @@
 #!/bin/bash
-# Build the Aegis fabric = pfdaq v0.5.x fabric (unchanged, from <pfdaq-repo>) + aegis_pqc in
+# Build the Aegis fabric = pfdaq v0.5.x fabric (unchanged, from the pfdaq repository) + aegis_pqc in
 # FIC3 APB slot 14 (0x40000E00).
 #   hw/libero/build.sh <design_version> [rtl_dir]   (rtl_dir default: hw/rtl; hw/libero/stub for the stub)
 # Output: build/libero/AEGIS_dv<ver>.job (FABRIC + SNVM only; never eNVM, keys or security settings).
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-PF=${PFDAQ_ROOT:-<pfdaq-repo>}
+PF=${PFDAQ_ROOT:?set PFDAQ_ROOT to the pfdaq repository checkout}
 VER=${1:?design version required}
 RTL=${2:-$ROOT/hw/rtl}
 JOB=AEGIS_dv$VER

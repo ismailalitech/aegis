@@ -6,9 +6,10 @@
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
+[ -f "$REPO/bench.env" ] && { set -a; . "$REPO/bench.env"; set +a; }
 PY=.venv/bin/python
-GATEWAY=${GATEWAY:-192.0.2.10}
-STM32=${STM32:-192.0.2.20:7444}
+GATEWAY=${GATEWAY:?set GATEWAY in bench.env (see bench.env.example)}
+STM32=${STM32:?set STM32 in bench.env (see bench.env.example)}
 OUT=logs/regression/$(date +%Y%m%d-%H%M%S)
 mkdir -p "$OUT"
 pass=0; fail=0

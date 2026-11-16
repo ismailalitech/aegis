@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "host"))
 import aegis_verify as av  # noqa: E402
 
-BOARD = os.environ.get("BOARD", "192.0.2.10")
+BOARD = os.environ.get("BOARD") or os.environ.get("GATEWAY") or sys.exit("set BOARD or GATEWAY (see bench.env.example)")
 SSH = ["ssh", "-o", "BatchMode=yes", "root@" + BOARD]
 results = []
 

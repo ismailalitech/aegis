@@ -68,8 +68,8 @@ def stm32_quote_ok(host, port, pk):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stm32", default="127.0.0.1:7444")
-    ap.add_argument("--gateway", default="192.0.2.10")
+    ap.add_argument("--stm32", default=os.environ.get("STM32"), required="STM32" not in os.environ)
+    ap.add_argument("--gateway", default=os.environ.get("GATEWAY"), required="GATEWAY" not in os.environ)
     ap.add_argument("--n", type=int, default=60)
     a = ap.parse_args()
     out, broken = {}, []

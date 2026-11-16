@@ -1,6 +1,6 @@
 {
  "timeout_s": 20,
- "note": "STM32 reached directly over Ethernet (DHCP address 192.0.2.20, MAC <mac>). ML-DSA-65 key enrolled by trust on first use. The ES256 token key is TF-M's published development key; only the ML-DSA check is security-relevant.",
+ "note": "STM32 reached directly over Ethernet (address from DHCP). ML-DSA-65 key enrolled by trust on first use. The ES256 token key is TF-M's published development key; only the ML-DSA check is security-relevant.",
  "endpoints": [
   {
    "name": "stm32h573-dk",

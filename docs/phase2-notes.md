@@ -2,7 +2,7 @@
 
 ## Integration (proven with a stub, 2026-11-16)
 
-- Fabric = pfdaq v0.5.x design (unchanged, from <pfdaq-repo>) + `aegis_pqc` as an APB3 slave
+- Fabric = pfdaq v0.5.x design (unchanged, from the pfdaq repository) + `aegis_pqc` as an APB3 slave
   in FIC3 APB slot 14 (0x40000E00, 256 bytes, PCLK = FIC3 clock 50 MHz). Overlay
   `hw/libero/AEGIS_PQC.tcl`, sourced right after PFDAQ.tcl; build `hw/libero/build.sh <ver> [rtl dir]`.
   Jobs contain FABRIC + SNVM only.

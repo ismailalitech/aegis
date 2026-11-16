@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 
-host = sys.argv[1] if len(sys.argv) > 1 else "192.0.2.10"
+host = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("GATEWAY") or sys.exit("usage: gen_gateway_pin.py <gateway-host> (or set GATEWAY)")
 rec = json.loads(subprocess.run(["ssh", "-o", "BatchMode=yes", "root@" + host, "cat /var/lib/aegis/identity.json"],
                                 check=True, capture_output=True, text=True).stdout)
 pk = bytes.fromhex(rec["body"]["pk"])

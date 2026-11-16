@@ -174,10 +174,10 @@ authenticated status ("uptime_s=81;link=0;..."). Timing on the gateway through t
 
 ## STM32 over its own Ethernet (2026-11-16, cable connected)
 
-DHCP gave the STM32 192.0.2.20 (MAC <mac>); the policy now points there and the PC
+DHCP gave the STM32 a DHCP address (a locally administered MAC); the policy now points there and the PC
 relay is retired (it had just died with a USB serial I/O error when the cables were moved; the
 gateway correctly quarantined the STM32 during that cycle). From the PC over Ethernet: PQKEY in
 6 ms, a full PQ quote (515-byte token + 3309-byte ML-DSA-65 signature) in 0.30 s, signature valid,
 key equal to the enrolled one. The gateway service admitted the STM32, issued a new ML-KEM
 session, heartbeats report link=1. `tools/demo.sh` over Ethernet: same verdicts as before, 1 min 56 s
-(logs/demo/20261116-190610). Regression with STM32=192.0.2.20:7444: see logs/regression.
+(logs/demo/20261116-190610). Regression with STM32=<stm32-ip>:7444: see logs/regression.
