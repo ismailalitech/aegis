@@ -50,6 +50,10 @@ grep -E '"admitted"|pq_signature' "$LOG/2-attest.json" | sed 's/^/   /'
 T=$(ssh -o BatchMode=yes $GW date +%s)
 wait_for "$T" 'ADMITTED.*credential: (issued|valid)' 75
 
+say "2b. A legacy node that cannot attest (Arduino Uno, via the PC)"
+T0=$(ssh -o BatchMode=yes $GW date +%s)
+wait_for "$(( T0 - 40 ))" 'arduino-uno-legacy QUARANTINED' 45 || true
+
 say "3. Flash a TAMPERED Non-Secure image (validly signed, boots normally)"
 T=$(ssh -o BatchMode=yes $GW date +%s)
 flash "$BAD" && echo "   tampered image running"

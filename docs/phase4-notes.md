@@ -65,3 +65,24 @@ at 123-246 us); earlier baselines had maxima of 0.26-0.66 ms. Not explained by t
 (one spike happened with them stopped, one clean run with them running). Whether the kernel change
 causes it needs repeated A/B runs against the old kernel (rollback.sh, then back). The hart-4
 FreeRTOS latency path is not affected (pfdaq_cap -L 0 passes).
+
+## Legacy node: Arduino Uno R3 (2026-11-16)
+
+The Uno has no network interface, no keys and no measured boot, so it stands for the "device that
+cannot attest". Backup first: avrdude read all 32 KB of flash (bootloader included) to
+`backups/arduino-uno/<time>/flash-before-aegis.hex` (restore:
+`avrdude -p atmega328p -c arduino -P <port> -b 115200 -U flash:w:flash-before-aegis.hex:i`).
+Sketch `endpoints/arduino-uno/legacy_sensor` (3.7 KB): prints a reading every 2 s and answers any
+request with "LEGACY-SENSOR uno v1 cannot attest". The PC exposes its serial port on TCP 7445
+(`host/serial_bridge.py --tty <Uno> --port 7445 --replies LEGACY-SENSOR,...`); the policy lists it
+as a normal endpoint. Gateway journal, every 30 s next to the admitted STM32:
+"arduino-uno-legacy QUARANTINED no attestation: no token in reply: 'LEGACY-SENSOR uno v1 cannot attest...'".
+This shows the decision; blocking its traffic does not apply (it has no traffic of its own).
+
+## Why no USB-Ethernet adapter on the gateway
+
+The Discovery Kit does not route the MSS USB controller to a connector (reference design MSS
+configuration: USB UNUSED; device tree usb@20201000 disabled); its USB-C port goes to the on-board
+FTDI debug chip. With one Ethernet port, real L2 separation needs a managed switch with 802.1Q
+(the new kernel has VLAN support). Without one, only a routed-subnet setup is possible, which a
+compromised endpoint could bypass on the shared L2 segment.

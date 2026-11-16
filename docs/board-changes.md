@@ -29,3 +29,9 @@ security views, merged image, all option bytes). The board held a TF-M v2.3.0 BL
 Not touched: BL2, option bytes (product state Open, TrustZone on, WRP on BL2), NV counters, OTP.
 Restore tested 2026-11-16: both slots read back byte-identical to the backup and the old firmware booted;
 then the Aegis images were written again.
+
+## Arduino Uno R3
+
+| Change | Undo |
+|---|---|
+| Flash: legacy-sensor sketch (`endpoints/arduino-uno/legacy_sensor`) | `avrdude -p atmega328p -c arduino -P <port> -b 115200 -U flash:w:backups/arduino-uno/<time>/flash-before-aegis.hex:i` (avrdude from ~/.arduino15) |

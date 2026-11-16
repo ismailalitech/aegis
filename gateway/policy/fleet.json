@@ -24,6 +24,15 @@
     }
    ],
    "provision": true
+  },
+  {
+   "name": "arduino-uno-legacy",
+   "kind": "psa",
+   "host": "192.0.2.30",
+   "port": 7445,
+   "iak_pub_pem": "keys/tfm-dev-iak.pub.pem",
+   "allowed": [],
+   "note": "Arduino Uno R3 running a legacy-sensor sketch: no keys, no measurements, cannot attest. Reached through the PC (host/serial_bridge.py --port 7445) because the Uno has no network interface."
   }
  ]
 }

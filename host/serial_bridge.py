@@ -19,7 +19,7 @@ import stm32_console as sc  # noqa: E402
 REPLIES = ("TOKEN ", "PQTOKEN ", "PQKEY ", "PQKEMEK ", "PQKEMOK ", "PQSESSION ", "PQHB ", "ERR")
 
 
-def wait_reply(con, seconds):
+def wait_reply(con, seconds, replies=REPLIES):
     """Return the first complete console line that is an answer (skips status lines)."""
     import time
     end = time.time() + seconds
@@ -28,7 +28,7 @@ def wait_reply(con, seconds):
         while b"\n" in con.buf:
             line, con.buf = con.buf.split(b"\n", 1)
             line = line.strip().decode(errors="replace")
-            if line.startswith(REPLIES):
+            if line.startswith(replies):
                 return line
     return "ERR bridge-timeout"
 
@@ -36,13 +36,16 @@ def wait_reply(con, seconds):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=7444)
+    ap.add_argument("--tty", help="serial device (default: the ST-LINK console)")
+    ap.add_argument("--replies", help="comma-separated reply prefixes to forward (default: the prover's)")
     a = ap.parse_args()
-    con = sc.Console()
+    replies = tuple(a.replies.split(",")) if a.replies else REPLIES
+    con = sc.Console(a.tty)
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("0.0.0.0", a.port))
     srv.listen(2)
-    print("serial bridge on port %d -> %s" % (a.port, sc.port_path()), flush=True)
+    print("serial bridge on port %d -> %s" % (a.port, a.tty or sc.port_path()), flush=True)
     while True:
         c, peer = srv.accept()
         c.settimeout(30)
@@ -57,7 +60,7 @@ def main():
             con.read_for(0.05)
             con.buf = b""
             con.send(line)
-            reply = wait_reply(con, 30)
+            reply = wait_reply(con, 30, replies)
             c.sendall(reply.encode() + b"\r\n")
             print("%s %s -> %s..." % (peer[0], line[:20], reply[:24]), flush=True)
         except OSError as e:
