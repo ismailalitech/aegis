@@ -1,0 +1,45 @@
+name: host-regression
+on:
+  push:
+  pull_request:
+
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y iverilog cmake ninja-build python3-venv python3-pip curl
+
+      - name: Python environment
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -q cryptography pytest requests pyyaml
+
+      - name: Cache liboqs 0.16.0
+        id: liboqs
+        uses: actions/cache@v4
+        with:
+          path: ~/aegis-tools/liboqs-src
+          key: liboqs-0.16.0-mlkem-mldsa
+
+      - name: Build liboqs 0.16.0 (ML-KEM and ML-DSA only)
+        if: steps.liboqs.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/aegis-tools
+          git clone -q --depth 1 --branch 0.16.0 https://github.com/open-quantum-safe/liboqs.git ~/aegis-tools/liboqs-src
+          cmake -S ~/aegis-tools/liboqs-src -B ~/aegis-tools/liboqs-src/build -GNinja \
+            -DCMAKE_INSTALL_PREFIX=$HOME/aegis-tools/liboqs -DBUILD_SHARED_LIBS=ON \
+            -DOQS_MINIMAL_BUILD="KEM_ml_kem_512;KEM_ml_kem_768;KEM_ml_kem_1024;SIG_ml_dsa_44;SIG_ml_dsa_65;SIG_ml_dsa_87"
+          ninja -C ~/aegis-tools/liboqs-src/build install
+
+      - name: NIST ACVP vectors (checked against SHA256SUMS)
+        run: |
+          tools/fetch_acvp.sh
+          mkdir -p build/acvp
+          .venv/bin/python tools/acvp_commands.py build/acvp/commands.jsonl
+
+      - name: Host regression (unit tests, red team, RTL simulation, ACVP)
+        run: tools/regression.sh
