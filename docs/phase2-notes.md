@@ -68,3 +68,21 @@ instead of APB, or let the hart-4 real-time context drive the core without Linux
 Rollback of the fabric: program `<pfdaq-repo>/images/pfdaq-v051/PFDAQ_v0_5_1.job`
 (FABRIC + SNVM) with `hw/libero/program.sh` from the pfdaq repo; the JTAG channel must be detached
 from ftdi_sio first.
+
+## NIST ACVP vectors with the fabric doing Keccak (2026-11-16)
+
+`tools/acvp_commands.py` imports liboqs' own `tests/test_acvp_vectors.py` unchanged and records the
+exact `vectors_kem`/`vectors_sig` command lines it would run (ACVP-Server v1.1.0.41 files from
+`vectors/acvp`, checksummed). `tools/run_acvp_commands.py` (stdlib) runs them anywhere.
+
+| Where | Keccak | Cases | Failed |
+|---|---|---|---|
+| PC (x86 liboqs build) | software | 265 | 0 |
+| PolarFire, liboqs-rv64-fabric | fabric (`AEGIS_PQC_KECCAK=hw`) | 265 | 0 |
+| PolarFire, liboqs-rv64-fabric | fabric + software compared on every call (`check`) | 265 | 0 |
+
+Cases: ML-KEM-768 keyGen 25, encapsulation 25, decapsulation 10; ML-DSA-65 keyGen 25, sigGen 120
+(internal, external, pre-hash), sigVer 60 (30 of them expected to reject). Negative controls on the
+PC: a corrupted key, ciphertext, signature or expected value makes the case fail. Fabric use
+confirmed with AEGIS_PQC_STATS (e.g. one ML-DSA sigGen case: 278 fabric permutations, 0 software).
+Wording: "passes the NIST ACVP vectors", not "validated".
