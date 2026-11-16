@@ -5,8 +5,8 @@
 | Change | Undo |
 |---|---|
 | `/root/aegis/` (aegisd, sysserv tool, common, liboqs.so.9, liboqs test binaries in `oqs/`) | `rm -rf /root/aegis` |
-| `/var/lib/aegis/` (identity.json, identity.sk, serve.log) | `rm -rf /var/lib/aegis` |
-| `aegisd.py serve` running (started by hand, not a systemd unit) | `kill $(pgrep -f '[a]egisd.py serve')` or reboot |
+| `/var/lib/aegis/` (identity.json, identity.sk, fleet-state.json, credentials/) | `rm -rf /var/lib/aegis` |
+| systemd units aegisd.service and aegis-fleet.service (enabled, start at boot) | `/root/aegis/gateway/systemd/install.sh remove`, then reboot |
 | `mpfs-generic-service` module loaded | **reboot only. Never rmmod it** (see phase1-notes.md) |
 | Fabric reprogrammed 2026-11-16 with the identical pfdaq v0.5.1 job to recover from the hang | nothing to undo: same job, digests unchanged |
 | Fabric now AEGIS dv101 = pfdaq v0.5.1 + aegis_pqc in APB slot 14 (`build/libero/AEGIS_dv101.job`, digest dbd6625d...b229) | program `images/pfdaq-v051/PFDAQ_v0_5_1.job` (pfdaq repo) |

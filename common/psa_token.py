@@ -80,11 +80,18 @@ def parse(token):
         obj = obj.value
     if not (isinstance(obj, list) and len(obj) == 4):
         raise TokenError("COSE_Sign1 must be a 4-element array")
-    protected, _unprotected, payload, signature = obj
+    protected, unprotected, payload, signature = obj
+    if not (isinstance(protected, bytes) and isinstance(unprotected, dict) and isinstance(payload, bytes)
+            and isinstance(signature, bytes)):
+        raise TokenError("COSE_Sign1 fields have the wrong types")
     hdr = cbor.loads(protected) if protected else {}
+    if not isinstance(hdr, dict):
+        raise TokenError("protected header is not a map")
     if hdr.get(1) != -7:
         raise TokenError("algorithm is not ES256 (got %r)" % hdr.get(1))
     raw = cbor.loads(payload)
+    if not isinstance(raw, dict):
+        raise TokenError("claims are not a map")
     claims = {}
     for k, v in raw.items():
         name = CLAIMS.get(k, str(k))

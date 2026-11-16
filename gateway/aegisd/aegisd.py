@@ -38,13 +38,16 @@ class HardwareSource:
     """Live system-controller reads on the board."""
 
     def __init__(self):
+        import threading
         import aegis_sysserv
         self.ss = aegis_sysserv
+        self.lock = threading.Lock()  # the device allows one opener at a time
         if not os.path.exists(aegis_sysserv.DEVICE):
             subprocess.run(["modprobe", "mpfs-generic-service"], check=True)
 
     def read(self, name):
-        return self.ss.call(name)
+        with self.lock:
+            return self.ss.call(name)
 
 
 def device_cert_der(raw):
@@ -151,27 +154,45 @@ def handle(conn, rec, sk, hw):
         wire.send(conn, {"error": "unknown request"})
 
 
+MAX_CLIENTS = 8
+CLIENT_TIMEOUT_S = 3
+
+
+def _serve_one(conn, rec, sk, hw, slots):
+    try:
+        conn.settimeout(CLIENT_TIMEOUT_S)
+        handle(conn, rec, sk, hw)
+    except Exception as e:  # one bad client must not stop the service
+        try:
+            wire.send(conn, {"error": str(e)})
+        except OSError:
+            pass
+    finally:
+        conn.close()
+        slots.release()
+
+
 def serve(state, port, hw, once=False, ready=None):
+    """One thread per connection, at most MAX_CLIENTS at a time, each with a short timeout, so
+    a slow or half-open client cannot block quotes for others (found by tests/redteam)."""
+    import threading
     rec, sk = load_identity(state)
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("0.0.0.0", port))
-    srv.listen(4)
+    srv.listen(16)
     if ready:
         ready(srv.getsockname()[1])
+    slots = threading.BoundedSemaphore(MAX_CLIENTS)
     while True:
         conn, peer = srv.accept()
-        conn.settimeout(10)
-        try:
-            handle(conn, rec, sk, hw)
-        except Exception as e:  # one bad client must not stop the service
-            try:
-                wire.send(conn, {"error": str(e)})
-            except OSError:
-                pass
-        finally:
-            conn.close()
+        if not slots.acquire(blocking=False):
+            conn.close()  # too many clients at once: refuse instead of queueing
+            continue
+        th = threading.Thread(target=_serve_one, args=(conn, rec, sk, hw, slots), daemon=True)
+        th.start()
         if once:
+            th.join()
             break
     srv.close()
 
