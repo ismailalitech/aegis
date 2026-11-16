@@ -4,3 +4,8 @@ __pycache__/
 .venv/
 vectors/acvp/*.json
 host/enrolled/
+backups/
+endpoints/stm32h573/artifacts/*.hex
+endpoints/stm32h573/artifacts/*.bin
+endpoints/stm32h573/prover-ns/build/
+endpoints/stm32h573/prover-ns/build.log

@@ -14,5 +14,15 @@ Nothing written to eNVM, keys, locks or the SD card's boot and payload partition
 
 ## STM32H573I-DK
 
-Nothing changed yet (read-only register reads, core halted about 1 s and resumed).
-Before the first flash: back up all flash and option bytes to `backups/stm32h573/`.
+Backup: `backups/stm32h573/20261116-135718-cubeprog-UR/` (all 2 MB of flash read under reset in both
+security views, merged image, all option bytes). The board held a TF-M v2.3.0 BL2 + secure image
+(Zephyr's TF-M, commit 47b9f07b9) and a non-secure test app.
+
+| Change | Undo |
+|---|---|
+| Secure slot 0x0C038000 replaced by the upstream TF-M v2.3.0 secure image (`securebench-ws/build/spe`, security counter 1, same as before) | `endpoints/stm32h573/restore_from_backup.sh` |
+| Non-secure slot 0x08088000 replaced by the Aegis prover (`endpoints/stm32h573/artifacts/`) | same script |
+
+Not touched: BL2, option bytes (product state Open, TrustZone on, WRP on BL2), NV counters, OTP.
+Restore tested 2026-11-16: both slots read back byte-identical to the backup and the old firmware booted;
+then the Aegis images were written again.

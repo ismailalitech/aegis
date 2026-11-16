@@ -1,0 +1,26 @@
+{
+ "timeout_s": 10,
+ "note": "STM32 reached through the PC serial relay (host/serial_bridge.py) until its Ethernet port has a link. The IAK is TF-M's published development key: demo only, anyone can forge tokens for it.",
+ "endpoints": [
+  {
+   "name": "stm32h573-dk",
+   "host": "192.0.2.30",
+   "port": 7444,
+   "iak_pub_pem": "keys/tfm-dev-iak.pub.pem",
+   "allowed": [
+    {
+     "type": "SPE",
+     "measurement_value": "b9e3b611c89a60f0b9d660c274e5cc6110d17b25445c3517baba18e01330df55",
+     "signer_id": "e30466f6b8470c1f29070b17f1e2d3e94d445e3f608087fdc711e4382bb538b6",
+     "image": "TF-M v2.3.0 secure image (securebench-ws build/spe)"
+    },
+    {
+     "type": "NSPE",
+     "measurement_value": "55a370e39454e694704ba5612d79f803bf9fe77a035753a585b945505733845c",
+     "signer_id": "82a5b443594853d4bf0fdd89a914a5dc16f867548207d7077e74d80c063efda9",
+     "image": "aegis prover-ns 0.1.0"
+    }
+   ]
+  }
+ ]
+}

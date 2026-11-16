@@ -1,0 +1,5 @@
+8a61dff2ae8866dd4eab99950e478bfe305866770fd44091ca57318aa5061c0c  endpoints/stm32h573/artifacts/prover-ns-0.1.0-good.bin
+f0ea67eb6731ff86c08a93c88961a8ee4f0fa4764e69656802270af1c37f69a2  endpoints/stm32h573/artifacts/prover-ns-0.1.0-good.hex
+503a3bf7d05c7eb3164b27532f1f003ba79ed60e5166ad10c76cb8ad54f765ee  endpoints/stm32h573/artifacts/prover-ns-0.1.0-tampered.bin
+a2089e480205fe4253ac4905d24d0c9df667154f37b4e789b7a8e06a5c3baebd  endpoints/stm32h573/artifacts/prover-ns-0.1.0-tampered.hex
+3e893e5dee0ad4e8b103165ebda41938f3bdc2ffb1c37706d2baeec6c187dd5e  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-upstream.hex
