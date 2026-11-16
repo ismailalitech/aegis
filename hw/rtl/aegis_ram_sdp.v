@@ -6,6 +6,8 @@
 // A read and a write to the same address in the same cycle return the old
 // data; aegis_ntt never relies on that case.
 
+`timescale 1ns / 1ps
+
 module aegis_ram_sdp #(
     parameter AW = 7,
     parameter DW = 23

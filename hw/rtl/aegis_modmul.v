@@ -16,6 +16,8 @@
 // on p LAT = 4 clocks later. mode must be stable while data is in flight.
 // No reset: the pipeline carries data only, validity is tracked by the user.
 
+`timescale 1ns / 1ps
+
 module aegis_modmul (
     input             clk,
     input             mode,

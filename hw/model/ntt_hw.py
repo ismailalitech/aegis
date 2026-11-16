@@ -174,14 +174,40 @@ def check_barrett_all_products(mode):
     xmax = (q - 1) ** 2
     blk = 1 << (n - 1)
     lim = 3 * q
+    rmax = 0
     for q1 in range((xmax >> (n - 1)) + 1):
         q3 = (q1 * mu) >> (n + 1)
         lo = q1 * blk
         hi = min(lo + blk - 1, xmax)
         rlo = lo - q3 * q
-        if rlo < 0 or hi - q3 * q >= lim:
+        rhi = hi - q3 * q
+        if rlo < 0 or rhi >= lim:
             raise AssertionError(f"Barrett bound fails for {mode} q1={q1}")
-    return xmax + 1
+        rmax = max(rmax, rhi)
+    return xmax + 1, rmax
+
+
+def pairs_needing_two_subtractions(mode, limit):
+    """(a, b) with a, b < q whose product leaves r >= 2q before correction
+    (used to cover that branch in the RTL unit test). Empty for ML-DSA."""
+    q, n, mu = Q[mode], NBITS[mode], MU[mode]
+    xmax = (q - 1) ** 2
+    out = []
+    for q1 in range((xmax >> (n - 1)) + 1):
+        q3 = (q1 * mu) >> (n + 1)
+        lo = q1 << (n - 1)
+        hi = min(lo + (1 << (n - 1)) - 1, xmax)
+        xl = max(lo, q3 * q + 2 * q)
+        if xl > hi:
+            continue
+        for a in range(max(1, -(-xl // (q - 1))), q):
+            b = -(-xl // a)
+            if b < q and a * b <= hi:
+                assert barrett_raw(a * b, mode) >= 2 * q
+                out.append((a, b))
+                if len(out) >= limit:
+                    return out
+    return out
 
 
 def check_barrett_spot(mode, rng, count):
@@ -237,7 +263,7 @@ def main():
     ap.add_argument("--count", type=int, default=100)
     ap.add_argument("--seed", type=int, default=3)
     ap.add_argument("--fast", action="store_true",
-                    help="skip the exhaustive ML-DSA Barrett sweep (about 10 s)")
+                    help="skip the exhaustive ML-DSA Barrett sweep (about 6 s)")
     args = ap.parse_args()
     rng = random.Random(args.seed)
     _check_constants()
@@ -246,9 +272,9 @@ def main():
         if mode == "dsa" and args.fast:
             print("ntt_hw.py: ML-DSA Barrett exhaustive sweep SKIPPED (--fast)")
         else:
-            nx = check_barrett_all_products(mode)
+            nx, rmax = check_barrett_all_products(mode)
             print(f"ntt_hw.py: {mode.upper()} Barrett: 0 <= x - q3*q < 3q for every x in "
-                  f"[0, (q-1)^2] ({nx} values, block-exhaustive) PASS")
+                  f"[0, (q-1)^2] ({nx} values, block-exhaustive; max r = {rmax / Q[mode]:.4f} q) PASS")
         np_ = check_barrett_spot(mode, rng, 20000)
         print(f"ntt_hw.py: {mode.upper()} modmul/add/sub spot check, {np_} products PASS")
 

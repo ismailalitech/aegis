@@ -8,6 +8,8 @@
 //            f = 3303 for ML-KEM, 8347681 for ML-DSA)
 // Registered output (one cycle latency).
 
+`timescale 1ns / 1ps
+
 module aegis_ntt_rom (
     input             clk,
     input      [8:0]  addr,

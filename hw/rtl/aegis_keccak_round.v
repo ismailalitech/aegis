@@ -53,23 +53,26 @@ module aegis_keccak_round (
         endcase
     end
 
-    wire [319:0]  c;      // theta column parities, 5 x 64
-    wire [319:0]  d;      // theta column effect
-    wire [1599:0] e;      // after theta
-    wire [1599:0] b;      // after rho and pi
-    wire [1599:0] x;      // after chi
+    // One 64-bit net per lane (rather than slices of 1600-bit vectors), so a
+    // simulator only re-evaluates the lanes that actually depend on a change.
+    wire [63:0] a [0:24];    // input lanes
+    wire [63:0] c [0:4];     // theta column parities
+    wire [63:0] d [0:4];     // theta column effect
+    wire [63:0] e [0:24];    // after theta
+    wire [63:0] b [0:24];    // after rho and pi
+    wire [63:0] x [0:24];    // after chi and iota
 
     genvar gx, gy;
     generate
-        for (gx = 0; gx < 5; gx = gx + 1) begin : g_theta_c
-            assign c[64*gx +: 64] = s_in[64*gx +: 64] ^ s_in[64*(gx+5) +: 64] ^
-                                    s_in[64*(gx+10) +: 64] ^ s_in[64*(gx+15) +: 64] ^
-                                    s_in[64*(gx+20) +: 64];
+        for (gx = 0; gx < 25; gx = gx + 1) begin : g_lanes
+            assign a[gx] = s_in[64*gx +: 64];
+            assign s_out[64*gx +: 64] = x[gx];
         end
-        for (gx = 0; gx < 5; gx = gx + 1) begin : g_theta_d
+        for (gx = 0; gx < 5; gx = gx + 1) begin : g_theta
             localparam integer XM = (gx + 4) % 5;
             localparam integer XP = (gx + 1) % 5;
-            assign d[64*gx +: 64] = c[64*XM +: 64] ^ {c[64*XP +: 63], c[64*XP + 63]};
+            assign c[gx] = a[gx] ^ a[gx+5] ^ a[gx+10] ^ a[gx+15] ^ a[gx+20];
+            assign d[gx] = c[XM] ^ {c[XP][62:0], c[XP][63]};
         end
         for (gy = 0; gy < 5; gy = gy + 1) begin : g_y
             for (gx = 0; gx < 5; gx = gx + 1) begin : g_x
@@ -78,22 +81,21 @@ module aegis_keccak_round (
                 localparam integer PI = gy + 5 * ((2 * gx + 3 * gy) % 5);  // pi target
                 localparam integer X1 = ((gx + 1) % 5) + 5 * gy;
                 localparam integer X2 = ((gx + 2) % 5) + 5 * gy;
-                assign e[64*I +: 64] = s_in[64*I +: 64] ^ d[64*gx +: 64];
+                assign e[I] = a[I] ^ d[gx];
+                // rho (rotate left by R) and pi
                 if (R == 0) begin : g_r0
-                    assign b[64*PI +: 64] = e[64*I +: 64];
+                    assign b[PI] = e[I];
                 end else begin : g_rn
-                    assign b[64*PI +: 64] = {e[64*I +: 64-R], e[64*I+64-R +: R]};
+                    assign b[PI] = {e[I][63-R:0], e[I][63:64-R]};
                 end
-                // chi
+                // chi, and iota on lane 0
                 if (I == 0) begin : g_iota
-                    assign x[64*I +: 64] = b[64*I +: 64] ^ (~b[64*X1 +: 64] & b[64*X2 +: 64]) ^ rc;
+                    assign x[I] = b[I] ^ (~b[X1] & b[X2]) ^ rc;
                 end else begin : g_chi
-                    assign x[64*I +: 64] = b[64*I +: 64] ^ (~b[64*X1 +: 64] & b[64*X2 +: 64]);
+                    assign x[I] = b[I] ^ (~b[X1] & b[X2]);
                 end
             end
         end
     endgenerate
-
-    assign s_out = x;
 
 endmodule
