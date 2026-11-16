@@ -19,7 +19,7 @@ Request layout equals Microchip's Linux example (`refs/linux-examples/system-ser
 
 ## Hazard found: never rmmod mpfs-generic-service
 
-`mpfs-generic-service.c` calls `misc_register()` in probe and has no remove callback, so `rmmod` frees the module but leaves the misc device registered (`/dev/mpfs_generic_service` stays after rmmod). After the rmmod, SSH to the board stopped completing its banner, while ping and the serial login prompt still answered. Likely the misc device list then points into freed memory (inference, not proven). There is no SysRq in this kernel.
+`mpfs-generic-service.c` calls `misc_register()` in probe and has no remove callback, so `rmmod` frees the module but leaves the misc device registered (`/dev/mpfs_generic_service` stays after rmmod). After the rmmod, SSH to the board stopped completing its banner, while ping and the serial login prompt still answered. Confirmed on the serial console: a second `modprobe` registered the misc device again on top of the stale entry, and the next open spun forever in `misc_open` (soft lockup on CPU#1, `[python3:630]`, `misc_open+0x5c`). Console logins then failed ("Login incorrect", later no prompt at all). There is no SysRq in this kernel, so the board cannot be rebooted remotely without JTAG.
 
 Rule from now on: load the module once and leave it loaded; to remove it, reboot. Rollback of this phase on the board = `rm -rf /root/aegis` and a reboot.
 
