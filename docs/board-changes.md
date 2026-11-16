@@ -10,6 +10,7 @@
 | `mpfs-generic-service` module loaded | **reboot only. Never rmmod it** (see phase1-notes.md) |
 | Fabric reprogrammed 2026-11-16 with the identical pfdaq v0.5.1 job to recover from the hang | nothing to undo: same job, digests unchanged |
 | Fabric now AEGIS dv101 = pfdaq v0.5.1 + aegis_pqc in APB slot 14 (`build/libero/AEGIS_dv101.job`, digest dbd6625d...b229) | program `images/pfdaq-v051/PFDAQ_v0_5_1.job` (pfdaq repo) |
+| Kernel: Aegis build with nf_tables/bridge/VLAN/USB Ethernet (boot partition fitImage; modules in /usr/lib/modules) | `/root/aegis/kernel-netfilter/rollback.sh`, reboot (old kernel kept as fitImage.pre-aegis, proven one as fitImage.good) |
 | `/root/aegis/oqs-fabric/`, `/root/aegis/pqc_selftest`, `/root/aegis/stub_probe` | `rm -rf` them |
 
 Nothing written to eNVM, keys, locks or the SD card's boot and payload partitions.
