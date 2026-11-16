@@ -5,7 +5,8 @@ db33196d4925046fed720a4e59e64ee591861c7622953e109cc58522a9b46dad  endpoints/stm3
 0fb36db175848777a9fdb67461f19f0e2316a168a8df054725be10bb4467091c  endpoints/stm32h573/artifacts/prover-ns-0.2.0-pq-tampered.hex
 e40705e37f34fda9936c5d6e1ebef23e062d0bf293059fe9aa6678780f84e18e  endpoints/stm32h573/artifacts/prover-ns-0.3.0-kem-good.hex
 f59ebc387c30b11bdbd3c36ba553a39b325e0c6036707e75f156613a934d5af0  endpoints/stm32h573/artifacts/prover-ns-0.3.0-kem-tampered.hex
-070aaed34fdc39e1a74c3e5f1fe5e7d023bf2797060333cfaa2aa6c73f9104f3  endpoints/stm32h573/artifacts/prover-ns-0.4.0-hb.hex
+574617ad901ac6010c3cfe269f5c5027cddb7b95404eb9d804390c595124cd67  endpoints/stm32h573/artifacts/prover-ns-0.4.0-hb.hex
+47c77efd8fd7187df494bb2f71160bdf8823056344b7597385724a525a0f078f  endpoints/stm32h573/artifacts/prover-ns-0.4.0-hb-tampered.hex
 7999ccddbcb133b280dd108bc4c46ab911b5d2a9329897a2c231bbc7f25b37df  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb.hex
 411935b403b49b54108e09c4862ed7fbf4cdf7af6c8cba895ac560e5fcd4c819  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq.hex
 2a16488fcbe91adc15753c25a814e8c8853ff2ec49a86aef98c6226f8c8b1c6e  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-kem.hex
@@ -15,7 +16,7 @@ f59ebc387c30b11bdbd3c36ba553a39b325e0c6036707e75f156613a934d5af0  endpoints/stm3
 503a3bf7d05c7eb3164b27532f1f003ba79ed60e5166ad10c76cb8ad54f765ee  endpoints/stm32h573/artifacts/prover-ns-0.1.0-tampered.bin
 e161fb36ad96ea7b8a76230c194f56339553365235fc5c91c98c576012b1619b  endpoints/stm32h573/artifacts/prover-ns-0.2.0-pq-good.bin
 d7e97efe10ea981f7f0aaa99326762b73b9dfcddf04b6949c0e308862d09ce9c  endpoints/stm32h573/artifacts/prover-ns-0.3.0-kem-good.bin
-11707a4838a81a7b2ca1c87e9628e9fd8dc8c5ac9b9d5fd6f7db2579c4c29d23  endpoints/stm32h573/artifacts/prover-ns-0.4.0-hb.bin
+43f1593ab83b9abd4aca5bc1480428353ab9bca16d629baf691a58ced4c13dff  endpoints/stm32h573/artifacts/prover-ns-0.4.0-hb.bin
 32494e7c5d021fdca955952884e63271219cc7e354e722ac092091bee3b828aa  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq.bin
 9347b9c53e21d53291e622810265a879df566e080a515b33a6121ffdb448eb87  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb.bin
 a0ffb3b16667ee7cda6a3519348fe3c171112cae75fc7ecacf077e821f795d1a  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-kem.bin

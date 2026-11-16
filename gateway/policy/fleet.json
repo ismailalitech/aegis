@@ -18,7 +18,7 @@
     },
     {
      "type": "NSPE",
-     "measurement_value": "1502cd360d05e525fb3ead694985aa624c9e8cb12b8a77e0c0eefeb9fac22226",
+     "measurement_value": "ae689ecbd090a33bbeb19aac1ced5a32bb5312867a8c8911755d98a0c01d0e91",
      "signer_id": "82a5b443594853d4bf0fdd89a914a5dc16f867548207d7077e74d80c063efda9",
      "image": "aegis prover-ns 0.4.0 (heartbeat)"
     }

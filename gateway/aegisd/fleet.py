@@ -312,12 +312,12 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE):
     return "issued session %s..." % r["session_id"][:12]
 
 
-def run_once(policy, base_dir, ecdsa_verify):
+def run_once(policy, base_dir, ecdsa_verify, credentials=True):
     out = []
     for ep in policy["endpoints"]:
         v = attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)))
         v["enforce_rc"] = enforce(policy, v)
-        cs = credential_step(ep, v, base_dir) if ep.get("provision") else None
+        cs = credential_step(ep, v, base_dir) if (credentials and ep.get("provision")) else None
         if cs:
             v["credential"] = cs
         out.append(v)
@@ -331,6 +331,8 @@ def main(argv=None):
     ap.add_argument("--interval", type=float, default=30)
     ap.add_argument("--state", default="/var/lib/aegis/fleet-state.json")
     ap.add_argument("--verifier", choices=["openssl", "cryptography"], default="openssl")
+    ap.add_argument("--no-credentials", action="store_true",
+                    help="attest only; do not issue, check or revoke credentials (use while the service runs)")
     a = ap.parse_args(argv)
     with open(a.policy) as f:
         policy = json.load(f)
@@ -363,7 +365,7 @@ def main(argv=None):
                               "same_credential": bool(mine) and ch == mine["credential_sha3_256"]}, indent=1))
         return 0
     if a.cmd == "once":
-        print(json.dumps(run_once(policy, base, ev), indent=1))
+        print(json.dumps(run_once(policy, base, ev, credentials=not a.no_credentials), indent=1))
         return 0
     while True:
         try:  # reload every cycle, so policy updates apply without a restart

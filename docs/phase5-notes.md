@@ -50,3 +50,17 @@ fleet admission, ML-KEM session agreement, device red-team. 2026-11-16: 11/11 PA
 
 Not covered yet: side-channel and fault-injection checks (need lab equipment), power loss during
 provisioning, network-level attacks once the gateway is in the traffic path.
+
+## Demo script (2026-11-16)
+
+`tools/demo.sh` (PC, about 1 min 45 s, logs in logs/demo/<time>/): (1) the PC verifies the
+gateway's own ML-DSA-65 quote; (2) the gateway attests the STM32 (ML-DSA-65 over the TF-M token),
+the fleet service shows the ML-KEM credential and session heartbeats; (3) a tampered Non-Secure
+image (validly signed, boots normally) is flashed -> QUARANTINED, credential revoked, 0 credential
+files left; (4) the good image is flashed back -> ADMITTED with a new session, heartbeat 1,
+gateway and STM32 report the same session. Two clean runs on the boards (logs/demo/20261116-165457
+and the following run). The script reads verdicts from the gateway service's journal; one-off checks
+use `fleet.py once --no-credentials` so they never start a second key exchange next to the service.
+
+Observed in passing: after the STM32 reboots (session lost from secure RAM) its heartbeat fails and
+the gateway issues a new session at the next cycle (journal 15:57:11).
