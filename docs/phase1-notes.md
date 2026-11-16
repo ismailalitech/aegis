@@ -54,3 +54,12 @@ Product state Open means regression is possible. Before the first flash: dump al
 FlashPro5 JTAG channel (USB 1-3:1.0) detached from ftdi_sio, then FPExpress DEVICE_INFO (board held checksum d78d, design version 6 = pfdaq v0.5.1), PROGRAM, VERIFY, DEVICE_INFO with the identical `PFDAQ_v0_5_1.job` (FABRIC+SNVM). All PASSED; fabric component digest a138b144...6504 (validated v0.5.1); eNVM digest 55b85278...b0e3 unchanged before and after. Channel re-attached to ftdi_sio afterwards.
 
 Board booted in about 25 s: 3 CPUs, remoteproc attached, supervisor channel present, 0 kernel warnings. pfdaq suite: same pattern as the earlier proven runs (measurement lines T6-rt-*/T8-uio-fifo-load report false as before; known issues T9-remoteproc and odd-frames). Rebooted afterwards to re-attach the supervisor (the suite's T9 stops it): attached, `pfdaq_cap -L 0` pass.
+
+## Correction: the chip is not an S device
+
+Phase 0 reported an S part from the programmer's "Product: MPFS095TS"; the device certificate also says MPFS095TS. But the kit's documentation and distributors give the device as **MPFS095T-1FCSG325E**, and the System Services User Guide (DS60001677G, section 6) says: "Data security services require the use of ... PolarFire SoC 'S' version devices. Non-S version devices support the following subset of data security services: Non-authenticated plaintext sNVM service. Nonce service." The status 255 from the signature (0x19/0x1A) and PUF emulation (0x20) services fits that. Inference: "MPFS095TS" is the die name, not the enabled feature set.
+
+Consequences for Aegis:
+- no signature with the factory key KFP, no PUF emulation, no user crypto processor (TeraFire AES/SHA/ECC);
+- available hardware anchors: device serial number (DSN), the Microchip-signed device certificate (system controller checks DSN and key consistency on export), design info and digests, security lock state, and the nonce service (SRAM-PUF start-up states) behind /dev/hwrng;
+- the gateway's own identity key must be generated and held in software; documents must say so.
