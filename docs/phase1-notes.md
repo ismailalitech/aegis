@@ -25,7 +25,6 @@ Rule from now on: load the module once and leave it loaded; to remove it, reboot
 
 ## Open
 
-- Board needs a reset (button or power) to recover SSH.
 - Status 255 of PUF emulation and signature services.
 - Device certificate chain: the Microchip issuing CA certificate is not on this PC.
 
@@ -49,3 +48,9 @@ Product state Open means regression is possible. Before the first flash: dump al
 **Host tools (`tools/setup_host.sh`, no root):** venv with pyocd 0.46.1, cmake 4.4.5, ninja, cryptography 50.0.2; Arm GNU toolchain 14.2.rel1 (SHA-256 matches Arm's); liboqs 0.16.0 (ML-KEM/ML-DSA only).
 
 **NIST vectors:** ACVP-Server tag v1.1.0.41 JSON files in `vectors/acvp` (SHA256SUMS kept in git). liboqs's ACVP driver `tests/test_acvp_vectors.py`: ML-KEM-768 keyGen, encapDecap AFT and VAL; ML-DSA-65 keyGen, sigGen, sigVer: 6 passed. This is the software reference for Phase 2.
+
+## 2026-11-16, board recovered over JTAG (logs/phase1/recover)
+
+FlashPro5 JTAG channel (USB 1-3:1.0) detached from ftdi_sio, then FPExpress DEVICE_INFO (board held checksum d78d, design version 6 = pfdaq v0.5.1), PROGRAM, VERIFY, DEVICE_INFO with the identical `PFDAQ_v0_5_1.job` (FABRIC+SNVM). All PASSED; fabric component digest a138b144...6504 (validated v0.5.1); eNVM digest 55b85278...b0e3 unchanged before and after. Channel re-attached to ftdi_sio afterwards.
+
+Board booted in about 25 s: 3 CPUs, remoteproc attached, supervisor channel present, 0 kernel warnings. pfdaq suite: same pattern as the earlier proven runs (measurement lines T6-rt-*/T8-uio-fifo-load report false as before; known issues T9-remoteproc and odd-frames). Rebooted afterwards to re-attach the supervisor (the suite's T9 stops it): attached, `pfdaq_cap -L 0` pass.
