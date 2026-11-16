@@ -59,7 +59,13 @@ class Console:
         return None
 
     def send(self, line):
-        os.write(self.fd, line.encode() + b"\r\n")
+        data = line.encode() + b"\r\n"
+        while data:  # the fd is non-blocking: write until everything has gone out
+            try:
+                n = os.write(self.fd, data)
+                data = data[n:]
+            except BlockingIOError:
+                time.sleep(0.005)
 
 
 def reset():

@@ -41,7 +41,7 @@
 extern uint32_t tfm_ns_interface_init(void);
 
 #define CHALLENGE_LEN 32u
-#define REQ_LINE_MAX      96u
+#define REQ_LINE_MAX      16384u
 
 static uint8_t token[PSA_INITIAL_ATTEST_MAX_TOKEN_SIZE];
 
@@ -128,6 +128,43 @@ static int parse_hex(const char *s, uint8_t *out, size_t len)
 #define PQ_SIG_LEN 3309u
 #define AEGIS_PQ_GET_PUBKEY 1
 #define AEGIS_PQ_QUOTE      2
+#define AEGIS_PQ_KEM_INIT   3
+#define AEGIS_PQ_KEM_FINISH 4
+#define AEGIS_PQ_SESSION    5
+#define KEM_EK_LEN  1184u
+#define KEM_CT_LEN  1088u
+#define CRED_MAX    6144u
+
+static int hex_nibble_any(char c)
+{
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+static uint8_t kem_buf[KEM_EK_LEN > KEM_CT_LEN ? KEM_EK_LEN : KEM_CT_LEN];
+static uint8_t cred_buf[CRED_MAX];
+
+/* Parse hex until a space or the end; returns the byte count or -1. */
+static long parse_hex_var(const char *s, uint8_t *out, size_t max, const char **end)
+{
+	size_t n = 0;
+
+	while (*s && *s != ' ') {
+		int hi = hex_nibble_any(s[0]), lo = s[1] ? hex_nibble_any(s[1]) : -1;
+
+		if (hi < 0 || lo < 0 || n >= max) {
+			return -1;
+		}
+		out[n++] = (uint8_t)((hi << 4) | lo);
+		s += 2;
+	}
+	if (end) {
+		*end = s;
+	}
+	return (long)n;
+}
 
 static uint8_t pq_buf[PQ_PK_LEN > PQ_SIG_LEN ? PQ_PK_LEN : PQ_SIG_LEN];
 
@@ -148,6 +185,67 @@ static size_t handle_pq(const char *line, char *out, size_t max)
 	psa_status_t st;
 	size_t k;
 
+	if (strncmp(line, "PQKEMINIT ", 10) == 0) {
+		uint8_t nonce[32];
+		psa_invec i[1] = {{nonce, 32}};
+		psa_outvec o[2] = {{kem_buf, KEM_EK_LEN}, {pq_buf, PQ_SIG_LEN}};
+
+		if (parse_hex(line + 10, nonce, 32) != 0) {
+			return (size_t)snprintf(out, max, "ERR bad-request\r\n");
+		}
+		st = psa_call(AEGIS_PQ_SERVICE_HANDLE, AEGIS_PQ_KEM_INIT, i, 1, o, 2);
+		if (st != PSA_SUCCESS) {
+			return (size_t)snprintf(out, max, "ERR pq %ld\r\n", (long)st);
+		}
+		k = (size_t)snprintf(out, max, "PQKEMEK %u ", (unsigned int)o[0].len);
+		k += put_hex_into(out + k, kem_buf, o[0].len);
+		k += (size_t)snprintf(out + k, max - k, " %u ", (unsigned int)o[1].len);
+		k += put_hex_into(out + k, pq_buf, o[1].len);
+		memcpy(out + k, " END\r\n", 6);
+		return k + 6;
+	}
+	if (strncmp(line, "PQKEMFIN ", 9) == 0) {
+		const char *p = line + 9;
+		long ctl, crl;
+		uint8_t tag[32];
+
+		ctl = parse_hex_var(p, kem_buf, KEM_CT_LEN, &p);
+		if (ctl != (long)KEM_CT_LEN || *p != ' ') {
+			return (size_t)snprintf(out, max, "ERR bad-request\r\n");
+		}
+		crl = parse_hex_var(p + 1, cred_buf, CRED_MAX, NULL);
+		if (crl <= 0) {
+			return (size_t)snprintf(out, max, "ERR bad-request\r\n");
+		}
+		{
+			psa_invec i[2] = {{kem_buf, KEM_CT_LEN}, {cred_buf, (size_t)crl}};
+			psa_outvec o[1] = {{tag, sizeof(tag)}};
+
+			st = psa_call(AEGIS_PQ_SERVICE_HANDLE, AEGIS_PQ_KEM_FINISH, i, 2, o, 1);
+		}
+		if (st != PSA_SUCCESS) {
+			return (size_t)snprintf(out, max, "ERR pq %ld\r\n", (long)st);
+		}
+		k = (size_t)snprintf(out, max, "PQKEMOK ");
+		k += put_hex_into(out + k, tag, 32);
+		memcpy(out + k, " END\r\n", 6);
+		return k + 6;
+	}
+	if (strcmp(line, "PQSESSION") == 0) {
+		uint8_t s2[64];
+		psa_outvec o[1] = {{s2, sizeof(s2)}};
+
+		st = psa_call(AEGIS_PQ_SERVICE_HANDLE, AEGIS_PQ_SESSION, NULL, 0, o, 1);
+		if (st != PSA_SUCCESS) {
+			return (size_t)snprintf(out, max, "ERR pq %ld\r\n", (long)st);
+		}
+		k = (size_t)snprintf(out, max, "PQSESSION ");
+		k += put_hex_into(out + k, s2, 32);
+		out[k++] = ' ';
+		k += put_hex_into(out + k, s2 + 32, 32);
+		memcpy(out + k, " END\r\n", 6);
+		return k + 6;
+	}
 	if (strcmp(line, "PQKEY") == 0) {
 		psa_outvec o[1] = {{pq_buf, PQ_PK_LEN}};
 
@@ -187,7 +285,7 @@ static size_t handle_request(const char *line, char *out, size_t max)
 	size_t token_len = 0, k;
 	psa_status_t st;
 
-	if (strcmp(line, "PQKEY") == 0 || strncmp(line, "PQCHAL ", 7) == 0) {
+	if (strncmp(line, "PQ", 2) == 0) {
 		return handle_pq(line, out, max);
 	}
 
@@ -210,7 +308,7 @@ static size_t handle_request(const char *line, char *out, size_t max)
 	return k + 6;
 }
 
-static char reply[2 * (PSA_INITIAL_ATTEST_MAX_TOKEN_SIZE + PQ_SIG_LEN) + 96];
+static char reply[2 * (PSA_INITIAL_ATTEST_MAX_TOKEN_SIZE + PQ_SIG_LEN + KEM_EK_LEN) + 128];
 
 /* Console output: one blocking UART transmit per 128-byte piece. */
 static void put_n(const char *s, size_t n)
@@ -341,7 +439,7 @@ static void mac_default(uint8_t mac[6])
 int main(void)
 {
 	static struct netif netif;
-	char line[REQ_LINE_MAX];
+	static char line[REQ_LINE_MAX];
 	size_t n = 0;
 	uint8_t mac[6];
 	struct tcp_pcb *srv;
@@ -376,7 +474,7 @@ int main(void)
 
 	put("AEGIS-NET eth-init-ok\r\n");
 	for (uint32_t last = 0;;) {
-		if (ticks_ms - last >= 5000u) {
+		if (ticks_ms - last >= 30000u && n == 0) {
 			last = ticks_ms;
 			uint32_t r[5];
 

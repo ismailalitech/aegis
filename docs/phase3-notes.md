@@ -80,3 +80,39 @@ Limits to state with every claim: product state Open with TF-M development keys,
 the debugger or the published image-signing key can replace the secure image, and any secure code
 can use the DHUK; isolation level 1 (no isolation between secure partitions); enrolment is
 trust on first use; deterministic ML-DSA (no hedged randomness).
+
+## ML-KEM-768 provisioning and the zero-trust credential loop (2026-11-16)
+
+Secure partition (types 3-5): KEM_INIT derives a fresh ML-KEM-768 key pair (mlkem-native v2.0.0,
+deterministic API) from prov_root (second DHUK-derived secret), the gateway's nonce and a counter,
+and signs nonce || ek with the device ML-DSA-65 key. KEM_FINISH decapsulates, wipes the
+decapsulation key and K, keeps session = SHA3-256("aegis-session-v1" || K || nonce || SHA3(ct)) in
+secure RAM, and returns the confirmation tag SHA3-256("aegis-confirm-v1" || K || nonce || SHA3(ct)
+|| SHA3(credential)). SESSION returns SHA3-256 of the session key (an identifier, not the key) and
+SHA3-256 of the credential. The partition's SHA3-256 was checked against hashlib (lengths 0-5000,
+block boundaries). Secure image: text 158 KB, bss 112 KB of 127 KB. The device ML-DSA key is the
+same before and after the image update (derived from the DHUK, not from the image).
+
+Gateway (`fleet.py`, `"provision": true` in the policy): after an ADMITTED verdict, if no valid
+credential, run provisioning: verify the ML-DSA signature on ek, encapsulate (liboqs on the U54),
+send ct plus a credential signed with the gateway's own ML-DSA-65 identity key (endpoint, key hash,
+measurements, ct hash, issued, expires +1 h), check the confirmation tag, keep the session key
+(mode 0600) and credential metadata in /var/lib/aegis/credentials/. On QUARANTINED the credential
+and session key are deleted.
+
+Board run (logs/stm32/kem-*/, gateway service journal, re-attestation every 30 s):
+
+| Time (UTC) | Event | Verdict / credential |
+|---|---|---|
+| 14:51:19 | good image | ADMITTED, credential issued, session fc7f6742... |
+| 14:51:50 | | ADMITTED, credential valid |
+| 14:52:22 to 14:53:24 | tampered NS image (signed with the trusted dev key) | QUARANTINED, NSPE not allowed, credential revoked |
+| 14:53:57 | good image again | ADMITTED, new credential, session 2abdaeed... |
+
+`fleet.py session`: the session identifier reported by the STM32's secure side equals the gateway's,
+and so does the credential hash (both runs). Host tests add: key-swap on the KEM key refused, wrong
+confirmation tag refused, credential issued then revoked (34 host tests in total).
+
+Limits: the endpoint does not yet verify the gateway's signature on the credential (only hashes it),
+so authentication is one-way (gateway authenticates endpoint). The session key is not yet used for
+traffic. The NS image is reproducible (same measurement on rebuild); only its ECDSA signature differs.

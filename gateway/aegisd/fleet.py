@@ -33,6 +33,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..", "common")))
 import psa_token  # noqa: E402
 
 PQ_LABEL = b"aegis-endpoint-quote-v1"
+KEM_INIT_LABEL = b"aegis-kem-init-v1"
+CRED_LABEL = b"aegis-credential-v1"
+CRED_LIFETIME_S = 3600
 
 
 def request_token(host, port, challenge, timeout):
@@ -92,6 +95,72 @@ def request_pq_key(host, port, timeout=10):
     if len(pk) != int(p[1]):
         raise ValueError("PQ key length mismatch")
     return pk
+
+
+def _exchange(host, port, line, timeout):
+    with socket.create_connection((host, port), timeout=timeout) as s:
+        s.settimeout(timeout)
+        s.sendall(line.encode() + b"\n")
+        return _read_line(s, limit=65536)
+
+
+def _sha3(*parts):
+    import hashlib
+    h = hashlib.sha3_256()
+    for p in parts:
+        h.update(p)
+    return h.digest()
+
+
+def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.0):
+    """ML-KEM-768 provisioning of an admitted aegis-pq endpoint.
+
+    1. gateway nonce -> endpoint returns a fresh ML-KEM-768 encapsulation key, signed with its
+       enrolled ML-DSA-65 key (so the key cannot be swapped on the way);
+    2. gateway encapsulates (ct, K) and sends ct with a credential signed by the gateway's own
+       ML-DSA-65 identity key;
+    3. endpoint decapsulates and answers a key-confirmation tag; the gateway accepts only if the
+       tag equals SHA3-256("aegis-confirm-v1" || K || nonce || SHA3(ct) || SHA3(credential)).
+    Both sides then hold session = SHA3-256("aegis-session-v1" || K || nonce || SHA3(ct)).
+    Returns a dict; raises ValueError on any failure."""
+    import mldsa
+    import mlkem
+    import wire
+    host, port = ep["host"], int(ep["port"])
+    with open(_path(base_dir, ep["pq_pub_file"])) as f:
+        pk = bytes.fromhex(f.read().strip())
+    nonce = secrets.token_bytes(32)
+    p = _exchange(host, port, "PQKEMINIT " + nonce.hex(), timeout).split()
+    if len(p) != 6 or p[0] != "PQKEMEK" or p[5] != "END":
+        raise ValueError("no KEM key in reply: %r" % " ".join(p)[:40])
+    ek, sig = bytes.fromhex(p[2]), bytes.fromhex(p[4])
+    if len(ek) != mlkem.EK_LEN or not mldsa.verify(pk, KEM_INIT_LABEL, nonce + ek, sig):
+        raise ValueError("ML-KEM key not signed by the enrolled endpoint key")
+    ct, k = mlkem.encaps(ek)
+    now = int(time.time())
+    body = {"v": 1, "type": "credential", "endpoint": ep["name"],
+            "endpoint_pq_pk_sha256": __import__("hashlib").sha256(pk).hexdigest(),
+            "measurements": measurements, "kem": "ML-KEM-768", "kem_ct_sha3_256": _sha3(ct).hex(),
+            "issued": now, "expires": now + CRED_LIFETIME_S, "gateway_identity_sha256": gw_identity_sha256}
+    cred = wire.canonical(body) + b"\n" + mldsa.sign(gw_sk, CRED_LABEL, wire.canonical(body))
+    p = _exchange(host, port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), timeout).split()
+    if len(p) != 3 or p[0] != "PQKEMOK" or p[2] != "END":
+        raise ValueError("provisioning refused by endpoint: %r" % " ".join(p)[:40])
+    expect = _sha3(b"aegis-confirm-v1", k, nonce, _sha3(ct), _sha3(cred))
+    import hmac
+    if not hmac.compare_digest(bytes.fromhex(p[1]), expect):
+        raise ValueError("key confirmation failed")
+    session = _sha3(b"aegis-session-v1", k, nonce, _sha3(ct))
+    session_id = _sha3(b"aegis-session-id-v1", session)
+    return {"credential": cred, "body": body, "session_key": session, "session_id": session_id.hex(),
+            "credential_sha3_256": _sha3(cred).hex()}
+
+
+def query_session(ep, timeout=10.0):
+    p = _exchange(ep["host"], int(ep["port"]), "PQSESSION", timeout).split()
+    if len(p) != 4 or p[0] != "PQSESSION" or p[3] != "END":
+        raise ValueError("no session: %r" % " ".join(p)[:40])
+    return p[1], p[2]
 
 
 def check_components(claims, allowed):
@@ -173,18 +242,66 @@ def enforce(policy, verdict):
     return r.returncode
 
 
+GATEWAY_STATE = "/var/lib/aegis"
+
+
+def load_gateway_identity(state=GATEWAY_STATE):
+    import wire
+    with open(os.path.join(state, "identity.json")) as f:
+        rec = json.load(f)
+    with open(os.path.join(state, "identity.sk"), "rb") as f:
+        sk = f.read()
+    return sk, wire.digest(rec["body"])
+
+
+def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE):
+    """Zero trust: admitted aegis-pq endpoints with "provision": true get (or keep) a fresh
+    credential; quarantined ones lose it."""
+    if not ep.get("provision"):
+        return None
+    cdir = os.path.join(state, "credentials")
+    os.makedirs(cdir, mode=0o700, exist_ok=True)
+    meta = os.path.join(cdir, ep["name"] + ".json")
+    keyf = os.path.join(cdir, ep["name"] + ".session")
+    if not verdict["admitted"]:
+        for f in (meta, keyf):
+            if os.path.exists(f):
+                os.remove(f)
+        return "revoked"
+    if os.path.exists(meta):
+        with open(meta) as f:
+            m = json.load(f)
+        if m["body"]["expires"] - time.time() > 300:
+            return "valid"
+    sk, gid = load_gateway_identity(state)
+    try:
+        r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}))
+    except (OSError, ValueError, RuntimeError) as e:
+        return "provisioning failed: %s" % e
+    fd = os.open(keyf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(r["session_key"])
+    with open(meta, "w") as f:
+        json.dump({"body": r["body"], "session_id": r["session_id"],
+                   "credential_sha3_256": r["credential_sha3_256"]}, f, indent=1)
+    return "issued session %s..." % r["session_id"][:12]
+
+
 def run_once(policy, base_dir, ecdsa_verify):
     out = []
     for ep in policy["endpoints"]:
         v = attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)))
         v["enforce_rc"] = enforce(policy, v)
+        cs = credential_step(ep, v, base_dir) if ep.get("provision") else None
+        if cs:
+            v["credential"] = cs
         out.append(v)
     return out
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Aegis fleet verifier")
-    ap.add_argument("cmd", choices=["once", "watch", "enroll-pq"])
+    ap.add_argument("cmd", choices=["once", "watch", "enroll-pq", "session"])
     ap.add_argument("policy")
     ap.add_argument("--interval", type=float, default=30)
     ap.add_argument("--state", default="/var/lib/aegis/fleet-state.json")
@@ -205,6 +322,21 @@ def main(argv=None):
                 f.write(pk.hex() + "\n")
             print("enrolled %s: ML-DSA-65 key sha256 %s -> %s" % (ep["name"], __import__("hashlib").sha256(pk).hexdigest(), path))
         return 0
+    if a.cmd == "session":
+        # compare the gateway's stored credential/session with what the endpoint's secure side reports
+        for ep in policy["endpoints"]:
+            if not ep.get("provision"):
+                continue
+            meta = os.path.join(GATEWAY_STATE, "credentials", ep["name"] + ".json")
+            mine = json.load(open(meta)) if os.path.exists(meta) else None
+            try:
+                sid, ch = query_session(ep)
+            except (OSError, ValueError) as e:
+                sid, ch = None, str(e)
+            print(json.dumps({"endpoint": ep["name"], "gateway_session_id": mine and mine["session_id"],
+                              "endpoint_session_id": sid, "same_session": bool(mine) and sid == mine["session_id"],
+                              "same_credential": bool(mine) and ch == mine["credential_sha3_256"]}, indent=1))
+        return 0
     if a.cmd == "once":
         print(json.dumps(run_once(policy, base, ev), indent=1))
         return 0
@@ -215,8 +347,9 @@ def main(argv=None):
             json.dump({"updated": int(time.time()), "verdicts": res}, f, indent=1)
         os.replace(tmp, a.state)
         for v in res:
-            print("%s %s %s %s" % (time.strftime("%H:%M:%S"), v["endpoint"],
-                                   "ADMITTED" if v["admitted"] else "QUARANTINED", "; ".join(v["reasons"])),
+            print("%s %s %s %s%s" % (time.strftime("%H:%M:%S"), v["endpoint"],
+                                     "ADMITTED" if v["admitted"] else "QUARANTINED", "; ".join(v["reasons"]),
+                                     (" [credential: %s]" % v["credential"]) if v.get("credential") else ""),
                   flush=True)
         time.sleep(a.interval)
 

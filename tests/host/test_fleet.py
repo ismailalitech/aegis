@@ -4,6 +4,7 @@ Each fake endpoint signs PSA-style tokens with its own P-256 key, so every
 admission and quarantine path is exercised: good node, tampered firmware,
 replayed token, wrong key, garbage reply, silent node, no TCP service.
 """
+import json
 import os
 import socket
 import sys
@@ -21,6 +22,8 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 import cbor  # noqa: E402
 import mldsa  # noqa: E402
+import mlkem  # noqa: E402
+import hashlib  # noqa: E402
 import fleet  # noqa: E402
 import psa_token  # noqa: E402
 
@@ -65,7 +68,13 @@ class FakeEndpoint:
         while True:
             c, _ = self.srv.accept()
             try:
-                line = c.recv(256).split(b"\n")[0].decode()
+                buf = b""
+                while b"\n" not in buf:
+                    chunk = c.recv(65536)
+                    if not chunk:
+                        break
+                    buf += chunk
+                line = buf.split(b"\n")[0].decode()
                 if line.startswith("PQ"):
                     self.pq(c, line)
                     continue
@@ -92,6 +101,29 @@ class FakeEndpoint:
 
 
     def pq(self, c, line):
+        sha3 = lambda *p: hashlib.sha3_256(b"".join(p)).digest()  # noqa: E731
+        if line.startswith("PQKEMINIT "):
+            self.nonce = bytes.fromhex(line.split()[1])
+            self.ek, self.dk = mlkem.keypair()
+            sk = self.pq_other_sk if self.mode == "kem-mitm" else self.pq_sk
+            sig = mldsa.sign(sk, b"aegis-kem-init-v1", self.nonce + self.ek)
+            c.sendall(b"PQKEMEK %d %s %d %s END\r\n" % (len(self.ek), self.ek.hex().encode(), len(sig), sig.hex().encode()))
+            return
+        if line.startswith("PQKEMFIN "):
+            _, cth, credh = line.split()
+            ct, cred = bytes.fromhex(cth), bytes.fromhex(credh)
+            k = mlkem.decaps(ct, self.dk)
+            if self.mode == "kem-badtag":
+                k = bytes(32)
+            tag = sha3(b"aegis-confirm-v1", k, self.nonce, sha3(ct), sha3(cred))
+            self.session = sha3(b"aegis-session-v1", k, self.nonce, sha3(ct))
+            self.cred = cred
+            c.sendall(b"PQKEMOK %s END\r\n" % tag.hex().encode())
+            return
+        if line == "PQSESSION":
+            sid = sha3(b"aegis-session-id-v1", self.session)
+            c.sendall(b"PQSESSION %s %s END\r\n" % (sid.hex().encode(), sha3(self.cred).hex().encode()))
+            return
         if line == "PQKEY":
             c.sendall(b"PQKEY %d %s END\r\n" % (len(self.pq_pk), self.pq_pk.hex().encode()))
             return
@@ -185,6 +217,50 @@ class Fleet(unittest.TestCase):
         _, v = self.run_pq("pq-tampered")
         self.assertFalse(v["admitted"])
         self.assertTrue(any("NSPE not allowed" in r for r in v["reasons"]), v["reasons"])
+
+    def provision_ep(self, mode):
+        ep = FakeEndpoint(self.key, mode)
+        pqf = os.path.join(self.dir, "pq.pub")
+        with open(pqf, "w") as f:
+            f.write(PQ_KEYS[0][0].hex())
+        conf = {"name": mode, "kind": "aegis-pq", "host": "127.0.0.1", "port": ep.port, "pq_pub_file": pqf,
+                "allowed": self.allowed, "provision": True}
+        gw_pk, gw_sk = mldsa.keypair()
+        return ep, conf, gw_pk, gw_sk
+
+    def test_kem_provisioning_agrees_on_session(self):
+        ep, conf, gw_pk, gw_sk = self.provision_ep("kem-good")
+        r = fleet.provision(conf, self.dir, gw_sk, "gid", {"NSPE": GOOD_NS}, timeout=5)
+        sid, ch = fleet.query_session(conf)
+        self.assertEqual(sid, r["session_id"])
+        self.assertEqual(ch, r["credential_sha3_256"])
+        body, sig = r["credential"].split(b"\n", 1)
+        self.assertTrue(mldsa.verify(gw_pk, b"aegis-credential-v1", body, sig))
+
+    def test_kem_key_signed_by_other_key_refused(self):
+        _, conf, _, gw_sk = self.provision_ep("kem-mitm")
+        with self.assertRaises(ValueError):
+            fleet.provision(conf, self.dir, gw_sk, "gid", {}, timeout=5)
+
+    def test_kem_wrong_confirmation_refused(self):
+        _, conf, _, gw_sk = self.provision_ep("kem-badtag")
+        with self.assertRaises(ValueError):
+            fleet.provision(conf, self.dir, gw_sk, "gid", {}, timeout=5)
+
+    def test_credential_issued_then_revoked(self):
+        import wire
+        ep, conf, gw_pk, gw_sk = self.provision_ep("kem-good")
+        state = tempfile.mkdtemp()
+        body = {"v": 1, "type": "identity", "pk": gw_pk.hex()}
+        with open(os.path.join(state, "identity.json"), "w") as f:
+            json.dump({"body": body}, f)
+        with open(os.path.join(state, "identity.sk"), "wb") as f:
+            f.write(gw_sk)
+        st = fleet.credential_step(conf, {"admitted": True, "measurements": {}}, self.dir, state=state)
+        self.assertTrue(st.startswith("issued"), st)
+        self.assertEqual(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state), "valid")
+        self.assertEqual(fleet.credential_step(conf, {"admitted": False}, self.dir, state=state), "revoked")
+        self.assertFalse(os.path.exists(os.path.join(state, "credentials", "kem-good.session")))
 
     def test_cbor_roundtrip(self):
         x = {1: [b"ab", "cd", -5, 2 ** 40, True, None], -75008: cbor.Tag(18, b"x")}

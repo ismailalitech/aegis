@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import stm32_console as sc  # noqa: E402
 
 
-REPLIES = ("TOKEN ", "PQTOKEN ", "PQKEY ", "ERR")
+REPLIES = ("TOKEN ", "PQTOKEN ", "PQKEY ", "PQKEMEK ", "PQKEMOK ", "PQSESSION ", "ERR")
 
 
 def wait_reply(con, seconds):
@@ -45,10 +45,10 @@ def main():
     print("serial bridge on port %d -> %s" % (a.port, sc.port_path()), flush=True)
     while True:
         c, peer = srv.accept()
-        c.settimeout(10)
+        c.settimeout(30)
         try:
             req = b""
-            while b"\n" not in req and len(req) < 200:
+            while b"\n" not in req and len(req) < 65536:
                 chunk = c.recv(256)
                 if not chunk:
                     break
@@ -57,7 +57,7 @@ def main():
             con.read_for(0.05)
             con.buf = b""
             con.send(line)
-            reply = wait_reply(con, 20)
+            reply = wait_reply(con, 30)
             c.sendall(reply.encode() + b"\r\n")
             print("%s %s -> %s..." % (peer[0], line[:20], reply[:24]), flush=True)
         except OSError as e:

@@ -12,17 +12,18 @@
    "allowed": [
     {
      "type": "SPE",
-     "measurement_value": "b9186d3173278df75467d50f92b8b6b96c02c208b57a2aa1d35fbd9cb1d1dcac",
+     "measurement_value": "227e3c8a5c40dd66e15ea5d0e050ceddcc3e5665a36dca8a645d354ada42a4fc",
      "signer_id": "e30466f6b8470c1f29070b17f1e2d3e94d445e3f608087fdc711e4382bb538b6",
-     "image": "TF-M v2.3.0 + Aegis PQ partition"
+     "image": "TF-M v2.3.0 + Aegis PQ partition with ML-KEM provisioning"
     },
     {
      "type": "NSPE",
-     "measurement_value": "ccae9f5fc9082afee7dc5ceef215346963dfddf3ca9db776d86130eea88e0d1d",
+     "measurement_value": "56ec5b078c0373172395c504f8d3dba72be00686a599b7c364082429fe49c3ab",
      "signer_id": "82a5b443594853d4bf0fdd89a914a5dc16f867548207d7077e74d80c063efda9",
-     "image": "aegis prover-ns 0.1.0 with PQ commands"
+     "image": "aegis prover-ns with PQ and KEM commands"
     }
-   ]
+   ],
+   "provision": true
   }
  ]
 }
