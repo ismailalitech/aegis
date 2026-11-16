@@ -86,3 +86,19 @@ Cases: ML-KEM-768 keyGen 25, encapsulation 25, decapsulation 10; ML-DSA-65 keyGe
 PC: a corrupted key, ciphertext, signature or expected value makes the case fail. Fabric use
 confirmed with AEGIS_PQC_STATS (e.g. one ML-DSA sigGen case: 278 fabric permutations, 0 software).
 Wording: "passes the NIST ACVP vectors", not "validated".
+
+## Where the time goes (measured 2026-11-16)
+
+`gateway/pqc/mmio_cost.c` on the board (200,000 accesses, 3 runs, identical to 0.5 ns):
+one 32-bit read from Linux user space to the core = 222 ns, one write = 141 ns (APB clock 20 ns).
+A Keccak permutation moves 50 words in and 50 out: about 7.1 + 11.1 = 18 us of transfers against
+0.48 us of compute (observed 16.7 us per call, writes partly posted).
+
+liboqs `speed_common` (one-block hashes, 1 s each) on one U54 core:
+SHA3-256 17.3 us software vs 19.0 us with fabric Keccak; SHAKE128 17.3 vs 19.1 us. So the software
+permutation itself costs about 15 us here (the U54 has no rotate instruction), and the fabric core
+computes it about 30 times faster, but the APB transfers eat all of that.
+`test_sha3` (liboqs SHA-3 known answers, incl. four-way SHAKE) passes with fabric Keccak.
+
+Consequence for a faster design: the data path, not the core, must change: keep state in the fabric
+across a whole sponge or a whole matrix expansion, or move it by DMA / 64-bit AXI on FIC0.
