@@ -1,6 +1,6 @@
 #!/bin/sh
 # Aegis regression run. Host stages need no hardware; --board adds the checks on the real boards
-# (gateway at $GATEWAY, STM32 line protocol at $STM32, today the PC relay host/serial_bridge.py).
+# (gateway at $GATEWAY, STM32 line protocol at $STM32, the STM32 on its own Ethernet).
 #   tools/regression.sh [--board]
 # Writes logs/regression/<time>/ and exits non-zero on the first failing stage.
 set -u
@@ -8,7 +8,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 PY=.venv/bin/python
 GATEWAY=${GATEWAY:-192.0.2.10}
-STM32=${STM32:-127.0.0.1:7444}
+STM32=${STM32:-192.0.2.20:7444}
 OUT=logs/regression/$(date +%Y%m%d-%H%M%S)
 mkdir -p "$OUT"
 pass=0; fail=0

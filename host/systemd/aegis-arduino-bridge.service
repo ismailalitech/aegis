@@ -1,0 +1,13 @@
+[Unit]
+Description=Aegis Arduino Uno legacy-node relay (serial to TCP 7445)
+
+[Service]
+WorkingDirectory=%h/aegis
+ExecStart=%h/aegis/.venv/bin/python host/serial_bridge.py --tty /dev/serial/by-id/usb-Arduino__www.arduino.cc__0043_75833353834351409182-if00 --port 7445 --replies LEGACY-SENSOR
+Restart=always
+RestartSec=5
+StandardOutput=append:%h/aegis/logs/arduino-bridge.log
+StandardError=append:%h/aegis/logs/arduino-bridge.log
+
+[Install]
+WantedBy=default.target
