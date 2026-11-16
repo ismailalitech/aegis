@@ -1,24 +1,26 @@
 {
- "timeout_s": 10,
- "note": "STM32 reached through the PC serial relay (host/serial_bridge.py) until its Ethernet port has a link. The IAK is TF-M's published development key: demo only, anyone can forge tokens for it.",
+ "timeout_s": 20,
+ "note": "STM32 reached through the PC serial relay (host/serial_bridge.py) until its Ethernet port has a link. ML-DSA-65 key enrolled by trust on first use (fleet.py enroll-pq). The ES256 token key is TF-M's published development key, so only the ML-DSA check is security-relevant.",
  "endpoints": [
   {
    "name": "stm32h573-dk",
+   "kind": "aegis-pq",
    "host": "192.0.2.30",
    "port": 7444,
+   "pq_pub_file": "keys/stm32h573-dk.mldsa65.pub",
    "iak_pub_pem": "keys/tfm-dev-iak.pub.pem",
    "allowed": [
     {
      "type": "SPE",
-     "measurement_value": "b9e3b611c89a60f0b9d660c274e5cc6110d17b25445c3517baba18e01330df55",
+     "measurement_value": "b9186d3173278df75467d50f92b8b6b96c02c208b57a2aa1d35fbd9cb1d1dcac",
      "signer_id": "e30466f6b8470c1f29070b17f1e2d3e94d445e3f608087fdc711e4382bb538b6",
-     "image": "TF-M v2.3.0 secure image (securebench-ws build/spe)"
+     "image": "TF-M v2.3.0 + Aegis PQ partition"
     },
     {
      "type": "NSPE",
-     "measurement_value": "55a370e39454e694704ba5612d79f803bf9fe77a035753a585b945505733845c",
+     "measurement_value": "ccae9f5fc9082afee7dc5ceef215346963dfddf3ca9db776d86130eea88e0d1d",
      "signer_id": "82a5b443594853d4bf0fdd89a914a5dc16f867548207d7077e74d80c063efda9",
-     "image": "aegis prover-ns 0.1.0"
+     "image": "aegis prover-ns 0.1.0 with PQ commands"
     }
    ]
   }

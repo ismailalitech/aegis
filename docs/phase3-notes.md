@@ -54,3 +54,29 @@ garbage reply, silent node, no service; same verifier with the openssl path.
 
 Not done yet: enforcement (needs the gateway in the traffic path), Arduino node, ML-DSA on the
 endpoint, per-device IAK.
+
+## Post-quantum quote with a per-device key (2026-11-16)
+
+New secure image: TF-M v2.3.0 (same configuration as before) plus the out-of-tree partition
+`endpoints/stm32h573/tfm-aegis-partition` (built by its `build_tfm.sh`, reusing the SecureBench
+build's fetched dependencies). Secure-gateway veneers stay at 0x0C085FC0..E0; secure RAM bss
+100 KB of 127 KB; text 147 KB.
+
+- Key: at partition init, seed = AES-256-ECB under the STM32H5 DHUK (SAES, KEYSEL=HW) of a fixed
+  32-byte label; ML-DSA-65 key pair = KeyGen_internal(seed) with mldsa-native v2.0.0 (reduced RAM,
+  deterministic signing, empty context). The seed is wiped after key generation.
+- Quote: TF-M PSA token for the verifier's challenge + ML-DSA-65 signature over
+  "aegis-endpoint-quote-v1\0" || token.
+- Checks done: mldsa-native config interoperates with liboqs (PC); device key identical on 3 boots;
+  device key differs from the keys an all-zero, all-ones or label key in SAES would give, and from
+  the raw label as seed (consistent with the hidden DHUK being used; per-chip uniqueness needs a
+  second chip and is not shown).
+- Gateway (`fleet.py`, kind aegis-pq, ML-DSA verify with liboqs on the PolarFire): enroll-pq by
+  trust on first use, then: good image ADMITTED (1.07 s through the relay); tampered NS image
+  QUARANTINED (signature valid, NSPE measurement not allowed); wrong enrolled key QUARANTINED
+  (signature invalid); real key restored -> ADMITTED.
+
+Limits to state with every claim: product state Open with TF-M development keys, so anyone with
+the debugger or the published image-signing key can replace the secure image, and any secure code
+can use the DHUK; isolation level 1 (no isolation between secure partitions); enrolment is
+trust on first use; deterministic ML-DSA (no hedged randomness).

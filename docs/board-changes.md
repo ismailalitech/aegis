@@ -20,7 +20,7 @@ security views, merged image, all option bytes). The board held a TF-M v2.3.0 BL
 
 | Change | Undo |
 |---|---|
-| Secure slot 0x0C038000 replaced by the upstream TF-M v2.3.0 secure image (`securebench-ws/build/spe`, security counter 1, same as before) | `endpoints/stm32h573/restore_from_backup.sh` |
+| Secure slot 0x0C038000 replaced by TF-M v2.3.0 + the Aegis PQ partition (`artifacts/tfm-s-v2.3.0-aegis-pq.hex`, security counter 1, same as before) | `endpoints/stm32h573/restore_from_backup.sh` |
 | Non-secure slot 0x08088000 replaced by the Aegis prover (`endpoints/stm32h573/artifacts/`) | same script |
 
 Not touched: BL2, option bytes (product state Open, TrustZone on, WRP on BL2), NV counters, OTP.

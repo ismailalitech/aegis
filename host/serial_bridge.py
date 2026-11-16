@@ -16,6 +16,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import stm32_console as sc  # noqa: E402
 
 
+REPLIES = ("TOKEN ", "PQTOKEN ", "PQKEY ", "ERR")
+
+
+def wait_reply(con, seconds):
+    """Return the first complete console line that is an answer (skips status lines)."""
+    import time
+    end = time.time() + seconds
+    while time.time() < end:
+        con.read_for(0.05)
+        while b"\n" in con.buf:
+            line, con.buf = con.buf.split(b"\n", 1)
+            line = line.strip().decode(errors="replace")
+            if line.startswith(REPLIES):
+                return line
+    return "ERR bridge-timeout"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=7444)
@@ -40,7 +57,7 @@ def main():
             con.read_for(0.05)
             con.buf = b""
             con.send(line)
-            reply = con.wait_for(b"TOKEN ", 10) or con.wait_for(b"ERR", 1) or "ERR bridge-timeout"
+            reply = wait_reply(con, 20)
             c.sendall(reply.encode() + b"\r\n")
             print("%s %s -> %s..." % (peer[0], line[:20], reply[:24]), flush=True)
         except OSError as e:

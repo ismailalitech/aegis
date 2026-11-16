@@ -20,9 +20,11 @@ from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature  # noqa: E402
 
 import cbor  # noqa: E402
+import mldsa  # noqa: E402
 import fleet  # noqa: E402
 import psa_token  # noqa: E402
 
+PQ_KEYS = [mldsa.keypair(), mldsa.keypair()]
 GOOD_S = "11" * 32
 GOOD_NS = "22" * 32
 SIGNER = "33" * 32
@@ -51,6 +53,8 @@ class FakeEndpoint:
     def __init__(self, key, mode="good"):
         self.key, self.mode, self.old = key, mode, None
         self.other = ec.generate_private_key(ec.SECP256R1())
+        self.pq_pk, self.pq_sk = PQ_KEYS[0]
+        self.pq_other_sk = PQ_KEYS[1][1]
         self.srv = socket.socket()
         self.srv.bind(("127.0.0.1", 0))
         self.srv.listen(4)
@@ -62,6 +66,9 @@ class FakeEndpoint:
             c, _ = self.srv.accept()
             try:
                 line = c.recv(256).split(b"\n")[0].decode()
+                if line.startswith("PQ"):
+                    self.pq(c, line)
+                    continue
                 ch = bytes.fromhex(line.split()[1])
                 if self.mode == "silent":
                     threading.Event().wait(3)
@@ -82,6 +89,17 @@ class FakeEndpoint:
                 c.sendall(b"TOKEN %d %s END\r\n" % (len(tok), tok.hex().encode()))
             finally:
                 c.close()
+
+
+    def pq(self, c, line):
+        if line == "PQKEY":
+            c.sendall(b"PQKEY %d %s END\r\n" % (len(self.pq_pk), self.pq_pk.hex().encode()))
+            return
+        ch = bytes.fromhex(line.split()[1])
+        tok = make_token(self.key, ch, ns_meas="99" * 32 if self.mode == "pq-tampered" else GOOD_NS)
+        sk = self.pq_other_sk if self.mode == "pq-wrongkey" else self.pq_sk
+        sig = mldsa.sign(sk, b"aegis-endpoint-quote-v1", tok)
+        c.sendall(b"PQTOKEN %d %s %d %s END\r\n" % (len(tok), tok.hex().encode(), len(sig), sig.hex().encode()))
 
 
 class Fleet(unittest.TestCase):
@@ -143,6 +161,30 @@ class Fleet(unittest.TestCase):
         conf = {"name": "none", "host": "127.0.0.1", "port": port, "iak_pub_pem": self.pem, "allowed": self.allowed}
         v = fleet.attest(conf, psa_token.verify_with_cryptography, self.dir, timeout=0.5)
         self.assertFalse(v["admitted"])
+
+    def run_pq(self, mode):
+        ep = FakeEndpoint(self.key, mode)
+        pqf = os.path.join(self.dir, "pq.pub")
+        with open(pqf, "w") as f:
+            f.write(PQ_KEYS[0][0].hex())
+        conf = {"name": mode, "kind": "aegis-pq", "host": "127.0.0.1", "port": ep.port,
+                "pq_pub_file": pqf, "allowed": self.allowed}
+        return ep, fleet.attest(conf, psa_token.verify_with_cryptography, self.dir, timeout=2)
+
+    def test_pq_good_admitted(self):
+        ep, v = self.run_pq("pq-good")
+        self.assertTrue(v["admitted"], v["reasons"])
+        self.assertEqual(fleet.request_pq_key("127.0.0.1", ep.port), PQ_KEYS[0][0])
+
+    def test_pq_wrong_key_quarantined(self):
+        _, v = self.run_pq("pq-wrongkey")
+        self.assertFalse(v["admitted"])
+        self.assertIn("ML-DSA-65 quote signature invalid", v["reasons"])
+
+    def test_pq_tampered_firmware_quarantined(self):
+        _, v = self.run_pq("pq-tampered")
+        self.assertFalse(v["admitted"])
+        self.assertTrue(any("NSPE not allowed" in r for r in v["reasons"]), v["reasons"])
 
     def test_cbor_roundtrip(self):
         x = {1: [b"ab", "cd", -5, 2 ** 40, True, None], -75008: cbor.Tag(18, b"x")}

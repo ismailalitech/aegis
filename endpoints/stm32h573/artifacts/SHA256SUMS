@@ -1,5 +1,10 @@
-8a61dff2ae8866dd4eab99950e478bfe305866770fd44091ca57318aa5061c0c  endpoints/stm32h573/artifacts/prover-ns-0.1.0-good.bin
 f0ea67eb6731ff86c08a93c88961a8ee4f0fa4764e69656802270af1c37f69a2  endpoints/stm32h573/artifacts/prover-ns-0.1.0-good.hex
-503a3bf7d05c7eb3164b27532f1f003ba79ed60e5166ad10c76cb8ad54f765ee  endpoints/stm32h573/artifacts/prover-ns-0.1.0-tampered.bin
 a2089e480205fe4253ac4905d24d0c9df667154f37b4e789b7a8e06a5c3baebd  endpoints/stm32h573/artifacts/prover-ns-0.1.0-tampered.hex
+db33196d4925046fed720a4e59e64ee591861c7622953e109cc58522a9b46dad  endpoints/stm32h573/artifacts/prover-ns-0.2.0-pq-good.hex
+0fb36db175848777a9fdb67461f19f0e2316a168a8df054725be10bb4467091c  endpoints/stm32h573/artifacts/prover-ns-0.2.0-pq-tampered.hex
+411935b403b49b54108e09c4862ed7fbf4cdf7af6c8cba895ac560e5fcd4c819  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq.hex
 3e893e5dee0ad4e8b103165ebda41938f3bdc2ffb1c37706d2baeec6c187dd5e  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-upstream.hex
+8a61dff2ae8866dd4eab99950e478bfe305866770fd44091ca57318aa5061c0c  endpoints/stm32h573/artifacts/prover-ns-0.1.0-good.bin
+503a3bf7d05c7eb3164b27532f1f003ba79ed60e5166ad10c76cb8ad54f765ee  endpoints/stm32h573/artifacts/prover-ns-0.1.0-tampered.bin
+e161fb36ad96ea7b8a76230c194f56339553365235fc5c91c98c576012b1619b  endpoints/stm32h573/artifacts/prover-ns-0.2.0-pq-good.bin
+32494e7c5d021fdca955952884e63271219cc7e354e722ac092091bee3b828aa  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq.bin

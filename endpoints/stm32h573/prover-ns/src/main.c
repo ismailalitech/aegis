@@ -13,6 +13,12 @@
  *   device -> "AEGIS-PROVER <ver> ready"            (console only)
  *   host   -> "CHAL <64 hex digits>"                32-byte challenge
  *   device -> "TOKEN <length> <hex> END"  or  "ERR <reason>"
+ *   host   -> "PQKEY"
+ *   device -> "PQKEY <length> <hex> END"            ML-DSA-65 public key of this chip
+ *   host   -> "PQCHAL <64 hex digits>"
+ *   device -> "PQTOKEN <toklen> <hex> <siglen> <hex> END"
+ *             token from TF-M, signature by the Aegis secure partition (ML-DSA-65 key derived
+ *             from the chip's DHUK) over "aegis-endpoint-quote-v1\0" || token
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -25,7 +31,9 @@
 #include "lwip/tcp.h"
 #include "lwip/timeouts.h"
 #include "psa/crypto.h"
+#include "psa/client.h"
 #include "psa/initial_attestation.h"
+#include "psa_manifest/sid.h"
 #include "stm32h5xx.h"
 #include "tfm_ns_interface.h"
 #include "uart_stdout.h"
@@ -33,7 +41,7 @@
 extern uint32_t tfm_ns_interface_init(void);
 
 #define CHALLENGE_LEN 32u
-#define LINE_MAX      96u
+#define REQ_LINE_MAX      96u
 
 static uint8_t token[PSA_INITIAL_ATTEST_MAX_TOKEN_SIZE];
 
@@ -116,12 +124,72 @@ static int parse_hex(const char *s, uint8_t *out, size_t len)
 }
 
 /* Builds "TOKEN <len> <hex> END\r\n" (or "ERR ...\r\n") for a request line into out. */
+#define PQ_PK_LEN  1952u
+#define PQ_SIG_LEN 3309u
+#define AEGIS_PQ_GET_PUBKEY 1
+#define AEGIS_PQ_QUOTE      2
+
+static uint8_t pq_buf[PQ_PK_LEN > PQ_SIG_LEN ? PQ_PK_LEN : PQ_SIG_LEN];
+
+static size_t put_hex_into(char *out, const uint8_t *p, size_t n)
+{
+	static const char d[] = "0123456789abcdef";
+
+	for (size_t i = 0; i < n; i++) {
+		out[2 * i] = d[p[i] >> 4];
+		out[2 * i + 1] = d[p[i] & 0xF];
+	}
+	return 2 * n;
+}
+
+static size_t handle_pq(const char *line, char *out, size_t max)
+{
+	uint8_t challenge[CHALLENGE_LEN];
+	psa_status_t st;
+	size_t k;
+
+	if (strcmp(line, "PQKEY") == 0) {
+		psa_outvec o[1] = {{pq_buf, PQ_PK_LEN}};
+
+		st = psa_call(AEGIS_PQ_SERVICE_HANDLE, AEGIS_PQ_GET_PUBKEY, NULL, 0, o, 1);
+		if (st != PSA_SUCCESS || o[0].len != PQ_PK_LEN) {
+			return (size_t)snprintf(out, max, "ERR pq %ld\r\n", (long)st);
+		}
+		k = (size_t)snprintf(out, max, "PQKEY %u ", (unsigned int)PQ_PK_LEN);
+		k += put_hex_into(out + k, pq_buf, PQ_PK_LEN);
+		memcpy(out + k, " END\r\n", 6);
+		return k + 6;
+	}
+	if (parse_hex(line + 7, challenge, CHALLENGE_LEN) != 0) {
+		return (size_t)snprintf(out, max, "ERR bad-request\r\n");
+	}
+	{
+		psa_invec i[1] = {{challenge, CHALLENGE_LEN}};
+		psa_outvec o[2] = {{token, sizeof(token)}, {pq_buf, PQ_SIG_LEN}};
+
+		st = psa_call(AEGIS_PQ_SERVICE_HANDLE, AEGIS_PQ_QUOTE, i, 1, o, 2);
+		if (st != PSA_SUCCESS) {
+			return (size_t)snprintf(out, max, "ERR pq %ld\r\n", (long)st);
+		}
+		k = (size_t)snprintf(out, max, "PQTOKEN %u ", (unsigned int)o[0].len);
+		k += put_hex_into(out + k, token, o[0].len);
+		k += (size_t)snprintf(out + k, max - k, " %u ", (unsigned int)o[1].len);
+		k += put_hex_into(out + k, pq_buf, o[1].len);
+		memcpy(out + k, " END\r\n", 6);
+		return k + 6;
+	}
+}
+
 static size_t handle_request(const char *line, char *out, size_t max)
 {
 	static const char d[] = "0123456789abcdef";
 	uint8_t challenge[CHALLENGE_LEN];
 	size_t token_len = 0, k;
 	psa_status_t st;
+
+	if (strcmp(line, "PQKEY") == 0 || strncmp(line, "PQCHAL ", 7) == 0) {
+		return handle_pq(line, out, max);
+	}
 
 	if (strncmp(line, "CHAL ", 5) != 0 || parse_hex(line + 5, challenge, CHALLENGE_LEN) != 0) {
 		return (size_t)snprintf(out, max, "ERR bad-request\r\n");
@@ -142,7 +210,7 @@ static size_t handle_request(const char *line, char *out, size_t max)
 	return k + 6;
 }
 
-static char reply[2 * PSA_INITIAL_ATTEST_MAX_TOKEN_SIZE + 64];
+static char reply[2 * (PSA_INITIAL_ATTEST_MAX_TOKEN_SIZE + PQ_SIG_LEN) + 96];
 
 /* Console output: one blocking UART transmit per 128-byte piece. */
 static void put_n(const char *s, size_t n)
@@ -164,7 +232,7 @@ static void put(const char *s)
 /* ---- TCP server: one request line per connection ---------------------------------------- */
 
 struct conn {
-	char line[LINE_MAX];
+	char line[REQ_LINE_MAX];
 	size_t n;
 	int busy;
 };
@@ -273,7 +341,7 @@ static void mac_default(uint8_t mac[6])
 int main(void)
 {
 	static struct netif netif;
-	char line[LINE_MAX];
+	char line[REQ_LINE_MAX];
 	size_t n = 0;
 	uint8_t mac[6];
 	struct tcp_pcb *srv;

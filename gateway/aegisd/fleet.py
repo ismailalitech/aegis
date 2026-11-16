@@ -32,6 +32,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..", "common")))
 import psa_token  # noqa: E402
 
+PQ_LABEL = b"aegis-endpoint-quote-v1"
+
 
 def request_token(host, port, challenge, timeout):
     with socket.create_connection((host, port), timeout=timeout) as s:
@@ -53,6 +55,45 @@ def request_token(host, port, challenge, timeout):
     return tok
 
 
+def _read_line(s, limit=16384):
+    buf = b""
+    while b"\n" not in buf and len(buf) < limit:
+        chunk = s.recv(8192)
+        if not chunk:
+            break
+        buf += chunk
+    return buf.split(b"\n")[0].strip().decode(errors="replace")
+
+
+def request_pq(host, port, challenge, timeout):
+    """Aegis PQ quote: returns (token, ML-DSA-65 signature)."""
+    with socket.create_connection((host, port), timeout=timeout) as s:
+        s.settimeout(timeout)
+        s.sendall(b"PQCHAL " + challenge.hex().encode() + b"\n")
+        line = _read_line(s)
+    p = line.split()
+    if len(p) != 6 or p[0] != "PQTOKEN" or p[5] != "END":
+        raise ValueError("no PQ quote in reply: %r" % line[:40])
+    tok, sig = bytes.fromhex(p[2]), bytes.fromhex(p[4])
+    if len(tok) != int(p[1]) or len(sig) != int(p[3]):
+        raise ValueError("PQ quote length mismatch")
+    return tok, sig
+
+
+def request_pq_key(host, port, timeout=10):
+    with socket.create_connection((host, port), timeout=timeout) as s:
+        s.settimeout(timeout)
+        s.sendall(b"PQKEY\n")
+        line = _read_line(s)
+    p = line.split()
+    if len(p) != 4 or p[0] != "PQKEY" or p[3] != "END":
+        raise ValueError("no PQ key in reply: %r" % line[:40])
+    pk = bytes.fromhex(p[2])
+    if len(pk) != int(p[1]):
+        raise ValueError("PQ key length mismatch")
+    return pk
+
+
 def check_components(claims, allowed):
     """allowed: list of {type, measurement_value, signer_id}. Returns list of reasons."""
     reasons = []
@@ -72,25 +113,45 @@ def check_components(claims, allowed):
     return reasons
 
 
+def _path(base_dir, p):
+    return p if os.path.isabs(p) else os.path.join(base_dir, p)
+
+
 def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
-    verdict = {"endpoint": ep["name"], "time": int(time.time()), "admitted": False, "reasons": []}
+    """kind "psa": PSA token signed by the endpoint's IAK (ES256).
+    kind "aegis-pq": the same token plus an ML-DSA-65 signature by the endpoint's enrolled
+    post-quantum key; the ML-DSA check is mandatory, the ES256 check runs only if an
+    iak_pub_pem is configured."""
+    kind = ep.get("kind", "psa")
+    verdict = {"endpoint": ep["name"], "kind": kind, "time": int(time.time()), "admitted": False, "reasons": []}
     challenge = secrets.token_bytes(32)
     t0 = time.monotonic()
+    sig = None
     try:
-        tok = request_token(ep["host"], int(ep["port"]), challenge, timeout)
+        if kind == "aegis-pq":
+            tok, sig = request_pq(ep["host"], int(ep["port"]), challenge, timeout)
+        else:
+            tok = request_token(ep["host"], int(ep["port"]), challenge, timeout)
     except (OSError, ValueError) as e:
         verdict["reasons"].append("no attestation: %s" % e)
         verdict["elapsed_s"] = round(time.monotonic() - t0, 3)
         return verdict
     verdict["elapsed_s"] = round(time.monotonic() - t0, 3)
-    pem_path = ep["iak_pub_pem"]
-    if not os.path.isabs(pem_path):
-        pem_path = os.path.join(base_dir, pem_path)
-    with open(pem_path, "rb") as f:
-        pub = f.read()
     try:
-        claims = psa_token.verify(tok, pub, ecdsa_verify)
-    except (psa_token.TokenError, ValueError) as e:
+        if kind == "aegis-pq":
+            import mldsa
+            with open(_path(base_dir, ep["pq_pub_file"])) as f:
+                pk = bytes.fromhex(f.read().strip())
+            if not mldsa.verify(pk, PQ_LABEL, tok, sig):
+                verdict["reasons"].append("ML-DSA-65 quote signature invalid")
+                return verdict
+            verdict["pq_signature"] = "ML-DSA-65 valid"
+        if ep.get("iak_pub_pem"):
+            with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
+                claims = psa_token.verify(tok, f.read(), ecdsa_verify)
+        else:
+            claims = psa_token.parse(tok)[3]
+    except (psa_token.TokenError, ValueError, OSError) as e:
         verdict["reasons"].append(str(e))
         return verdict
     if claims.get("challenge") != challenge:
@@ -123,7 +184,7 @@ def run_once(policy, base_dir, ecdsa_verify):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Aegis fleet verifier")
-    ap.add_argument("cmd", choices=["once", "watch"])
+    ap.add_argument("cmd", choices=["once", "watch", "enroll-pq"])
     ap.add_argument("policy")
     ap.add_argument("--interval", type=float, default=30)
     ap.add_argument("--state", default="/var/lib/aegis/fleet-state.json")
@@ -133,6 +194,17 @@ def main(argv=None):
         policy = json.load(f)
     base = os.path.dirname(os.path.abspath(a.policy))
     ev = psa_token.verify_with_openssl_cli if a.verifier == "openssl" else psa_token.verify_with_cryptography
+    if a.cmd == "enroll-pq":
+        # Trust on first use: fetch each aegis-pq endpoint's ML-DSA-65 key and store it.
+        for ep in policy["endpoints"]:
+            if ep.get("kind") != "aegis-pq":
+                continue
+            pk = request_pq_key(ep["host"], int(ep["port"]))
+            path = _path(base, ep["pq_pub_file"])
+            with open(path, "w") as f:
+                f.write(pk.hex() + "\n")
+            print("enrolled %s: ML-DSA-65 key sha256 %s -> %s" % (ep["name"], __import__("hashlib").sha256(pk).hexdigest(), path))
+        return 0
     if a.cmd == "once":
         print(json.dumps(run_once(policy, base, ev), indent=1))
         return 0

@@ -41,7 +41,7 @@ target_sources(tfm_ns PRIVATE
     ${lwipnetif_SRCS}
     ${CONFIG_SPE_PATH}/interface/src/os_wrapper/tfm_ns_interface_bare_metal.c
 )
-target_include_directories(tfm_ns PRIVATE net ${LWIP_DIR}/src/include ${STM32H5_HAL}/include)
+target_include_directories(tfm_ns PRIVATE net net/hal ${LWIP_DIR}/src/include)
 target_compile_definitions(tfm_ns PRIVATE HAL_ETH_MODULE_ENABLED ETH_RX_DESC_CNT=8U ETH_TX_DESC_CNT=4U)
 target_compile_definitions(tfm_ns PRIVATE AEGIS_PROVER_VERSION="${AEGIS_PROVER_VERSION}")
 target_link_libraries(tfm_ns PRIVATE tfm_api_ns tfm_api_ns_tz)

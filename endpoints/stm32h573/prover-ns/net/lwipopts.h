@@ -19,16 +19,16 @@
 #define LWIP_NETIF_HOSTNAME         1
 
 #define MEM_ALIGNMENT               4
-#define MEM_SIZE                    (16 * 1024)
+#define MEM_SIZE                    (32 * 1024)
 #define MEMP_NUM_PBUF               16
 #define MEMP_NUM_TCP_PCB            4
-#define MEMP_NUM_TCP_SEG            24
+#define MEMP_NUM_TCP_SEG            48
 #define PBUF_POOL_SIZE              16
 #define PBUF_POOL_BUFSIZE           1536
 #define LWIP_SUPPORT_CUSTOM_PBUF    1
 
 #define TCP_MSS                     1460
-#define TCP_SND_BUF                 (4 * TCP_MSS)
+#define TCP_SND_BUF                 (8 * TCP_MSS)
 #define TCP_WND                     (4 * TCP_MSS)
 #define TCP_SND_QUEUELEN            ((4 * TCP_SND_BUF) / TCP_MSS)
 
