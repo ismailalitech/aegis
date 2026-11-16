@@ -39,7 +39,7 @@ jobs:
         run: |
           tools/fetch_acvp.sh
           mkdir -p build/acvp
-          .venv/bin/python tools/acvp_commands.py build/acvp/commands.jsonl
+          .venv/bin/python tools/acvp_commands.py "$PWD/build/acvp/commands.jsonl"
 
       - name: Host regression (unit tests, red team, RTL simulation, ACVP)
         run: tools/regression.sh
