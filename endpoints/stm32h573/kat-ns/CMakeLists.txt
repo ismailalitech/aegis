@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+# TEMPORARY Non-Secure test image for the NIST ACVP vectors (see src/stm32_main.c).
+cmake_minimum_required(VERSION 3.21)
+if(NOT DEFINED CONFIG_SPE_PATH OR NOT EXISTS ${CONFIG_SPE_PATH})
+    message(FATAL_ERROR "Set -DCONFIG_SPE_PATH=<TF-M secure build>/api_ns")
+endif()
+list(APPEND CMAKE_MODULE_PATH ${CONFIG_SPE_PATH}/cmake)
+set(TFM_TOOLCHAIN_FILE ${CONFIG_SPE_PATH}/cmake/toolchain_ns_GNUARM.cmake)
+include(${CONFIG_SPE_PATH}/platform/cpuarch.cmake)
+include(${CONFIG_SPE_PATH}/cmake/spe_config.cmake)
+include(${CONFIG_SPE_PATH}/platform/config.cmake OPTIONAL)
+include(${TFM_TOOLCHAIN_FILE})
+project(tfm_ns LANGUAGES C ASM)
+add_executable(tfm_ns)
+add_subdirectory(${CONFIG_SPE_PATH} ${CMAKE_BINARY_DIR}/spe)
+set(P ${CMAKE_CURRENT_LIST_DIR}/../tfm-aegis-partition)
+target_sources(tfm_ns PRIVATE src/stm32_main.c src/kat_core.c src/units.c src/units_kem.c src/syscalls.c
+    ${CONFIG_SPE_PATH}/interface/src/os_wrapper/tfm_ns_interface_bare_metal.c)
+target_include_directories(tfm_ns PRIVATE src ${P}/mldsa ${P}/mlkem
+    $ENV{HOME}/aegis-tools/mldsa-native/mldsa $ENV{HOME}/aegis-tools/mlkem-native/mlkem)
+target_link_libraries(tfm_ns PRIVATE tfm_api_ns tfm_api_ns_tz)
+set_target_properties(tfm_ns PROPERTIES SUFFIX ".axf" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set_target_properties(platform_ns PROPERTIES INTERFACE_LINK_DEPENDS ${CMAKE_CURRENT_LIST_DIR}/appli_ns_bigstack.ld)
+target_add_scatter_file(tfm_ns)
+target_link_options(tfm_ns PRIVATE -Wl,-Map=${CMAKE_BINARY_DIR}/bin/tfm_ns.map)
+add_convert_to_bin_target(tfm_ns)

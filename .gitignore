@@ -12,3 +12,6 @@ endpoints/stm32h573/prover-ns/build.log
 endpoints/stm32h573/tfm-aegis-partition/build-tfm.log
 build/
 build-stub.out
+endpoints/stm32h573/kat-ns/build/
+endpoints/stm32h573/kat-ns/build.log
+endpoints/stm32h573/tfm-aegis-partition/gateway_pk.h

@@ -116,3 +116,22 @@ confirmation tag refused, credential issued then revoked (34 host tests in total
 Limits: the endpoint does not yet verify the gateway's signature on the credential (only hashes it),
 so authentication is one-way (gateway authenticates endpoint). The session key is not yet used for
 traffic. The NS image is reproducible (same measurement on rebuild); only its ECDSA signature differs.
+
+## NIST ACVP vectors on the STM32 (2026-11-16)
+
+`endpoints/stm32h573/kat-ns`: a TEMPORARY Non-Secure test image running `kat_core.c`, which links
+mldsa-native and mlkem-native with exactly the secure partition's configuration headers
+(ML-DSA-65 reduced RAM, ML-KEM-768), built by the same toolchain for the same Cortex-M33 (64 KB stack
+via a copied linker script). It is the same source and configuration as the secure image, not the
+same binary. `tools/acvp_device.py` reads the ACVP JSON directly (independent of liboqs' driver) and
+builds each FIPS 204 request (internal, external pure, pre-hash with OID, external mu;
+deterministic and hedged).
+
+| Target | Cases | Failed |
+|---|---|---|
+| PC harness (same core) | 265 | 0 |
+| STM32H573 Cortex-M33 over the console (357 s) | 265 | 0 |
+
+ML-KEM-768 keyGen 25, encaps 25, decaps 10; ML-DSA-65 keyGen 25, sigGen 120 (8 groups),
+sigVer 60 (4 groups). Afterwards the prover image was written back; the gateway had quarantined the
+STM32 (credential revoked) while the test image ran, then re-admitted it with a new session.
