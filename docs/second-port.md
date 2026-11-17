@@ -1,5 +1,10 @@
 # A second network port without a managed switch (branch `second-port`, not wired yet)
 
+> **Shelved, 17 November 2026.** There is no W5500 module on the bench, so this was never wired. Everything here was built
+> and tested without it (namespaces, and a dry run on the gateway). Enforcement stays tested in network namespaces only
+> (`tests/host/test_enforcement.sh`); on the bench the gateway decides but does not block. Kept on this branch for whoever
+> has the module.
+
 Enforcement needs the endpoints on their own network segment, with the gateway routing between that segment and the
 rest of the network. The Discovery Kit has one Ethernet port and the bench switch (a D-Link DGS-108) is unmanaged, so it
 cannot make VLANs. This adds a second port: a WIZnet W5500 Ethernet module on the Raspberry Pi header, run by the
