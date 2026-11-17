@@ -39,6 +39,7 @@ gw() { ip netns exec $GW env STATE="$TMP/state" UPLINK=up0 LEASES="$TMP/static-l
 # a fixed address for the endpoint, by MAC, as the STM32 would get
 echo "static_lease $(cat /sys/class/net/e0/address 2>/dev/null || ip -n $EP link show e0 | awk '/ether/{print $2}') 10.77.0.20" > "$TMP/static-leases"
 
+FWD_BEFORE=$(ip netns exec $GW cat /proc/sys/net/ipv4/ip_forward)   # 0 or 1, depending on the host
 echo "-- bring-up on a port with no address"
 gw "$ROOT/gateway/second-port/bringup.sh" --no-hw p1 >/dev/null
 check allow "gateway address on the port" sh -c "ip -n $GW -4 addr show p1 | grep -q '10.77.0.1/24'"
@@ -84,7 +85,7 @@ echo "-- tear-down"
 ip netns exec $GW nft delete table inet aegis 2>/dev/null
 gw "$ROOT/gateway/second-port/teardown.sh" >/dev/null
 check block "masquerade table removed"      sh -c "ip netns exec $GW nft list table ip aegis_nat >/dev/null 2>&1"
-check allow "forwarding back to its old value (0)" sh -c "[ \$(ip netns exec $GW cat /proc/sys/net/ipv4/ip_forward) = 0 ]"
+check allow "forwarding back to its old value ($FWD_BEFORE)" sh -c "[ \$(ip netns exec $GW cat /proc/sys/net/ipv4/ip_forward) = $FWD_BEFORE ]"
 check block "port address removed"          sh -c "ip -n $GW -4 addr show p1 | grep -q 10.77.0.1"
 check block "DHCP server stopped"           pgrep -f "udhcpd $TMP/state/udhcpd.conf"
 
