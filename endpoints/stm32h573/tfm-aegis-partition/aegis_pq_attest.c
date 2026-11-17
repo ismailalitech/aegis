@@ -16,7 +16,9 @@
  *                      out[0] <- PSA initial attestation token for that challenge (from TF-M's
  *                                attestation service: boot measurements of S and NS images)
  *                      out[1] <- ML-DSA-65 signature over "aegis-endpoint-quote-v1\0" || token
- *                                (deterministic ML-DSA, empty context)
+ *                                (hedged ML-DSA: 32 fresh random bytes from TF-M's crypto service in
+ *                                every signature; empty context. AEGIS_DETERMINISTIC_SIGNING=1 builds
+ *                                the deterministic variant, rnd = 0)
  *   type 3 KEM_INIT:   in[0] = 32-byte gateway nonce
  *                      a fresh ML-KEM-768 key pair is derived from prov_root (a second
  *                      DHUK-derived secret), the nonce and a counter;
@@ -46,6 +48,7 @@
 #define MLK_CONFIG_FILE "aegis_mlkem_config.h"
 #include "mlkem_native.h"
 #include "psa/client.h"
+#include "psa/crypto.h"
 #include "psa/service.h"
 #include "psa_manifest/aegis_pq_attest.h"
 #include "psa_manifest/sid.h"
@@ -213,6 +216,19 @@ psa_status_t aegis_pq_init(void)
 	return PSA_SUCCESS;
 }
 
+/* FIPS 204 hedged signing: fresh randomness from TF-M's crypto service (backed by the STM32H5 RNG)
+ * goes into every signature, so two signatures never share their internal randomness even for the
+ * same message. If the service fails, the signature is refused rather than made deterministically. */
+static psa_status_t signing_rnd(uint8_t rnd[32])
+{
+#if defined(AEGIS_DETERMINISTIC_SIGNING) && AEGIS_DETERMINISTIC_SIGNING
+	memset(rnd, 0, 32);
+	return PSA_SUCCESS;
+#else
+	return psa_generate_random(rnd, 32);
+#endif
+}
+
 static psa_status_t do_quote(const psa_msg_t *msg)
 {
 	uint8_t challenge[CHALLENGE_LEN];
@@ -240,10 +256,16 @@ static psa_status_t do_quote(const psa_msg_t *msg)
 	token_len = out[0].len;
 	memcpy(signed_msg, QUOTE_LABEL, sizeof(QUOTE_LABEL)); /* label and its NUL separator */
 	memcpy(signed_msg + sizeof(QUOTE_LABEL), token, token_len);
+	st = signing_rnd(rnd);
+	if (st != PSA_SUCCESS) {
+		return st;
+	}
 	if (aegis_mldsa_signature_internal(sig, signed_msg, sizeof(QUOTE_LABEL) + token_len, pre, sizeof(pre),
 					   rnd, sk, 0) != 0) {
+		wipe(rnd, sizeof(rnd));
 		return PSA_ERROR_GENERIC_ERROR;
 	}
+	wipe(rnd, sizeof(rnd));
 	psa_write(msg->handle, 0, token, token_len);
 	psa_write(msg->handle, 1, sig, sizeof(sig));
 	return PSA_SUCCESS;
@@ -254,6 +276,7 @@ static psa_status_t do_kem_init(const psa_msg_t *msg)
 	static const char lbl[] = "aegis-kem-init-v1";
 	uint8_t coins[64], rnd[32] = {0};
 	const uint8_t pre[2] = {0, 0};
+	psa_status_t st;
 	struct sha3 h;
 	uint8_t c[4];
 
@@ -286,10 +309,16 @@ static psa_status_t do_kem_init(const psa_msg_t *msg)
 		return PSA_ERROR_GENERIC_ERROR;
 	}
 	memcpy(signed_msg + sizeof(lbl) + 32, kem_ek, KEM_EK_LEN);
+	st = signing_rnd(rnd);
+	if (st != PSA_SUCCESS) {
+		return st;
+	}
 	if (aegis_mldsa_signature_internal(sig, signed_msg, sizeof(lbl) + 32 + KEM_EK_LEN, pre, sizeof(pre), rnd, sk,
 					   0) != 0) {
+		wipe(rnd, sizeof(rnd));
 		return PSA_ERROR_GENERIC_ERROR;
 	}
+	wipe(rnd, sizeof(rnd));
 	kem_pending = 1;
 	/* The established session stays valid until a new exchange completes (a stray or hostile
 	 * KEM_INIT must not tear it down; found by review 2026-11-16). */

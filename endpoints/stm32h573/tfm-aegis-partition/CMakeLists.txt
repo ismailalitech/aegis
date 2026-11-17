@@ -35,5 +35,6 @@ target_link_libraries(tfm_psa_rot_partition_aegis_pq PRIVATE
     tfm_config
     tfm_sprt
     tfm_attestation_defs
+    psa_crypto_config
 )
 target_link_libraries(tfm_partitions INTERFACE tfm_psa_rot_partition_aegis_pq)
