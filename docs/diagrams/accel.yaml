@@ -1,0 +1,42 @@
+# Accelerator v2 figures (docs/accelerator-v2.md, site lab 54). wave-sponge-dma.yaml comes from hw/tb/make_wave_dma.sh.
+
+- id: accel-data-path
+  alt: "What crosses the bus. First core (lab 49): for every Keccak permutation the CPU writes the 200-byte state as 50 words over the 32-bit APB bus and reads 50 words back, 16.7 microseconds for 0.48 of computing. Accelerator v2 (lab 54): the state stays in the fabric in one of 8 slots; the CPU writes only the bytes it absorbs and short commands over APB, and full squeezed blocks go out by DMA as 64-bit AXI bursts into a non-cached DDR page that the CPU copies from."
+  width: 900
+  height: 400
+  nodes:
+    cpu1:  {x: 20,  y: 30,  w: 200, h: 70, kind: hart,   title: "U54, liboqs", sub: "every permutation\ngoes to the fabric"}
+    core1: {x: 620, y: 30,  w: 260, h: 70, kind: bad,    title: "aegis_pqc (lab 49)", sub: "state written in and read back\n16.7 us per 0.48 us permutation"}
+    cpu2:  {x: 20,  y: 190, w: 200, h: 84, kind: hart,   title: "U54, liboqs", sub: "SHA-3 provider: one\nslot per hash context"}
+    core2: {x: 620, y: 190, w: 260, h: 84, kind: fabric, title: "aegis_pqc2 (lab 54)", sub: "state stays in the fabric\n8 slots, 24 clocks per permutation\nsqueezes N blocks on one command"}
+    ddr:   {x: 330, y: 312, w: 240, h: 76, kind: mem,    title: "DDR page, non-cached", sub: "FIC0 AXI4 bursts, 21 x 64 bits\ncopied by the CPU, 0.174 us / 8 B"}
+  edges:
+    - {from: cpu1.right, to: core1.left, label: "APB: 50 words in, 50 out"}
+    - {from: cpu2.right, to: core2.left, label: "APB: absorbed bytes, commands"}
+    - {from: core2.bottom, to: ddr.right, label: "DMA"}
+    - {from: ddr.left, to: cpu2.bottom, label: "copy", dashed: true}
+  steps: [cpu1, e0, core1, cpu2, e1, core2, e2, ddr, e3]
+
+- id: libero-aegis2-canvas-annotated
+  type: annotated
+  image: docs/figures/libero-aegis2-canvas-zoom.png
+  alt: "The Libero top-level canvas of fabric design 102, zoomed in. aegis_pqc2_0 has a clock, a reset, an APB target and an AXI4 initiator. Its APB target goes to FIC_3_PERIPHERALS_0, slot 14; its AXI4 initiator goes to the new AEGIS_DMA port of FIC_0_PERIPHERALS_0, a second master port of the FIC0 interconnect, whose slave port reaches the MSS FIC_0_AXI4_TARGET and from there DDR."
+  width: 900
+  height: 470
+  callouts:
+    - {box: [390, 215, 135, 100], title: "aegis_pqc2_0", text: "The new core: APB target in, AXI4 initiator out, on the 50 MHz clock."}
+    - {box: [0, 10, 65, 420], title: "FIC_3_PERIPHERALS_0", text: "APB address decoding: the core is in slot 14 at 0x40000E00, as before."}
+    - {box: [700, 175, 180, 160], title: "FIC_0_PERIPHERALS_0", text: "New ports AEGIS_DMA and AEGIS_DMA_CLK: a second master on the FIC0 interconnect, with clock crossing."}
+    - {box: [1215, 245, 120, 20], title: "FIC_0_AXI4_TARGET", text: "Into the MSS and DDR: where the squeezed blocks land."}
+
+- id: libero-aegis2-hierarchy-annotated
+  type: annotated
+  image: docs/figures/libero-aegis2-hierarchy.png
+  alt: "The Libero design hierarchy of fabric design 102. aegis_pqc2_fic0 is the port wrapper; inside it aegis_pqc2 holds aegis_ntt (unchanged, with the modular multiplier, twiddle ROM and RAM) and aegis_sponge, with the Keccak round function and the RAM that holds the 8 slots."
+  width: 560
+  height: 560
+  callouts:
+    - {box: [60, 113, 285, 20], title: "aegis_pqc2_fic0", text: "Port wrapper: 32-bit addresses and the interconnect's signal widths."}
+    - {box: [80, 132, 265, 20], title: "aegis_pqc2", text: "Registers, PREADY wait, the NTT and the sponge."}
+    - {box: [100, 151, 300, 72], title: "aegis_ntt", text: "Unchanged from lab 49."}
+    - {box: [100, 227, 335, 58], title: "aegis_sponge", text: "State in the fabric, 8 slots in block RAM, the DMA engine."}

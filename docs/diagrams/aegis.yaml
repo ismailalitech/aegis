@@ -10,7 +10,7 @@
     aegisd: {x: 320, y: 30,  w: 250, h: 66, kind: hart,   title: "aegisd", sub: "gateway quote, ML-DSA-65\nTCP 7443"}
     sys:    {x: 640, y: 30,  w: 240, h: 66, kind: mss,    title: "System controller", sub: "device certificate, digests\nnonce, design info"}
     fleet:  {x: 320, y: 170, w: 250, h: 66, kind: hart,   title: "aegis-fleet", sub: "attest, admit, quarantine\nML-KEM credentials"}
-    fab:    {x: 20,  y: 170, w: 230, h: 66, kind: fabric, title: "Fabric accelerator", sub: "Keccak and NTT, APB slot 14\ncorrect, not faster"}
+    fab:    {x: 20,  y: 170, w: 230, h: 66, kind: fabric, title: "Fabric accelerator", sub: "Keccak sponge and NTT, slot 14\nDMA to DDR, 1.2-1.5x faster"}
     stm:    {x: 320, y: 310, w: 250, h: 84, kind: sw,     title: "STM32H573I-DK", sub: "TF-M v2.3.0 + PQ partition\nDHUK-derived ML-DSA-65 key\nTCP 7444 over Ethernet"}
     uno:    {x: 640, y: 310, w: 240, h: 84, kind: bad,    title: "Arduino Uno", sub: "no keys, no measured boot\nreached through a PC relay\nTCP 7445"}
   edges:
