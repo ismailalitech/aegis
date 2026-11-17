@@ -59,12 +59,27 @@ same count as the baseline (logs/m5/m0809/suite-after.txt); two measurement line
 (T6-rt-12500 now passes, T8-linux-uio-fifo-idle now fails). The first attempt was cut by my
 15-minute SSH timeout and left the suite's load generators running; they were stopped by hand.
 
-**Open: Linux user-space latency spikes.** Channel 0 (Linux UIO, 500 us period, 100,000 events):
-on the new kernel 2 of 3 idle runs had overruns and maximum latencies of 4.1-5.1 ms (p99.9 unchanged
-at 123-246 us); earlier baselines had maxima of 0.26-0.66 ms. Not explained by the Aegis services
-(one spike happened with them stopped, one clean run with them running). Whether the kernel change
-causes it needs repeated A/B runs against the old kernel (rollback.sh, then back). The hart-4
-FreeRTOS latency path is not affected (pfdaq_cap -L 0 passes).
+**Linux user-space latency spikes: cause found, mitigation measured (2026-11-17).**
+The 4-5 ms maxima are scheduling delays of a normal-priority process, not slow interrupt delivery.
+The kernel is `PREEMPT_NONE` with `HZ=250` (one tick = 4 ms), all device interrupts (Ethernet, SD
+card, mailbox) land on CPU0, and a `SCHED_OTHER` task waits behind whatever runs there. Moving the
+latency interrupt (IRQ 80, PLIC 119) and the process to another core did not remove the spikes by
+itself; adding `SCHED_FIFO` 80 did. Channel 0, 500 us period, 100,000 events per run, gateway
+services running (`tools/board/latency_ab.sh`, `latency_load.sh`; runtime-only, affinity restored on exit):
+
+| Configuration | Overruns (2 runs) | Mean us | p99.9 <= us | Max us |
+|---|---|---|---|---|
+| default (IRQ and task free) | 24, 37 | 79-81 | 164 | 3595-4945 |
+| IRQ and task pinned to CPU2, normal priority | 64, 152 | 62 | 123 | 4705-5105 |
+| pinned to CPU2, SCHED_FIFO 80 | 0, 0 | 54 | 123 | 413-447 |
+| pinned to CPU1, SCHED_FIFO 80 | 0, 0 | 54 | 82-123 | 359-469 |
+| CPU2, SCHED_FIFO 80, busy loop on every core | 3, 0 | 51 | 123 | 1473, 408 |
+
+Recipe: `echo 4 > /proc/irq/<pfdaq_stream_src>/smp_affinity; taskset -c 2 pfdaq_lat -R 80`.
+Limits: idle-to-loaded CPU only (no heavy network or SD traffic), two runs per row, not hard
+real-time (a 1.47 ms maximum with 3 overruns occurred under load). The earlier note that the
+Aegis kernel change caused the spikes is not supported: the old baseline was simply a quieter
+period. For hard bounds use the hart-4 FreeRTOS path (0.50 us handler, no overruns).
 
 ## Legacy node: Arduino Uno R3 (2026-11-16)
 
