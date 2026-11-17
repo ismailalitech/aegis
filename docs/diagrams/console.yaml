@@ -185,3 +185,41 @@
     - 10
     title: Under load
     text: 'A busy loop on every core: 0 and 3 overruns; one run reached 1.47 ms. Not a hard bound.'
+- id: console-measurements
+  type: terminal
+  title: the two values per image that the policy allows
+  alt: The measurement tool prints, for the secure and the non-secure image running on the STM32, the image hash and the signer id. These are
+    the exact values in the gateway policy; the two images are signed by two different keys.
+  width: 900
+  step: 3.4
+  height: 404
+  lines:
+  - $ tools/image_measurement.py tfm-s-v2.3.0-aegis-pq-hb.bin prover-ns-0.4.0-hb.bin
+  - '{'
+  - ' "tfm-s-v2.3.0-aegis-pq-hb.bin": {'
+  - '  "version": "2.3.0",'
+  - '  "measurement_value": "1793b3fb1ff472188e311aa01aa46de00fc709188583ef6c904be147f9457c98",'
+  - '  "signer_id": "e30466f6b8470c1f29070b17f1e2d3e94d445e3f608087fdc711e4382bb538b6"'
+  - ' },'
+  - ' "prover-ns-0.4.0-hb.bin": {'
+  - '  "version": "0.0.0",'
+  - '  "measurement_value": "ae689ecbd090a33bbeb19aac1ced5a32bb5312867a8c8911755d98a0c01d0e91",'
+  - '  "signer_id": "82a5b443594853d4bf0fdd89a914a5dc16f867548207d7077e74d80c063efda9"'
+  - ' }'
+  - '}'
+  callouts:
+  - lines:
+    - 2
+    - 5
+    title: Secure image
+    text: 'TF-M v2.3.0 with the Aegis partition: its hash, and the id of the key that signed it.'
+  - lines:
+    - 7
+    - 10
+    title: Non-secure image
+    text: 'The prover: a different hash and a different signing key.'
+  - lines:
+    - 4
+    - 4
+    title: Same as the token
+    text: The boot loader records this hash at boot; the gateway compares the two.

@@ -29,7 +29,11 @@ hardware produces**, signed and exchanged with the NIST post-quantum algorithms 
 - **Verifier on a PC** that checks the gateway's own quote, a red-team harness, and a regression
   that exercises all of it on the boards.
 
+![The Aegis system](diagrams/system-overview.svg)
+
 ## 3. Protocol in one page
+
+![One decision cycle](diagrams/decision-cycle.svg)
 
 1. The gateway sends a fresh challenge to the endpoint.
 2. The endpoint returns a TF-M attestation token (image measurements, signer ids, the challenge)
@@ -45,6 +49,8 @@ hardware produces**, signed and exchanged with the NIST post-quantum algorithms 
    full re-attestations; a lost or failed session leads to re-provisioning at the next cycle.
 
 ## 4. Results
+
+![How a validly signed but modified image is caught by its measurement](diagrams/tamper-detection.svg)
 
 | Claim | Evidence |
 |---|---|

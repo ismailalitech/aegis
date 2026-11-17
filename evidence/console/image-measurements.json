@@ -1,0 +1,12 @@
+{
+ "tfm-s-v2.3.0-aegis-pq-hb.bin": {
+  "version": "2.3.0",
+  "measurement_value": "1793b3fb1ff472188e311aa01aa46de00fc709188583ef6c904be147f9457c98",
+  "signer_id": "e30466f6b8470c1f29070b17f1e2d3e94d445e3f608087fdc711e4382bb538b6"
+ },
+ "prover-ns-0.4.0-hb.bin": {
+  "version": "0.0.0",
+  "measurement_value": "ae689ecbd090a33bbeb19aac1ced5a32bb5312867a8c8911755d98a0c01d0e91",
+  "signer_id": "82a5b443594853d4bf0fdd89a914a5dc16f867548207d7077e74d80c063efda9"
+ }
+}

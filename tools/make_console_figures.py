@@ -18,6 +18,7 @@ quote = rec('quote-accepted.json')
 disc = rec('disconnected-journal.txt')
 reg = rec('regression-12of12.txt')
 lat = rec('latency-runs.txt')
+meas = rec('image-measurements.json')
 
 figs = [
  fig('console-demo-journal', 'gateway journal during the demo',
@@ -58,6 +59,13 @@ figs = [
       {'lines': [3, 4], 'title': 'Pinned, normal priority', 'text': 'Moving the interrupt and task to another core does not help.'},
       {'lines': [5, 8], 'title': 'Pinned, SCHED_FIFO 80', 'text': 'No overruns and a maximum under half a millisecond, on CPU2 and on CPU1.'},
       {'lines': [9, 10], 'title': 'Under load', 'text': 'A busy loop on every core: 0 and 3 overruns; one run reached 1.47 ms. Not a hard bound.'}], step=3.6),
+ fig('console-measurements', 'the two values per image that the policy allows',
+     'The measurement tool prints, for the secure and the non-secure image running on the STM32, the image hash and the signer '
+     'id. These are the exact values in the gateway policy; the two images are signed by two different keys.',
+     '$ tools/image_measurement.py tfm-s-v2.3.0-aegis-pq-hb.bin prover-ns-0.4.0-hb.bin', meas,
+     [{'lines': [2, 5], 'title': 'Secure image', 'text': 'TF-M v2.3.0 with the Aegis partition: its hash, and the id of the key that signed it.'},
+      {'lines': [7, 10], 'title': 'Non-secure image', 'text': 'The prover: a different hash and a different signing key.'},
+      {'lines': [4, 4], 'title': 'Same as the token', 'text': 'The boot loader records this hash at boot; the gateway compares the two.'}]),
 ]
 yaml.safe_dump(figs, open(os.path.join(ROOT, 'docs', 'diagrams', 'console.yaml'), 'w'), sort_keys=False, width=140, allow_unicode=True)
 print(len(figs), 'console figures')
