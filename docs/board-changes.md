@@ -12,6 +12,9 @@
 | Fabric now AEGIS dv101 = pfdaq v0.5.1 + aegis_pqc in APB slot 14 (`build/libero/AEGIS_dv101.job`, digest dbd6625d...b229) | program `images/pfdaq-v051/PFDAQ_v0_5_1.job` (pfdaq repo) |
 | Kernel: Aegis build with nf_tables/bridge/VLAN/USB Ethernet (boot partition fitImage; modules in /usr/lib/modules) | `/root/aegis/kernel-netfilter/rollback.sh`, reboot (old kernel kept as fitImage.pre-aegis, proven one as fitImage.good) |
 | `/root/aegis/oqs-fabric/`, `/root/aegis/pqc_selftest`, `/root/aegis/stub_probe` | `rm -rf` them |
+| Journal kept on the SD card (17 November 2026): `aegis-journal-link.service` links `/var/volatile/log/journal` to `/var/lib/journal` before the flush, `/etc/systemd/journald.conf.d/aegis.conf` (persistent, 50 MB). Checked: after a reboot the previous boot's fleet lines are readable. Note: `logger` on this image writes to busybox `syslogd`, not to the journal; use `systemd-cat` | `systemctl disable aegis-journal-link`; remove the unit, the drop-in and `/var/lib/journal`; reboot |
+| Fabric design 102 (accelerator v2), `build/libero/AEGIS_dv102.job`; gateway re-enrolled on the PC (old record kept) | program `AEGIS_dv101.job`; restore the enrolment record |
+| Policy: two STM32 entries (prover 0.5.0, KMAC heartbeats), backups `/root/aegis-backup-fleet-*.json` | copy a backup back to `gateway/policy/fleet.json`; restart `aegis-fleet` |
 
 Nothing written to eNVM, keys, locks or the SD card's boot and payload partitions.
 

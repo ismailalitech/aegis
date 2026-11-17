@@ -1,0 +1,17 @@
+# Keep the systemd journal on the SD card. On this Yocto image /var/log is a link into RAM (/var/volatile/log), so a
+# journal directory there is lost at every reboot (it was, on 17 November 2026, with the record of a deployment).
+# This links /var/volatile/log/journal to /var/lib/journal (ext4 on the SD card) before journald moves its log to
+# persistent storage; journald-aegis.conf turns persistent storage on and caps it at 50 MB.
+[Unit]
+Description=Aegis: journal on the SD card
+DefaultDependencies=no
+After=var-volatile.mount systemd-remount-fs.service
+Before=systemd-journal-flush.service
+RequiresMountsFor=/var/volatile /var/lib
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'mkdir -p /var/lib/journal /var/volatile/log && ln -sfn /var/lib/journal /var/volatile/log/journal'
+
+[Install]
+WantedBy=systemd-journal-flush.service
