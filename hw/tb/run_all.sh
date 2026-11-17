@@ -62,6 +62,7 @@ step "Twiddle ROM is up to date"
 
 step "Generate vectors"
 "$PYTHON" "$TB_DIR/gen_vectors.py"
+"$PYTHON" "$TB_DIR/gen_sponge_vectors.py"
 
 # Run a simulation; it must exit 0 AND print "<name>: PASS".
 simulate() {
@@ -80,5 +81,10 @@ simulate tb_modmul "$BUILD/tb_modmul.vvp"
 step "RTL system test: aegis_pqc over APB"
 compile "$BUILD/tb_aegis_pqc.vvp" -s tb_aegis_pqc "$TB_DIR/tb_aegis_pqc.sv" "${RTL[@]}"
 simulate tb_aegis_pqc "$BUILD/tb_aegis_pqc.vvp"
+
+step "RTL system test: aegis_pqc2 (sponge, slots, DMA squeeze) over APB with an AXI memory model"
+RTL2=("$HW_DIR/rtl/aegis_pqc2.v" "$HW_DIR/rtl/aegis_sponge.v" "${RTL[@]:2}")
+compile "$BUILD/tb_aegis_pqc2.vvp" -s tb_aegis_pqc2 "$TB_DIR/tb_aegis_pqc2.sv" "${RTL2[@]}"
+simulate tb_aegis_pqc2 "$BUILD/tb_aegis_pqc2.vvp"
 
 step "ALL PASS"

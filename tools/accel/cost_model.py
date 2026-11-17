@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Predict ML-KEM-768 / ML-DSA-65 times on the gateway (one U54 core, liboqs 0.16.0) for several ways of attaching a
+Keccak core to the fabric, from measured costs and the permutation profile of tools/accel/profile_keccak.sh.
+
+    tools/accel/cost_model.py [build/accel/keccak-profile.json]
+    tools/accel/cost_model.py --counts build/accel/sponge-counts.json   (bus traffic of the real driver, on the model)
+
+Every constant says where it comes from. MEASURED values are from the board (docs/phase2-notes.md and the pfdaq
+repository); ASSUMED values have not been measured yet and are the first thing to measure on the board.
+The model is checked by predicting the existing core (architecture A), whose times were measured.
+"""
+import json
+import os
+import sys
+
+# MEASURED on the board
+APB_READ_US = 0.222        # one 32-bit read from Linux user space to the core over FIC3 APB (gateway/pqc/mmio_cost.c)
+APB_WRITE_US = 0.141       # one 32-bit write, same path
+A_CALL_US = 16.7           # existing core, one permutation as Linux sees it (50 words in, 50 out, poll)
+SW_PERM_US = 16.7 - (19.0 - 17.3)  # software permutation: liboqs speed_common, one-block SHA3-256 17.3 us software vs
+                                   # 19.0 us with the fabric core -> the core costs 1.7 us more than software per call
+CORE_PERM_US = 24 / 50.0   # 24 rounds at 50 MHz (one round per clock)
+
+# Assumed before the core existed (the first prediction), and measured on the board with design 102
+# (tools/accel/sponge_bench.c, 17 November 2026). --assumed uses the first set.
+ASSUMED = {"DMA_LATENCY_US": 1.0, "DMA_BLOCK_US": 1.2, "SELECT_US": 51 / 50.0, "NC_READ_US_PER_8B": 8 / 70.5}
+MEASURED = {"DMA_LATENCY_US": 2.90 - 1.13,   # first block reported 2.90 us after the command, minus one block time
+            "DMA_BLOCK_US": (28.62 - 2.90) / 23,   # 24 blocks in 28.62 us
+            "SELECT_US": 1.30 - APB_READ_US,       # SELECT + first read 1.30 us
+            "NC_READ_US_PER_8B": 0.174}            # 64-bit loads from the u-dma-buf page the core writes
+POLLS = 2                  # status reads per command
+C = MEASURED if "--assumed" not in sys.argv else ASSUMED
+DMA_LATENCY_US, DMA_BLOCK_US, SELECT_US, NC_READ_US_PER_8B = (C["DMA_LATENCY_US"], C["DMA_BLOCK_US"], C["SELECT_US"],
+                                                               C["NC_READ_US_PER_8B"])
+
+MEASURED_TIMES_MS = {      # docs/phase2-notes.md, liboqs speed_kem / speed_sig, one U54 core: (software, existing core)
+    "ML-KEM-768 keygen": (1.219, 1.315), "ML-KEM-768 encaps": (1.417, 1.508), "ML-KEM-768 decaps": (1.755, 1.870),
+    "ML-DSA-65 keygen": (3.99, 4.48), "ML-DSA-65 sign": (14.3, 15.5), "ML-DSA-65 verify": (4.12, 4.57),
+}
+
+
+def cost_us(arch, phase, rate, x4, perms, calls):
+    """Time spent in Keccak for one profile category under one architecture."""
+    words32 = rate // 4
+    if arch == "software":
+        return perms * SW_PERM_US
+    if arch == "A: per-permutation over APB (built)":
+        return perms * A_CALL_US
+    if arch == "B: state kept in the fabric, APB":
+        # absorb: the block is written; squeeze: the block is read; one command and the polls per block
+        per = (words32 * (APB_WRITE_US if phase == "absorb" else APB_READ_US) + APB_WRITE_US + POLLS * APB_READ_US)
+        return perms * per
+    if arch == "C: state kept in the fabric, squeeze by DMA into DDR":
+        if phase == "absorb":   # absorbing stays on APB writes (posted)
+            return perms * (words32 * APB_WRITE_US + APB_WRITE_US + POLLS * APB_READ_US)
+        # one command per call; the core runs ahead (0.48 us per block); the CPU reads each block from non-cached DDR
+        per_call = 3 * APB_WRITE_US + DMA_LATENCY_US + POLLS * NC_READ_US_PER_8B
+        per_perm = max(rate / 8 * NC_READ_US_PER_8B, CORE_PERM_US)
+        return calls * per_call + perms * per_perm
+    raise ValueError(arch)
+
+
+ARCHS = ["software", "A: per-permutation over APB (built)", "B: state kept in the fabric, APB",
+         "C: state kept in the fabric, squeeze by DMA into DDR"]
+
+
+# MEASURED on the board (2026-11-17): provider on the C model, the model using liboqs' own permutation, minus plain
+# liboqs (speed_kem / speed_sig, two runs, mean), and the model's emulation cost per event in the same build
+# (AEGIS_PQC_MODEL_BENCH). What remains is the driver's own CPU time. Signing varies too much between runs (rejection
+# loop) for a difference to mean anything; its driver time is scaled from verify by bus events.
+MODEL_EXTRA_US = {"ML-KEM-768 keygen": 244.7, "ML-KEM-768 encaps": 245.2, "ML-KEM-768 decaps": 282.2,
+                  "ML-DSA-65 keygen": 835.5, "ML-DSA-65 verify": 731.6}
+EMU_WRITE_US, EMU_READ_US, EMU_BEAT_US, EMU_SELECT_US = 0.143, 0.087, 0.079, 0.2
+
+
+def driver_us(op, c, counts):
+    def emu(c):
+        return (c["writes"] * EMU_WRITE_US + c["reads"] * EMU_READ_US + c["dma_bytes"] / 8 * EMU_BEAT_US +
+                c["selects"] * EMU_SELECT_US)
+
+    def events(c):
+        return c["writes"] + c["reads"] + c["dma_bytes"] / 8
+
+    if op in MODEL_EXTRA_US:
+        return MODEL_EXTRA_US[op] - emu(c), "measured"
+    v = counts["ML-DSA-65 verify"]
+    per = (MODEL_EXTRA_US["ML-DSA-65 verify"] - emu(v)) / events(v)
+    return per * events(c), "scaled"
+
+
+def from_counts(path):
+    """Predict from the provider's counted bus traffic (tools/accel/count_main.c on the model)."""
+    counts = json.load(open(path))
+    print("| Operation | perms | software (measured) | predicted: bus + core | + driver CPU | predicted total |")
+    print("|---|---|---|---|---|---|")
+    for op, c in counts.items():
+        sw_ms = MEASURED_TIMES_MS[op][0]
+        copy = c["dma_bytes"] / 8 * NC_READ_US_PER_8B
+        dma = c["dma_cmds"] * (DMA_LATENCY_US + DMA_BLOCK_US) + copy      # later blocks overlap the copy
+        apb_perms = max(c["perms"] - c["dma_bytes"] / 150.0, 0)           # about 150 bytes per DMA block (168/136 mix)
+        k_us = (c["reads"] * APB_READ_US + c["writes"] * APB_WRITE_US + c["selects"] * SELECT_US +
+                apb_perms * CORE_PERM_US + dma)
+        pred = sw_ms - c["perms"] * SW_PERM_US / 1000 + k_us / 1000
+        d_us, how = driver_us(op, c, counts)
+        total = pred + d_us / 1000
+        print("| %s | %.0f | %.2f ms | %.2f ms | %.2f ms (%s) | **%.2f ms (x%.2f)** |"
+              % (op, c["perms"], sw_ms, pred, d_us / 1000, how, total, sw_ms / total))
+    print()
+    print("x = speed-up against software on the same core. Assumed, to measure first: DMA latency %.1f us per command,"
+          " %.1f us of core time per DMA block." % (DMA_LATENCY_US, DMA_BLOCK_US))
+
+
+def main():
+    args = [a for a in sys.argv[1:] if a != "--assumed"]
+    if len(args) > 1 and args[0] == "--counts":
+        return from_counts(args[1])
+    path = args[0] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "..", "build", "accel",
+                                                               "keccak-profile.json")
+    prof = json.load(open(path))
+    print("Software permutation: %.1f us (derived from speed_common); core compute %.2f us; existing call %.1f us"
+          % (SW_PERM_US, CORE_PERM_US, A_CALL_US))
+    print()
+    head = "| Operation | perms | software (measured) | A predicted / measured | B | C |"
+    print(head)
+    print("|---|---|---|---|---|---|")
+    worst = 0.0
+    for op, cats in prof.items():
+        sw_ms, a_ms = MEASURED_TIMES_MS[op]
+        perms = sum(v[0] for v in cats.values())
+        rest_ms = sw_ms - perms * SW_PERM_US / 1000       # time outside Keccak, unchanged by the accelerator
+        pred = {}
+        for arch in ARCHS[1:]:
+            k = sum(cost_us(arch, *c.split("/")[:1], int(c.split("/")[1]), c.split("/")[2] == "x4", v[0], v[1])
+                    for c, v in cats.items())
+            pred[arch] = rest_ms + k / 1000
+        err = (pred[ARCHS[1]] - a_ms) / a_ms * 100
+        worst = max(worst, abs(err))
+        cells = ["%.2f ms" % sw_ms, "%.2f / %.2f ms (%+.0f %%)" % (pred[ARCHS[1]], a_ms, err)]
+        for arch in ARCHS[2:]:
+            cells.append("%.2f ms (x%.2f)" % (pred[arch], sw_ms / pred[arch]))
+        print("| %s | %.0f | %s |" % (op, perms, " | ".join(cells)))
+    print()
+    print("Model check: the built core (A) is predicted within %.0f %% of its measured times." % worst)
+    print("x = speed-up against software. C assumes DMA latency %.1f us (not yet measured)." % DMA_LATENCY_US)
+
+
+if __name__ == "__main__":
+    main()

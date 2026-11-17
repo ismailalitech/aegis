@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #define AEGIS_PQC_ID 0xAE150001u
+#define AEGIS_PQC_ID_V2 0xAE150002u   /* aegis_pqc2: register map is a superset; KCYC counts permutations */
 
 int aegis_pqc_open(void);
 uint32_t aegis_pqc_id(void);

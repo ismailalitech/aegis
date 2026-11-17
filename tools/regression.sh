@@ -28,6 +28,9 @@ if [ "${1:-}" = --board ]; then
     stage gateway-phase1       env BOARD=$GATEWAY $PY tests/board/phase1_board_checks.py
     stage fabric-selftest      ssh -o BatchMode=yes $B /root/aegis/pqc_selftest 200
     stage fabric-acvp          ssh -o BatchMode=yes $B 'cd /root/aegis/oqs-fabric && LD_LIBRARY_PATH=$PWD AEGIS_PQC_KECCAK=hw python3 run_acvp_commands.py commands.jsonl $PWD'
+    # accelerator v2 (design 102): liboqs with the sponge provider, NIST ACVP cases with the core doing all SHA-3
+    # (installed by tools/accel/board_sponge_test.sh)
+    stage fabric-sponge-acvp   ssh -o BatchMode=yes $B 'cd /root/aegis/oqs-sponge && LD_LIBRARY_PATH=$PWD AEGIS_PQC_SPONGE=hw python3 run_acvp_commands.py commands.jsonl $PWD'
     stage fleet-once           ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 fleet.py once ../policy/fleet.json --no-credentials | grep -q "\"admitted\": true"'
     stage fleet-session        ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 fleet.py session ../policy/fleet.json | grep -q "\"same_session\": true"'
     stage fleet-heartbeat      ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 -c "import sys,json; sys.path.insert(0,\"../../common\"); import fleet; ep=json.load(open(\"../policy/fleet.json\"))[\"endpoints\"][0]; print(fleet.heartbeat(ep, open(\"/var/lib/aegis/credentials/\"+ep[\"name\"]+\".session\",\"rb\").read()))"'

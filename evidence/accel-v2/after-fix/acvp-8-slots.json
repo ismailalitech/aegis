@@ -1,0 +1,13 @@
+{
+ "cases": 265,
+ "failed": 0,
+ "by_test": {
+  "test_acvp_vec_kem_encdec_aft pass": 25,
+  "test_acvp_vec_kem_encdec_val pass": 10,
+  "test_acvp_vec_kem_keygen pass": 25,
+  "test_acvp_vec_ml_dsa_sig_gen pass": 120,
+  "test_acvp_vec_ml_dsa_sig_keygen pass": 25,
+  "test_acvp_vec_ml_dsa_sig_ver pass": 60
+ },
+ "sponge_mode": "hw"
+}

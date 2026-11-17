@@ -1,0 +1,4 @@
+aegis_sponge: core 0xae150002, DMA on
+aegis_sponge: core 0xae150002, DMA on
+aegis_sponge: reads=0 writes=0 polls=0 selects=0 spills=0 refills=0 dma_cmds=0 dma_bytes=0 apb_blocks=0 permutations=1883523 contexts=0
+aegis_sponge: reads=26146 writes=5997 polls=0 selects=341 spills=0 refills=0 dma_cmds=0 dma_bytes=0 apb_blocks=671 permutations=1883523 contexts=159

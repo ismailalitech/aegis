@@ -1,0 +1,10 @@
+core ID 0xae150002, DMA buffer at 0xc9fff000
+STATUS read:                      0.221 us
+state word write:                 0.143 us
+PERMUTE + first read (waits):     0.772 us
+SELECT + first read (waits):      1.280 us
+SQUEEZE_DMA  1 block(s) of 168 B:  4.32 us total, first block reported after 2.91 us
+SQUEEZE_DMA  5 block(s) of 168 B:  7.44 us total, first block reported after 2.92 us
+SQUEEZE_DMA 24 block(s) of 168 B:  28.89 us total, first block reported after 2.90 us
+non-cached copy:                  0.174 us per 8 bytes
+DMA results equal to APB squeezes: yes
