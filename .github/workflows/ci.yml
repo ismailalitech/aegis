@@ -16,7 +16,7 @@ jobs:
       - name: Python environment
         run: |
           python3 -m venv .venv
-          .venv/bin/pip install -q cryptography pytest requests pyyaml pillow
+          .venv/bin/pip install -q cryptography pytest requests pyyaml pillow pycryptodome
 
       - name: Cache liboqs 0.16.0
         id: liboqs

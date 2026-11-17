@@ -1,0 +1,9 @@
+board 1 (networked endpoint), ST-LINK 003D002F4D46501520383832
+  Aegis ML-DSA-65 public key (PQKEY): 1952 bytes, sha256 29b953e6571dbd367bd70c6d3b4ce2206b982bc4b71f29cca01bb54b1f119048
+  PSA token, same challenge 89020f0b5ba621de...: instance ID 01078c18f110f432ff780cd8dae58069a2a0d82277cbc66450c8581dd47d96a22e
+  PSA implementation ID a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf
+board 2 (second chip), ST-LINK 002E00393532511631333430
+  Aegis ML-DSA-65 public key (PQKEY): 1952 bytes, sha256 c9e2aa6e8157ac949dd9af7ad84fcff8ad5b5fc7a96db246d0d1a1538b3ce044
+  PSA token, same challenge 89020f0b5ba621de...: instance ID 01078c18f110f432ff780cd8dae58069a2a0d82277cbc66450c8581dd47d96a22e
+  PSA implementation ID a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf
+ML-DSA keys: different; 1941 of 1952 bytes differ

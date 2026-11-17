@@ -1,0 +1,5 @@
+gateway/aegisd/fleet.py once, run on the PC, board 2 reached through host/serial_bridge.py (no network cable on board 2),
+policy = the live gateway policy's STM32 entry with host 127.0.0.1:17444, credentials off.
+
+policy pins board 1's ML-DSA-65 key (sha256 29b953e6571dbd36...):  admitted False, reasons ['ML-DSA-65 quote signature invalid']
+policy pins board 2's ML-DSA-65 key (sha256 c9e2aa6e8157ac94...):  admitted True,  reasons []

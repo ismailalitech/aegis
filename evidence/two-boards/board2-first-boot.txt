@@ -1,0 +1,20 @@
+[INF] BANK 1 flash write protection group 0x1c: OB 0x0
+[ERR] Unexpected value for write protection : set wrp1
+[INF] Starting bootloader
+[INF] Beginning BL2 provisioning
+[WRN] TFM_DUMMY_PROVISIONING is not suitable for production! This device is NOT SECURE
+[INF] PSA Crypto init done, sig_type: EC-P256
+[INF] Primary image: magic=good, swap_type=0x1, copy_done=0x3, image_ok=0x3
+[INF] Scratch: magic=unset, swap_type=0x1, copy_done=0x3, image_ok=0x3
+[INF] Boot source: primary slot
+[INF] Image index: 1, Swap type: none
+[INF] Primary image: magic=good, swap_type=0x1, copy_done=0x3, image_ok=0x3
+[INF] Scratch: magic=unset, swap_type=0x1, copy_done=0x3, image_ok=0x3
+[INF] Boot source: primary slot
+[INF] Image index: 0, Swap type: none
+[INF] Bootloader chainload address offset: 0x38000
+[INF] Image version: v2.3.0
+[INF] Jumping to the first image slot
+AEGIS-PROVER 0.4.0 ready
+AEGIS-NET mac=02:ae:9e:15:73:01
+AEGIS-NET eth-init-ok
