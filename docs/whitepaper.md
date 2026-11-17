@@ -62,9 +62,10 @@ base for keeping data in the fabric, not a speed-up as built. The core adds abou
 
 ## 5. Honest limits
 
-- **No network enforcement yet.** The gateway decides, but a single-port board cannot sit in the
-  traffic path. Real separation needs a managed 802.1Q switch; the nftables hook and kernel support
-  exist.
+- **No network enforcement on the real gateway.** The gateway decides, but a single-port board cannot
+  sit in the traffic path. Real separation needs a managed 802.1Q switch. The nftables rules and the
+  kernel exist, and the rules are tested in network namespaces (10 of 10 checks; the first run found
+  that quarantine did not cut open connections, now fixed).
 - **The gateway's own key lives in software.** The board's chip is the non-"S" part: it has no
   hardware crypto block and does not hand a PUF-protected key to software. Linux file permissions
   protect it, and enrolment is trust on first use.

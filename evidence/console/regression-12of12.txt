@@ -1,0 +1,13 @@
+PASS host-unit-tests
+PASS host-redteam
+PASS rtl-simulation
+PASS acvp-pc-software
+PASS acvp-vectors-intact
+PASS gateway-phase1
+PASS fabric-selftest
+PASS fabric-acvp
+PASS fleet-once
+PASS fleet-session
+PASS fleet-heartbeat
+PASS device-redteam
+passed 12, failed 0

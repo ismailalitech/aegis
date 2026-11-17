@@ -1,0 +1,6 @@
+06:40:09 stm32h573-dk QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]
+06:40:09 arduino-uno-legacy QUARANTINED no attestation: no token in reply: ''
+06:40:42 stm32h573-dk QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]
+06:40:42 arduino-uno-legacy QUARANTINED no attestation: no token in reply: ''
+06:41:16 stm32h573-dk QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]
+06:41:16 arduino-uno-legacy QUARANTINED no attestation: no token in reply: ''

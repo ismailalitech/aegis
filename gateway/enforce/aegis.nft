@@ -14,9 +14,10 @@ table inet aegis {
     }
     chain forward {
         type filter hook forward priority filter; policy drop;
-        ct state established,related accept
+        # Both directions are accepted only for an admitted endpoint, new or established, so quarantine also cuts
+        # connections that were already open (a blanket "ct state established accept" would let them live on).
         iifname $ENDPOINT_IF ip saddr @admitted accept
-        oifname $ENDPOINT_IF ip daddr @admitted ct state new accept
+        oifname $ENDPOINT_IF ip daddr @admitted accept
         iifname $ENDPOINT_IF counter log prefix "aegis-quarantine " limit rate 5/second drop
     }
     chain input {

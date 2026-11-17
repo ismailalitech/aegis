@@ -1,0 +1,320 @@
+- id: sim-keccak-permutation
+  type: wave
+  width: 900
+  height: 430
+  length: 740
+  step: 3.4
+  alt: Waveform from the RTL simulation of the aegis_pqc block on its APB slot. The CPU writes the last state words, writes
+    1 to the control register, and the busy signal then stays high for 480 nanoseconds, 24 clocks, while the status register
+    is polled. Done goes high as it ends and the result is read back.
+  ticks:
+  - - 0
+    - 0 ns
+  - - 100
+    - 100 ns
+  - - 200
+    - 200 ns
+  - - 300
+    - 300 ns
+  - - 400
+    - 400 ns
+  - - 500
+    - 500 ns
+  - - 600
+    - 600 ns
+  - - 700
+    - 700 ns
+  signals:
+  - name: PCLK
+    kind: plain
+    values:
+    - - 0
+      - 1
+    - - 10
+      - 0
+    - - 20
+      - 1
+    - - 30
+      - 0
+    - - 40
+      - 1
+    - - 50
+      - 0
+    - - 60
+      - 1
+    - - 70
+      - 0
+    - - 80
+      - 1
+    - - 90
+      - 0
+    - - 100
+      - 1
+    - - 110
+      - 0
+    - - 120
+      - 1
+    - - 130
+      - 0
+    - - 140
+      - 1
+    - - 150
+      - 0
+    - - 160
+      - 1
+    - - 170
+      - 0
+    - - 180
+      - 1
+    - - 190
+      - 0
+    - - 200
+      - 1
+    - - 210
+      - 0
+    - - 220
+      - 1
+    - - 230
+      - 0
+    - - 240
+      - 1
+    - - 250
+      - 0
+    - - 260
+      - 1
+    - - 270
+      - 0
+    - - 280
+      - 1
+    - - 290
+      - 0
+    - - 300
+      - 1
+    - - 310
+      - 0
+    - - 320
+      - 1
+    - - 330
+      - 0
+    - - 340
+      - 1
+    - - 350
+      - 0
+    - - 360
+      - 1
+    - - 370
+      - 0
+    - - 380
+      - 1
+    - - 390
+      - 0
+    - - 400
+      - 1
+    - - 410
+      - 0
+    - - 420
+      - 1
+    - - 430
+      - 0
+    - - 440
+      - 1
+    - - 450
+      - 0
+    - - 460
+      - 1
+    - - 470
+      - 0
+    - - 480
+      - 1
+    - - 490
+      - 0
+    - - 500
+      - 1
+    - - 510
+      - 0
+    - - 520
+      - 1
+    - - 530
+      - 0
+    - - 540
+      - 1
+    - - 550
+      - 0
+    - - 560
+      - 1
+    - - 570
+      - 0
+    - - 580
+      - 1
+    - - 590
+      - 0
+    - - 600
+      - 1
+    - - 610
+      - 0
+    - - 620
+      - 1
+    - - 630
+      - 0
+    - - 640
+      - 1
+    - - 650
+      - 0
+    - - 660
+      - 1
+    - - 670
+      - 0
+    - - 680
+      - 1
+    - - 690
+      - 0
+    - - 700
+      - 1
+    - - 710
+      - 0
+    - - 720
+      - 1
+    - - 730
+      - 0
+    - - 740
+      - 1
+  - name: PSEL
+    kind: hart
+    values:
+    - - 0
+      - 1
+  - name: PENABLE
+    kind: hart
+    values:
+    - - 0
+      - 0
+    - - 20
+      - 1
+    - - 40
+      - 0
+    - - 60
+      - 1
+    - - 80
+      - 0
+    - - 100
+      - 1
+    - - 120
+      - 0
+    - - 140
+      - 1
+    - - 160
+      - 0
+    - - 180
+      - 1
+    - - 200
+      - 0
+    - - 220
+      - 1
+    - - 240
+      - 0
+    - - 260
+      - 1
+    - - 280
+      - 0
+    - - 300
+      - 1
+    - - 320
+      - 0
+    - - 340
+      - 1
+    - - 360
+      - 0
+    - - 380
+      - 1
+    - - 400
+      - 0
+    - - 420
+      - 1
+    - - 440
+      - 0
+    - - 460
+      - 1
+    - - 480
+      - 0
+    - - 500
+      - 1
+    - - 520
+      - 0
+    - - 540
+      - 1
+    - - 560
+      - 0
+    - - 580
+      - 1
+    - - 600
+      - 0
+    - - 620
+      - 1
+    - - 640
+      - 0
+    - - 660
+      - 1
+    - - 680
+      - 0
+    - - 700
+      - 1
+    - - 720
+      - 0
+    - - 740
+      - 1
+  - name: PWRITE
+    kind: hart
+    values:
+    - - 0
+      - 1
+    - - 160
+      - 0
+  - name: PADDR
+    bus: true
+    kind: hart
+    values:
+    - - 0
+      - '0xEF4'
+    - - 40
+      - '0xEF8'
+    - - 80
+      - '0xEFC'
+    - - 120
+      - CTRL
+    - - 160
+      - STATUS
+    - - 720
+      - '0xE38'
+  - name: k_busy
+    kind: fabric
+    values:
+    - - 0
+      - 0
+    - - 160
+      - 1
+    - - 640
+      - 0
+  - name: k_done
+    kind: fabric
+    values:
+    - - 0
+      - 0
+    - - 640
+      - 1
+  callouts:
+  - t0: 0
+    t1: 120
+    title: State words in
+    text: The CPU writes the state into the block one 32-bit word per APB transfer.
+  - t0: 120
+    t1: 160
+    title: Start
+    text: A write of 1 to CTRL starts one Keccak-f[1600] permutation.
+  - t0: 160
+    t1: 640
+    title: 24 clocks
+    text: k_busy is high for 480 ns, 24 rounds at one per clock. STATUS is polled meanwhile.
+  - t0: 640
+    t1: 740
+    title: Done
+    text: k_done goes high as the permutation ends; the next transfer reads the result.

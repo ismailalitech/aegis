@@ -58,7 +58,7 @@ debug access to the STM32 (product state is Open), supply-chain attacks on the t
 | T13 | Gateway software or FPGA changed | gateway quote carries code hash, design info and digests | board: PC verifier refused after fabric reprogram and after code update until re-enrolled | tested |
 | T14 | Cloning the endpoint key to another chip | key derived from the per-chip DHUK in SAES | device key not equal to keys from trivial SAES keys; per-chip uniqueness not shown (one chip) | partly shown |
 | T15 | Wrong cryptography | NIST ACVP vectors: PC, PolarFire with fabric Keccak, STM32 code | 265/265 each (phase 2 and 3 notes) | tested |
-| T16 | Unattested node keeps network access | gateway decides but does not yet block traffic | needs the gateway in the traffic path + kernel with netfilter | **gap** |
+| T16 | Unattested node keeps network access | rules tested in network namespaces (10 of 10, including cutting open connections); kernel with netfilter installed on the gateway | the gateway is not in the traffic path: needs a managed 802.1Q switch | **partly closed: rules proven, placement not** |
 
 ## 5. Known limitations (state these with any claim)
 
@@ -74,8 +74,7 @@ debug access to the STM32 (product state is Open), supply-chain attacks on the t
 4. **Isolation level 1** in TF-M: no isolation between secure partitions.
 5. **Deterministic ML-DSA** on the endpoint (no hedged randomness); side-channel resistance of the
    implementations on these cores is not evaluated.
-6. **No network enforcement yet** (T16); the STM32 currently reaches the gateway through a PC
-   serial relay because its Ethernet port has no cable.
+6. **No network enforcement on the real gateway** (T16): the ruleset is tested, but one Ethernet port cannot separate networks.
 7. **Credential expiry** is checked by the gateway only; the endpoint has no trusted time.
 8. **The PolarFire fabric Keccak/NTT accelerator** is correct (ACVP with fabric Keccak) but slower
    than software end to end; it is not a security mechanism.

@@ -36,6 +36,15 @@ points to this kernel. A plain pfdaq kernel build (without -R) restores the pfda
 - fleet.py calls `aegis-enforce.sh <endpoint> admit|quarantine` after every verdict.
 Syntax checked with `nft -c` (nftables 1.0.9, same version as the board) on the PC; nothing applied.
 
+## Enforcement ruleset tested in network namespaces (2026-11-17)
+
+`tests/host/test_enforcement.sh` (root; three namespaces: gateway, endpoint, network; the real `aegis.nft` and
+`aegis-enforce.sh` in the gateway namespace; the board kernel has no namespace or veth support, so it runs on a PC and in
+CI). First run: 9 of 10 passed. **Defect:** the rule `ct state established,related accept` let an open connection live on
+after quarantine (16 bytes delivered more than a second later), so quarantine stopped only new flows. Fixed by accepting
+each direction only for an address in `@admitted` (new and established alike): 10 of 10. This validates the rules, not the
+placement: the gateway is still not in the traffic path (one port, MSS USB not routed; a managed 802.1Q switch is needed).
+
 ## Installed on the gateway (2026-11-16, user at the board)
 
 **Install incident, fixed before reboot.** On this rootfs `/lib` is a symlink to `usr/lib` (merged

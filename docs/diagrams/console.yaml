@@ -1,0 +1,187 @@
+- id: console-demo-journal
+  type: terminal
+  title: gateway journal during the demo
+  alt: 'The gateway journal during the scripted demo: an endpoint that did not answer is quarantined, then admitted with a new session and heartbeats,
+    then quarantined when a modified image runs because its measurement is not allowed, and admitted again with a new session when the good image
+    is back.'
+  width: 900
+  step: 3.4
+  height: 324
+  lines:
+  - '$ ssh <gateway> journalctl -u aegis-fleet -o cat      # recorded during tools/demo.sh'
+  - 'stm32h573-dk QUARANTINED no attestation: no PQ quote in reply: '''' [credential: revoked]'
+  - 'stm32h573-dk ADMITTED  [credential: issued session 8c25e397e036...]'
+  - 'stm32h573-dk ADMITTED  [credential: valid, heartbeat 1 (uptime_s=137;link=1;fw=0.4.0)]'
+  - 'stm32h573-dk ADMITTED  [credential: valid, heartbeat 2 (uptime_s=168;link=1;fw=0.4.0)]'
+  - 'stm32h573-dk ADMITTED  [credential: valid, heartbeat 3 (uptime_s=198;link=1;fw=0.4.0)]'
+  - 'stm32h573-dk QUARANTINED component NSPE not allowed (measurement b89ee37e2add...) [credential: revoked]'
+  - 'stm32h573-dk ADMITTED  [credential: issued session 9bb455c9acad...]'
+  - 'stm32h573-dk ADMITTED  [credential: valid, heartbeat 1 (uptime_s=53;link=1;fw=0.4.0)]'
+  callouts:
+  - lines:
+    - 1
+    - 1
+    title: No quote
+    text: 'No post-quantum quote in the reply: quarantined, credential revoked.'
+  - lines:
+    - 2
+    - 2
+    title: Admitted, with a session
+    text: The checks pass; an ML-KEM credential and a session are issued.
+  - lines:
+    - 3
+    - 5
+    title: Heartbeats
+    text: Each cycle the endpoint proves it still holds the session; the counter rises.
+  - lines:
+    - 6
+    - 6
+    title: Modified firmware
+    text: 'Signed and booting, but its measurement is not in the policy: quarantined, credential revoked.'
+  - lines:
+    - 7
+    - 8
+    title: Good image back
+    text: Admitted again with a different session; the heartbeat counter starts over.
+- id: console-quote
+  type: terminal
+  title: PC verifier checks the gateway quote
+  alt: The PC verifier asks the gateway for a quote and prints that it was accepted, with the 3,309-byte ML-DSA-65 signature that was checked.
+  width: 900
+  step: 3.4
+  height: 284
+  lines:
+  - $ .venv/bin/python host/aegis_verify.py quote <gateway>
+  - '{'
+  - ' "accepted": true,'
+  - ' "reasons": [],'
+  - ' "elapsed_s": 0.039,'
+  - ' "sig_bytes": 3309'
+  - '}'
+  callouts:
+  - lines:
+    - 0
+    - 0
+    title: The check
+    text: A fresh nonce goes to the gateway; it signs it with its ML-DSA-65 identity key.
+  - lines:
+    - 2
+    - 3
+    title: Accepted
+    text: Signature, nonce, identity and every measurement matched the enrolled reference.
+  - lines:
+    - 4
+    - 5
+    title: Time and signature
+    text: 0.039 s in all; 3,309 bytes is the size of an ML-DSA-65 signature.
+- id: console-disconnected
+  type: terminal
+  title: what the gateway does when a device disappears
+  alt: With the bench unplugged, the gateway journal shows the STM32 quarantined because it cannot be reached and its credential revoked, and
+    the Arduino quarantined because it returned no token.
+  width: 900
+  step: 3.4
+  height: 284
+  lines:
+  - $ ssh <gateway> journalctl -u aegis-fleet -o cat -n 6
+  - '06:40:09 stm32h573-dk QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]'
+  - '06:40:09 arduino-uno-legacy QUARANTINED no attestation: no token in reply: '''''
+  - '06:40:42 stm32h573-dk QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]'
+  - '06:40:42 arduino-uno-legacy QUARANTINED no attestation: no token in reply: '''''
+  - '06:41:16 stm32h573-dk QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]'
+  - '06:41:16 arduino-uno-legacy QUARANTINED no attestation: no token in reply: '''''
+  callouts:
+  - lines:
+    - 1
+    - 1
+    title: No route to host
+    text: 'A device that cannot be reached cannot prove anything: quarantined, credential revoked.'
+  - lines:
+    - 2
+    - 2
+    title: Empty reply
+    text: 'The Uno answers with nothing while its relay is off: the same verdict, a different reason.'
+  - lines:
+    - 3
+    - 6
+    title: Every cycle
+    text: The verdict is repeated about every 33 seconds until the device answers again.
+- id: console-regression
+  type: terminal
+  title: the full board regression
+  alt: The regression prints twelve stages, five that need no hardware and seven that use the boards, all passing.
+  width: 900
+  step: 3.4
+  height: 424
+  lines:
+  - $ tools/regression.sh --board
+  - PASS host-unit-tests
+  - PASS host-redteam
+  - PASS rtl-simulation
+  - PASS acvp-pc-software
+  - PASS acvp-vectors-intact
+  - PASS gateway-phase1
+  - PASS fabric-selftest
+  - PASS fabric-acvp
+  - PASS fleet-once
+  - PASS fleet-session
+  - PASS fleet-heartbeat
+  - PASS device-redteam
+  - passed 12, failed 0
+  callouts:
+  - lines:
+    - 1
+    - 5
+    title: Host stages
+    text: Unit tests, red-team parsers, RTL simulation and the NIST vectors. These run in CI on every push.
+  - lines:
+    - 6
+    - 12
+    title: Board stages
+    text: Gateway checks, fabric self-test and ACVP with fabric hashing, admission, session, heartbeat, red team.
+  - lines:
+    - 13
+    - 13
+    title: Result
+    text: Twelve of twelve. The run takes about 90 seconds.
+- id: console-latency
+  type: terminal
+  title: 'Linux interrupt latency: five setups'
+  alt: 'Five setups of the Linux interrupt-latency measurement: the default, a pinned process at normal priority, a pinned real-time process on
+    two cores, and the real-time process under full CPU load. Only the real-time rows have no overruns.'
+  width: 900
+  step: 3.6
+  height: 364
+  lines:
+  - $ tools/board/latency_ab.sh ; tools/board/latency_load.sh
+  - 'A_default_1 {"overrun": 24, "mean": 78.95, "p999": 163.82, "max": 4945.36}'
+  - 'A_default_2 {"overrun": 37, "mean": 81.15, "p999": 163.82, "max": 3594.92}'
+  - 'B_cpu2_pinned_1 {"overrun": 64, "mean": 61.85, "p999": 122.86, "max": 4704.78}'
+  - 'B_cpu2_pinned_2 {"overrun": 152, "mean": 62.14, "p999": 122.86, "max": 5104.74}'
+  - 'C_cpu2_fifo80_1 {"overrun": 0, "mean": 53.82, "p999": 122.86, "max": 446.5}'
+  - 'C_cpu2_fifo80_2 {"overrun": 0, "mean": 53.64, "p999": 122.86, "max": 412.66}'
+  - 'D_cpu1_fifo80_1 {"overrun": 0, "mean": 53.62, "p999": 122.86, "max": 359.32}'
+  - 'D_cpu1_fifo80_2 {"overrun": 0, "mean": 53.59, "p999": 81.9, "max": 469.4}'
+  - 'LOAD_C_cpu2_fifo80_1 {"overrun": 3, "mean": 51.55, "p999": 122.86, "max": 1472.78}'
+  - 'LOAD_C_cpu2_fifo80_2 {"overrun": 0, "mean": 51.24, "p999": 122.86, "max": 407.82}'
+  callouts:
+  - lines:
+    - 1
+    - 2
+    title: Default
+    text: 'Maximum 3.6 to 4.9 ms and dozens of overruns: scheduling, one tick at 250 Hz is 4 ms.'
+  - lines:
+    - 3
+    - 4
+    title: Pinned, normal priority
+    text: Moving the interrupt and task to another core does not help.
+  - lines:
+    - 5
+    - 8
+    title: Pinned, SCHED_FIFO 80
+    text: No overruns and a maximum under half a millisecond, on CPU2 and on CPU1.
+  - lines:
+    - 9
+    - 10
+    title: Under load
+    text: 'A busy loop on every core: 0 and 3 overruns; one run reached 1.47 ms. Not a hard bound.'

@@ -1,0 +1,8 @@
+stm32h573-dk QUARANTINED no attestation: no PQ quote in reply: '' [credential: revoked]
+stm32h573-dk ADMITTED  [credential: issued session 8c25e397e036...]
+stm32h573-dk ADMITTED  [credential: valid, heartbeat 1 (uptime_s=137;link=1;fw=0.4.0)]
+stm32h573-dk ADMITTED  [credential: valid, heartbeat 2 (uptime_s=168;link=1;fw=0.4.0)]
+stm32h573-dk ADMITTED  [credential: valid, heartbeat 3 (uptime_s=198;link=1;fw=0.4.0)]
+stm32h573-dk QUARANTINED component NSPE not allowed (measurement b89ee37e2add...) [credential: revoked]
+stm32h573-dk ADMITTED  [credential: issued session 9bb455c9acad...]
+stm32h573-dk ADMITTED  [credential: valid, heartbeat 1 (uptime_s=53;link=1;fw=0.4.0)]
