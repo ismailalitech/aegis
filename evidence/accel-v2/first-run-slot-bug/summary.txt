@@ -1,0 +1,11 @@
+PASS raw timings; DMA results equal APB squeezes
+PASS test_sha3 on the core, 8 slot(s)
+PASS test_sha3 on the core, 1 slot(s)
+FAIL ML-KEM-768 KAT identical on the core (AEGIS_PQC_SLOTS=8)
+FAIL ML-DSA-65 KAT identical on the core (AEGIS_PQC_SLOTS=8)
+PASS ML-KEM-768 KAT identical on the core (AEGIS_PQC_SLOTS=1)
+PASS ML-DSA-65 KAT identical on the core (AEGIS_PQC_SLOTS=1)
+FAIL ML-KEM-768 KAT identical on the core (AEGIS_PQC_NODMA=1)
+FAIL ML-DSA-65 KAT identical on the core (AEGIS_PQC_NODMA=1)
+FAIL NIST ACVP 265 cases on the core, 8 slot(s)
+PASS NIST ACVP 265 cases on the core, 1 slot(s)

@@ -19,14 +19,19 @@ APB_WRITE_US = 0.141       # one 32-bit write, same path
 A_CALL_US = 16.7           # existing core, one permutation as Linux sees it (50 words in, 50 out, poll)
 SW_PERM_US = 16.7 - (19.0 - 17.3)  # software permutation: liboqs speed_common, one-block SHA3-256 17.3 us software vs
                                    # 19.0 us with the fabric core -> the core costs 1.7 us more than software per call
-NC_READ_US_PER_8B = 8 / 70.5       # non-cached DDR, 64-bit loads: pfdaq_cap copies its non-cached DMA buffer at 70.5 MB/s
 CORE_PERM_US = 24 / 50.0   # 24 rounds at 50 MHz (one round per clock)
 
-# ASSUMED (to measure first)
-DMA_LATENCY_US = 1.0       # from the start command to the first block landing in DDR (FIC0 AXI write, clock crossing)
+# Assumed before the core existed (the first prediction), and measured on the board with design 102
+# (tools/accel/sponge_bench.c, 17 November 2026). --assumed uses the first set.
+ASSUMED = {"DMA_LATENCY_US": 1.0, "DMA_BLOCK_US": 1.2, "SELECT_US": 51 / 50.0, "NC_READ_US_PER_8B": 8 / 70.5}
+MEASURED = {"DMA_LATENCY_US": 2.90 - 1.13,   # first block reported 2.90 us after the command, minus one block time
+            "DMA_BLOCK_US": (28.62 - 2.90) / 23,   # 24 blocks in 28.62 us
+            "SELECT_US": 1.30 - APB_READ_US,       # SELECT + first read 1.30 us
+            "NC_READ_US_PER_8B": 0.174}            # 64-bit loads from the u-dma-buf page the core writes
 POLLS = 2                  # status reads per command
-DMA_BLOCK_US = 1.2         # core time per DMA block: 0.48 us permutation + 21 beats at 50 MHz + write response
-SELECT_US = 51 / 50.0      # slot switch: 51 clocks during which the next state access waits (from the RTL)
+C = MEASURED if "--assumed" not in sys.argv else ASSUMED
+DMA_LATENCY_US, DMA_BLOCK_US, SELECT_US, NC_READ_US_PER_8B = (C["DMA_LATENCY_US"], C["DMA_BLOCK_US"], C["SELECT_US"],
+                                                               C["NC_READ_US_PER_8B"])
 
 MEASURED_TIMES_MS = {      # docs/phase2-notes.md, liboqs speed_kem / speed_sig, one U54 core: (software, existing core)
     "ML-KEM-768 keygen": (1.219, 1.315), "ML-KEM-768 encaps": (1.417, 1.508), "ML-KEM-768 decaps": (1.755, 1.870),
@@ -106,9 +111,10 @@ def from_counts(path):
 
 
 def main():
-    if len(sys.argv) > 2 and sys.argv[1] == "--counts":
-        return from_counts(sys.argv[2])
-    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "..", "build", "accel",
+    args = [a for a in sys.argv[1:] if a != "--assumed"]
+    if len(args) > 1 and args[0] == "--counts":
+        return from_counts(args[1])
+    path = args[0] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "..", "build", "accel",
                                                                "keccak-profile.json")
     prof = json.load(open(path))
     print("Software permutation: %.1f us (derived from speed_common); core compute %.2f us; existing call %.1f us"

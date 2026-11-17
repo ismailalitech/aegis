@@ -95,7 +95,7 @@ int aegis_pqc_open(void)
 		return -1;
 	}
 	regs = (volatile uint32_t *)((volatile uint8_t *)m + PAGE_OFFSET_IN_UIO);
-	if (regs[R_ID] != AEGIS_PQC_ID) {
+	if (regs[R_ID] != AEGIS_PQC_ID && regs[R_ID] != AEGIS_PQC_ID_V2) {
 		fprintf(stderr, "aegis_pqc: unexpected ID 0x%08x\n", (unsigned int)regs[R_ID]);
 		munmap(m, 0x1000);
 		regs = NULL;
@@ -113,6 +113,9 @@ int aegis_pqc_keccak_f1600(uint64_t lanes[25], uint32_t *cycles)
 {
 	if (!regs) {
 		return -1;
+	}
+	if (regs[R_ID] == AEGIS_PQC_ID_V2) {
+		regs[0x20 / 4] = 0;   /* SCFG: plain writes (a sponge-provider process may have left XOR mode on) */
 	}
 	for (int i = 0; i < 25; i++) {
 		regs[R_LANES + 2 * i] = (uint32_t)lanes[i];

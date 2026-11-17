@@ -32,14 +32,19 @@ mkdir -p "$WORK/script_support/additional_configurations/PFDAQ" "$WORK/script_su
 cp "$OV/PFDAQ.tcl" "$WORK/script_support/additional_configurations/PFDAQ/"
 cp "$OV/pfdaq_cdc.sdc" "$WORK/script_support/constraints/"
 cp "$PF"/hw/rtl/*.v "$WORK/script_support/hdl/pfdaq/"
-cp "$ROOT/hw/libero/AEGIS_PQC.tcl" "$WORK/script_support/additional_configurations/AEGIS/"
+OVL=${AEGIS_OVERLAY:-AEGIS_PQC.tcl}            # file name in hw/libero, or an absolute path
+case "$OVL" in /*) ;; *) OVL=$ROOT/hw/libero/$OVL ;; esac
+cp "$OVL" "$WORK/script_support/additional_configurations/AEGIS/AEGIS_PQC.tcl"
 cp "$RTL"/*.v "$WORK/script_support/hdl/aegis/"
 cp "$PF/hw/libero/export_job.tcl" "$PF/hw/libero/sta_without_cdc.tcl" "$WORK/"
 
 LOG=$OUT/build-dv$VER.log
 cd "$WORK"
+# DESIGN_ONLY=1: build the SmartDesign only (no synthesis, layout or timing), to check the wiring quickly
+STEPS=AXI4_STREAM_DEMO+VERIFY_TIMING+DESIGN_VERSION:$VER
+[ "${DESIGN_ONLY:-0}" = 1 ] && STEPS=AXI4_STREAM_DEMO+DESIGN_VERSION:$VER
 "$LIBERO" script:MPFS_DISCOVERY_KIT_REFERENCE_DESIGN.tcl \
-    SCRIPT_ARGS:AXI4_STREAM_DEMO+VERIFY_TIMING+DESIGN_VERSION:$VER logfile:"$OUT/libero-dv$VER.log" > "$LOG" 2>&1 &
+    SCRIPT_ARGS:$STEPS logfile:"$OUT/libero-dv$VER.log" > "$LOG" 2>&1 &
 PID=$!
 while kill -0 $PID 2>/dev/null; do
     if grep -q 'Error: SDC00' "$LOG"; then echo "ABORT: constraint error"; kill $PID || true; exit 1; fi
@@ -48,6 +53,7 @@ while kill -0 $PID 2>/dev/null; do
     sleep 15
 done
 wait $PID || { echo "Libero failed, see $LOG"; exit 1; }
+if [ "${DESIGN_ONLY:-0}" = 1 ]; then grep -a -iE "^Error|error:" "$LOG" | head -20; echo "design only: $WORK"; exit 0; fi
 V="$WORK/PFDAQ/designer/MPFS_DISCOVERY_KIT/MPFS_DISCOVERY_KIT_has_violations"
 grep -a -m1 'I/O Bank and Globals Assigner identified' "$LOG"
 grep multi_corner "$V"

@@ -51,7 +51,9 @@ fi
 
 "$B/kat_kem" ML-KEM-768 > "$W/kem.ref"
 "$B/kat_sig" ML-DSA-65 > "$W/sig.ref"
-for e in "AEGIS_PQC_SLOTS=8" "AEGIS_PQC_SLOTS=1" "AEGIS_PQC_NODMA=1"; do
+# AEGIS_PQC_MODEL_SLOT: the core is left in another slot by a previous process (found on the board: the driver
+# assumed slot 0 at start)
+for e in "AEGIS_PQC_SLOTS=8" "AEGIS_PQC_SLOTS=1" "AEGIS_PQC_NODMA=1" "AEGIS_PQC_MODEL_SLOT=5"; do
 	env $e AEGIS_PQC_SPONGE=model "$B/kat_kem" ML-KEM-768 > "$W/kem" && cmp -s "$W/kem" "$W/kem.ref" && ok "ML-KEM-768 KAT identical ($e)" || no "ML-KEM-768 KAT identical ($e)"
 	env $e AEGIS_PQC_SPONGE=model "$B/kat_sig" ML-DSA-65 > "$W/sig" && cmp -s "$W/sig" "$W/sig.ref" && ok "ML-DSA-65 KAT identical ($e)" || no "ML-DSA-65 KAT identical ($e)"
 done

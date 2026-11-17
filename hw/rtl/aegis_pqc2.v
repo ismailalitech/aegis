@@ -13,7 +13,7 @@
 //   0x1C SCMD     W: bits 2:0 command (1 PERMUTE, 2 CLEAR, 3 SELECT, 4 SQUEEZE_DMA), bits 6:4 slot for SELECT
 //   0x20 SCFG     R/W: bit 0 XOR mode for state writes, bits 12:8 DMA rate in lanes, bits 23:16 DMA block count
 //   0x24 DMA_LO   R/W: DMA destination, physical address bits 31:0 (8-byte aligned)
-//   0x28 DMA_HI   R/W: bits AXI_AW-1:32
+//   0x28 DMA_HI   R/W: bits AXI_AW-1:32 (reads 0 above the address width; with AXI_AW = 32 there are none)
 //   0x38..0xFF    state words (lane i: low half 0x38 + 8i, high half 0x3C + 8i)
 //
 // While the sponge is busy, an access to the state words, SCMD or a CTRL write with bit 0 is held with PREADY low until
@@ -59,6 +59,8 @@ module aegis_pqc2 #(
 );
 
     localparam [31:0] ID_VALUE = 32'hAE150002;
+    localparam [63:0] ADDR_MASK = (AXI_AW >= 64) ? ~64'd0 : ((64'd1 << AXI_AW) - 64'd1);
+    localparam [31:0] HI_MASK   = ADDR_MASK[63:32];   // DMA_HI reads back only the bits that exist
     localparam [5:0]  W_ID = 6'h00, W_CTRL = 6'h01, W_STATUS = 6'h02, W_KCOUNT = 6'h03, W_NCYC = 6'h04,
                       W_NIDX = 6'h05, W_NDATA = 6'h06, W_SCMD = 6'h07, W_SCFG = 6'h08, W_DMALO = 6'h09,
                       W_DMAHI = 6'h0A, W_LANE0 = 6'h0E;
@@ -83,18 +85,18 @@ module aegis_pqc2 #(
     reg              xor_mode;
     reg [4:0]        dma_rate;
     reg [7:0]        dma_nblk;
-    reg [AXI_AW-1:0] dma_addr;
+    reg [63:0]       dma_addr;      // only bits AXI_AW-1:0 reach the engine
     always @(posedge PCLK or negedge PRESETN) begin
         if (!PRESETN) begin
             xor_mode <= 1'b0;
             dma_rate <= 5'd0;
             dma_nblk <= 8'd0;
-            dma_addr <= {AXI_AW{1'b0}};
+            dma_addr <= 64'd0;
         end else if (acc_wr) begin
             case (word)
             W_SCFG:  begin xor_mode <= PWDATA[0]; dma_rate <= PWDATA[12:8]; dma_nblk <= PWDATA[23:16]; end
             W_DMALO: dma_addr[31:0] <= PWDATA;
-            W_DMAHI: dma_addr[AXI_AW-1:32] <= PWDATA[AXI_AW-33:0];
+            W_DMAHI: dma_addr[63:32] <= PWDATA;
             default: ;
             endcase
         end
@@ -118,7 +120,7 @@ module aegis_pqc2 #(
         .wr_en(acc_wr & sel_lane), .wr_word(lane_word), .wr_data(PWDATA), .xor_mode(xor_mode),
         .rd_word(lane_word), .rd_data(s_rdata),
         .cmd_valid(cmd_from_ctrl | cmd_from_scmd), .cmd(s_cmd), .cmd_slot(PWDATA[6:4]),
-        .dma_rate_lanes(dma_rate), .dma_nblk(dma_nblk), .dma_addr(dma_addr),
+        .dma_rate_lanes(dma_rate), .dma_nblk(dma_nblk), .dma_addr(dma_addr[AXI_AW-1:0]),
         .busy(s_busy), .dma_busy(s_dma_busy), .dma_err(s_dma_err), .dma_done_blk(s_done_blk),
         .cur_slot(s_slot), .perm_count(s_count),
         .m_awaddr(m_axi_awaddr), .m_awlen(m_axi_awlen), .m_awsize(m_axi_awsize), .m_awburst(m_axi_awburst),
@@ -164,7 +166,7 @@ module aegis_pqc2 #(
             W_NDATA:  rdata = (n_rvalid & ~n_busy) ? {9'd0, n_rdata} : 32'd0;
             W_SCFG:   rdata = {8'd0, dma_nblk, 3'd0, dma_rate, 7'd0, xor_mode};
             W_DMALO:  rdata = dma_addr[31:0];
-            W_DMAHI:  rdata = {{(64-AXI_AW){1'b0}}, dma_addr[AXI_AW-1:32]};
+            W_DMAHI:  rdata = dma_addr[63:32] & HI_MASK;
             default:  rdata = sel_lane ? s_rdata : 32'd0;
         endcase
     end

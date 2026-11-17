@@ -8,13 +8,16 @@
  *   AEGIS_PQC_SPONGE=hw      the core on the board (pfdaq UIO device; DMA buffer from u-dma-buf, see below)
  *   AEGIS_PQC_SPONGE=model   the C register model (aegis_sponge_model.c), for testing on a PC
  *   (unset)                  liboqs' own SHA-3, nothing installed
- *   AEGIS_PQC_DMABUF=<name>  u-dma-buf device for squeeze by DMA (default udmabuf-aegis); absent = APB only
+ *   AEGIS_PQC_DMABUF=<name>  u-dma-buf device for squeeze by DMA (default udmabuf-ddr-nc0, pfdaq's non-cached buffer);
+ *                            absent = APB only. The core's DMA reaches 32-bit addresses only (FIC0 interconnect).
+ *   AEGIS_PQC_DMABUF_OFF=<n> page offset in that buffer (default: its last 4 KiB page, away from pfdaq's frames)
  *   AEGIS_PQC_NODMA=1        do not use DMA even if a buffer exists
  *   AEGIS_PQC_STATS=1        print bus access counts at exit
  *   AEGIS_PQC_SLOTS=<1..8>   use only that many slots (tests the spill path)
  *   AEGIS_PQC_MODEL_PERM=liboqs  the model permutes with liboqs' own Keccak (so that model minus plain liboqs = the
  *                            driver's own CPU time plus the model's emulation, when timing on the board)
  *   AEGIS_PQC_MODEL_BENCH=1  print the model's emulation cost per register write, read and DMA beat (same build)
+ *   AEGIS_PQC_MODEL_SLOT=<n> the model starts in slot n, as the real core does when a previous process left it there
  *
  * Contexts above 8 are spilled: the least recently used one is read out (50 words) and written back when needed.
  * Single-threaded, like the liboqs programs it serves.
@@ -506,6 +509,8 @@ static int open_model(void)
 	io.dma_va = (volatile uint8_t *)buf;
 	io.dma_pa = 0x1400800000ULL;        /* any address: the model maps it to buf */
 	io.dma_len = sizeof(buf);
+	if (io.priv && getenv("AEGIS_PQC_MODEL_SLOT"))
+		aegis_sponge_model_wr(io.priv, SP_SCMD, SP_CMD_SELECT | ((unsigned)(atoi(getenv("AEGIS_PQC_MODEL_SLOT")) & 7) << 4));
 	if (io.priv && getenv("AEGIS_PQC_MODEL_BENCH")) {
 		struct timespec a, b;
 		const int n = 200000;
@@ -572,25 +577,36 @@ static int open_hw(void)
 		return -2;
 	}
 	/* optional DMA buffer: u-dma-buf, opened with O_SYNC for a non-cached mapping */
-	const char *name = getenv("AEGIS_PQC_DMABUF") ? getenv("AEGIS_PQC_DMABUF") : "udmabuf-aegis";
+	const char *name = getenv("AEGIS_PQC_DMABUF") ? getenv("AEGIS_PQC_DMABUF") : "udmabuf-ddr-nc0";
 	char p[256];
-	unsigned long long pa = 0;
+	unsigned long long pa = 0, size = 0, off;
 	FILE *f;
 	snprintf(p, sizeof(p), "/sys/class/u-dma-buf/%s/phys_addr", name);
 	if ((f = fopen(p, "r")) != NULL) {
 		if (fscanf(f, "%llx", &pa) != 1) pa = 0;
 		fclose(f);
 	}
+	snprintf(p, sizeof(p), "/sys/class/u-dma-buf/%s/size", name);
+	if ((f = fopen(p, "r")) != NULL) {
+		if (fscanf(f, "%llu", &size) != 1) size = 0;
+		fclose(f);
+	}
+	off = getenv("AEGIS_PQC_DMABUF_OFF") ? strtoull(getenv("AEGIS_PQC_DMABUF_OFF"), NULL, 0)
+					     : (size >= 4096 ? size - 4096 : 0);
 	snprintf(p, sizeof(p), "/dev/%s", name);
-	if (pa && (pa & 0xFFF) == 0 && (fd = open(p, O_RDWR | O_SYNC)) >= 0) {
-		m = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	if (pa && size >= off + 4096 && !((pa + off) & 0xFFF) && pa + off + 4096 <= 0x100000000ULL &&
+	    (fd = open(p, O_RDWR | O_SYNC)) >= 0) {
+		m = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)off);
 		close(fd);
 		if (m != MAP_FAILED) {
 			io.dma_va = m;
-			io.dma_pa = pa;
+			io.dma_pa = pa + off;
 			io.dma_len = 4096;
 		}
 	}
+	if (getenv("AEGIS_PQC_STATS"))
+		fprintf(stderr, "aegis_sponge: core 0x%08x, DMA %s\n", io.rd(io.priv, SP_ID),
+			io.dma_len ? "on" : "off (APB only)");
 	return 0;
 }
 
@@ -630,6 +646,8 @@ __attribute__((constructor)) static void aegis_sponge_install(void)
 		fprintf(stderr, "aegis_sponge: AEGIS_PQC_SPONGE=%s but the core is not usable (%d)\n", e, r);
 		exit(3);
 	}
+	/* the core's current slot survives between processes (only a reset sets it to 0): start from what it reports */
+	hw_slot = (io.rd(io.priv, SP_STATUS) >> 18) & 7;
 	use_dma = io.dma_len >= 4096 && !getenv("AEGIS_PQC_NODMA");
 	if (getenv("AEGIS_PQC_SLOTS")) {
 		n_slots = atoi(getenv("AEGIS_PQC_SLOTS"));

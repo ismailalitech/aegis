@@ -1,0 +1,2 @@
+tools/regression.sh --board on fabric design 102 (accelerator v2), 17 November 2026: passed 13, failed 0
+stages: acvp-pc-software acvp-vectors-intact device-redteam fabric-acvp fabric-selftest fabric-sponge-acvp fleet-heartbeat fleet-once fleet-session gateway-phase1 host-redteam host-unit-tests rtl-simulation 
