@@ -25,6 +25,7 @@ with open(cmds) as f:
             fails.append({"case": n, "test": r["test"], "rc": p.returncode, "stderr": p.stderr[-200:].decode(errors="replace")})
 summary = {"cases": sum(res.values()), "failed": sum(v for (t, s), v in res.items() if s == "FAIL"),
            "by_test": {"%s %s" % k: v for k, v in sorted(res.items())}, "first_failures": fails,
-           "elapsed_s": round(time.time() - t0, 1), "keccak_mode": os.environ.get("AEGIS_PQC_KECCAK", "software")}
+           "elapsed_s": round(time.time() - t0, 1), "keccak_mode": os.environ.get("AEGIS_PQC_KECCAK", "software"),
+           "sponge_mode": os.environ.get("AEGIS_PQC_SPONGE", "off")}
 print(json.dumps(summary, indent=1))
 sys.exit(1 if summary["failed"] else 0)

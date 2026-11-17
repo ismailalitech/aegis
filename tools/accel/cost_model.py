@@ -3,6 +3,7 @@
 Keccak core to the fabric, from measured costs and the permutation profile of tools/accel/profile_keccak.sh.
 
     tools/accel/cost_model.py [build/accel/keccak-profile.json]
+    tools/accel/cost_model.py --counts build/accel/sponge-counts.json   (bus traffic of the real driver, on the model)
 
 Every constant says where it comes from. MEASURED values are from the board (docs/phase2-notes.md and the pfdaq
 repository); ASSUMED values have not been measured yet and are the first thing to measure on the board.
@@ -24,6 +25,8 @@ CORE_PERM_US = 24 / 50.0   # 24 rounds at 50 MHz (one round per clock)
 # ASSUMED (to measure first)
 DMA_LATENCY_US = 1.0       # from the start command to the first block landing in DDR (FIC0 AXI write, clock crossing)
 POLLS = 2                  # status reads per command
+DMA_BLOCK_US = 1.2         # core time per DMA block: 0.48 us permutation + 21 beats at 50 MHz + write response
+SELECT_US = 51 / 50.0      # slot switch: 51 clocks during which the next state access waits (from the RTL)
 
 MEASURED_TIMES_MS = {      # docs/phase2-notes.md, liboqs speed_kem / speed_sig, one U54 core: (software, existing core)
     "ML-KEM-768 keygen": (1.219, 1.315), "ML-KEM-768 encaps": (1.417, 1.508), "ML-KEM-768 decaps": (1.755, 1.870),
@@ -56,7 +59,55 @@ ARCHS = ["software", "A: per-permutation over APB (built)", "B: state kept in th
          "C: state kept in the fabric, squeeze by DMA into DDR"]
 
 
+# MEASURED on the board (2026-11-17): provider on the C model, the model using liboqs' own permutation, minus plain
+# liboqs (speed_kem / speed_sig, two runs, mean), and the model's emulation cost per event in the same build
+# (AEGIS_PQC_MODEL_BENCH). What remains is the driver's own CPU time. Signing varies too much between runs (rejection
+# loop) for a difference to mean anything; its driver time is scaled from verify by bus events.
+MODEL_EXTRA_US = {"ML-KEM-768 keygen": 244.7, "ML-KEM-768 encaps": 245.2, "ML-KEM-768 decaps": 282.2,
+                  "ML-DSA-65 keygen": 835.5, "ML-DSA-65 verify": 731.6}
+EMU_WRITE_US, EMU_READ_US, EMU_BEAT_US, EMU_SELECT_US = 0.143, 0.087, 0.079, 0.2
+
+
+def driver_us(op, c, counts):
+    def emu(c):
+        return (c["writes"] * EMU_WRITE_US + c["reads"] * EMU_READ_US + c["dma_bytes"] / 8 * EMU_BEAT_US +
+                c["selects"] * EMU_SELECT_US)
+
+    def events(c):
+        return c["writes"] + c["reads"] + c["dma_bytes"] / 8
+
+    if op in MODEL_EXTRA_US:
+        return MODEL_EXTRA_US[op] - emu(c), "measured"
+    v = counts["ML-DSA-65 verify"]
+    per = (MODEL_EXTRA_US["ML-DSA-65 verify"] - emu(v)) / events(v)
+    return per * events(c), "scaled"
+
+
+def from_counts(path):
+    """Predict from the provider's counted bus traffic (tools/accel/count_main.c on the model)."""
+    counts = json.load(open(path))
+    print("| Operation | perms | software (measured) | predicted: bus + core | + driver CPU | predicted total |")
+    print("|---|---|---|---|---|---|")
+    for op, c in counts.items():
+        sw_ms = MEASURED_TIMES_MS[op][0]
+        copy = c["dma_bytes"] / 8 * NC_READ_US_PER_8B
+        dma = c["dma_cmds"] * (DMA_LATENCY_US + DMA_BLOCK_US) + copy      # later blocks overlap the copy
+        apb_perms = max(c["perms"] - c["dma_bytes"] / 150.0, 0)           # about 150 bytes per DMA block (168/136 mix)
+        k_us = (c["reads"] * APB_READ_US + c["writes"] * APB_WRITE_US + c["selects"] * SELECT_US +
+                apb_perms * CORE_PERM_US + dma)
+        pred = sw_ms - c["perms"] * SW_PERM_US / 1000 + k_us / 1000
+        d_us, how = driver_us(op, c, counts)
+        total = pred + d_us / 1000
+        print("| %s | %.0f | %.2f ms | %.2f ms | %.2f ms (%s) | **%.2f ms (x%.2f)** |"
+              % (op, c["perms"], sw_ms, pred, d_us / 1000, how, total, sw_ms / total))
+    print()
+    print("x = speed-up against software on the same core. Assumed, to measure first: DMA latency %.1f us per command,"
+          " %.1f us of core time per DMA block." % (DMA_LATENCY_US, DMA_BLOCK_US))
+
+
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == "--counts":
+        return from_counts(sys.argv[2])
     path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "..", "build", "accel",
                                                                "keccak-profile.json")
     prof = json.load(open(path))

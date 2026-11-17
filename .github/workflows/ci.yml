@@ -49,5 +49,8 @@ jobs:
       - name: Enforcement ruleset (three network namespaces, real hook and ruleset)
         run: sudo tests/host/test_enforcement.sh
 
+      - name: Accelerator v2 SHA-3 provider on the register model (liboqs tests, KATs, NIST ACVP)
+        run: tests/host/test_sponge_provider.sh
+
       - name: Diagrams are up to date
         run: .venv/bin/python tools/gen_diagrams.py --check
