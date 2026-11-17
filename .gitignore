@@ -19,3 +19,8 @@ endpoints/stm32h573/tfm-aegis-partition/gateway_pk.h
 bench.env
 build-dv101.out
 gateway/policy/fleet.json
+
+# second port: built by tools/build_second_port.sh
+gateway/second-port/modules/
+gateway/second-port/*.dtbo
+gateway/second-port/SHA256SUMS

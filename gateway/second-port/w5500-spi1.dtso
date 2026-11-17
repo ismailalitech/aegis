@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: Apache-2.0
+// A WIZnet W5500 Ethernet module on the Discovery Kit's Raspberry Pi header, as a second network port for the
+// endpoint side of the gateway. No fabric change: MSS SPI1 is wired to the header's MSS pads, and RPi_GPIO25 is
+// MSS GPIO2 line 7, whose interrupt reaches Linux through the GPIO2 shared interrupt (checked on the board).
+// Apply at run time:  mkdir /sys/kernel/config/device-tree/overlays/w5500
+//                     cat w5500-spi1.dtbo > /sys/kernel/config/device-tree/overlays/w5500/dtbo
+/dts-v1/;
+/plugin/;
+
+&spi1 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	ethernet@0 {
+		compatible = "wiznet,w5500";
+		reg = <0>;                          /* SPI_1_SS0 */
+		spi-max-frequency = <20000000>;     /* the W5500 allows 33 MHz in its datasheet; 20 MHz leaves margin on jumper wires */
+		interrupt-parent = <&gpio2>;
+		interrupts = <7 8>;                 /* RPi_GPIO25 = GPIO2 line 7; INTn is active low: IRQ_TYPE_LEVEL_LOW */
+		local-mac-address = [02 ae 91 50 00 01];   /* locally administered; change per board */
+	};
+};

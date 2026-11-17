@@ -49,5 +49,11 @@ jobs:
       - name: Enforcement ruleset (three network namespaces, real hook and ruleset)
         run: sudo tests/host/test_enforcement.sh
 
+      - name: Second network port (bring-up, DHCP, masquerade, enforcement and tear-down in namespaces; overlay compiles)
+        run: |
+          sudo apt-get install -y -q busybox device-tree-compiler >/dev/null
+          sudo tests/host/test_second_port.sh
+          dtc -@ -q -I dts -O dtb -o /tmp/w5500.dtbo gateway/second-port/w5500-spi1.dtso
+
       - name: Diagrams are up to date
         run: .venv/bin/python tools/gen_diagrams.py --check
