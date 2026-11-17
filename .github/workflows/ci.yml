@@ -22,8 +22,10 @@ jobs:
         id: liboqs
         uses: actions/cache@v4
         with:
-          path: ~/aegis-tools/liboqs-src
-          key: liboqs-0.16.0-mlkem-mldsa
+          path: |
+            ~/aegis-tools/liboqs-src
+            ~/aegis-tools/liboqs
+          key: liboqs-0.16.0-mlkem-mldsa-installed
 
       - name: Build liboqs 0.16.0 (ML-KEM and ML-DSA only)
         if: steps.liboqs.outputs.cache-hit != 'true'
