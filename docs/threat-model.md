@@ -56,7 +56,7 @@ debug access to the STM32 (product state is Open), supply-chain attacks on the t
 | T11 | DoS on the gateway quote service by slow/malformed clients | thread per connection, 8 max, 3 s timeout | `fuzz_host`, `fuzz_devices` (half-open client, 240 frames) | tested |
 | T12 | Parser bugs on hostile input | strict COSE field types; bounded line lengths | `fuzz_host`, `fuzz_devices` (76 malformed STM32 commands -> ERR) | tested |
 | T13 | Gateway software or FPGA changed | gateway quote carries code hash, design info and digests | board: PC verifier refused after fabric reprogram and after code update until re-enrolled | tested |
-| T14 | Cloning the endpoint key to another chip | key derived from the per-chip DHUK in SAES | device key not equal to keys from trivial SAES keys; per-chip uniqueness not shown (one chip) | partly shown |
+| T14 | Cloning the endpoint key to another chip | key derived from the per-chip DHUK in SAES | device key not equal to keys from trivial SAES keys; a second chip with identical firmware, option bytes and BL2 has a different key, and its quote under the first chip's name is refused ([second-board.md](second-board.md)); the PSA identity, by contrast, is the same on both (TF-M dummy provisioning) | shown on two chips |
 | T15 | Wrong cryptography | NIST ACVP vectors: PC, PolarFire with fabric Keccak, STM32 code | 265/265 each (phase 2 and 3 notes) | tested |
 | T16 | Unattested node keeps network access | rules tested in network namespaces (10 of 10, including cutting open connections); kernel with netfilter installed on the gateway | the gateway is not in the traffic path: needs a managed 802.1Q switch | **partly closed: rules proven, placement not** |
 
