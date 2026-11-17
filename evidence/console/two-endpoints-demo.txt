@@ -1,0 +1,12 @@
+stm32h573-dk ADMITTED  [credential: valid, heartbeat 8 (uptime_s=283;link=1;fw=0.5.0)]
+stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 7 (uptime_s=254;link=1;fw=0.5.0)]
+arduino-uno-legacy QUARANTINED no attestation: no token in reply: 'LEGACY-SENSOR uno v1 cannot attest; requ'
+stm32h573-dk QUARANTINED component NSPE not allowed (measurement a605d9536321...) [credential: revoked]
+stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 8 (uptime_s=285;link=1;fw=0.5.0)]
+arduino-uno-legacy QUARANTINED no attestation: no token in reply: 'LEGACY-SENSOR uno v1 cannot attest; requ'
+stm32h573-dk ADMITTED  [credential: issued session bb6bd9de871f...]
+stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 9 (uptime_s=317;link=1;fw=0.5.0)]
+arduino-uno-legacy QUARANTINED no attestation: no token in reply: 'LEGACY-SENSOR uno v1 cannot attest; requ'
+stm32h573-dk ADMITTED  [credential: valid, heartbeat 1 (uptime_s=50;link=1;fw=0.5.0)]
+stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 10 (uptime_s=348;link=1;fw=0.5.0)]
+arduino-uno-legacy QUARANTINED no attestation: no token in reply: 'LEGACY-SENSOR uno v1 cannot attest; requ'

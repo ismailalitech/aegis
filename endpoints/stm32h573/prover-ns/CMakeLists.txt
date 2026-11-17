@@ -21,7 +21,7 @@ include(${TFM_TOOLCHAIN_FILE})
 project(tfm_ns LANGUAGES C ASM)
 include(${CONFIG_SPE_PATH}/config/cp_check.cmake OPTIONAL)
 
-set(AEGIS_PROVER_VERSION "0.4.0" CACHE STRING "Version string printed in the banner")
+set(AEGIS_PROVER_VERSION "0.5.0" CACHE STRING "Version string printed in the banner")
 
 add_executable(tfm_ns)
 add_subdirectory(${CONFIG_SPE_PATH} ${CMAKE_BINARY_DIR}/spe)

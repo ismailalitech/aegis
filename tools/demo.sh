@@ -21,8 +21,10 @@ PY=.venv/bin/python
 GW=root@${GATEWAY:?set GATEWAY in bench.env (see bench.env.example)}
 CLI=${CLI:-$HOME/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin/STM32_Programmer_CLI}
 A=endpoints/stm32h573/artifacts
-GOOD=$A/prover-ns-0.4.0-hb.hex
-BAD=${BAD:-$A/prover-ns-0.4.0-hb-tampered.hex}
+GOOD=$A/prover-ns-0.5.0-mac.hex
+BAD=${BAD:-$A/prover-ns-0.5.0-mac-tampered.hex}
+SN=${STM32_SN:?set STM32_SN in bench.env: the ST-LINK serial of the demo board (two may be connected)}
+EP=stm32h573-dk     # the demo board's name in the gateway policy
 LOG=logs/demo/$(date +%Y%m%d-%H%M%S); mkdir -p "$LOG"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
@@ -36,10 +38,10 @@ wait_for() {  # wait_for <since> <regex> <seconds>
     done
     echo "   (no '$2' within $3 s)"; return 1
 }
-flash() { "$CLI" -c port=SWD mode=UR -d "$1" -v 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -q 'verified successfully' \
-          && "$CLI" -c port=SWD mode=HOTPLUG -hardRst > /dev/null 2>&1; }
+flash() { "$CLI" -c port=SWD sn=$SN mode=UR -d "$1" -v 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -q 'verified successfully' \
+          && "$CLI" -c port=SWD sn=$SN mode=HOTPLUG -hardRst > /dev/null 2>&1; }
 
-[ -f "$BAD" ] || { echo "missing $BAD (build: SPE=... prover-ns/build.sh -DAEGIS_PROVER_VERSION=0.4.0-tampered)"; exit 1; }
+[ -f "$BAD" ] || { echo "missing $BAD (build: SPE=... prover-ns/build.sh -DAEGIS_PROVER_VERSION=0.5.0-tampered)"; exit 1; }
 
 say "1. The PC verifies the gateway's own quote (ML-DSA-65, fresh nonce)"
 $PY host/aegis_verify.py quote ${GATEWAY:?set GATEWAY in bench.env (see bench.env.example)} | tee "$LOG/1-gateway-quote.json" | grep -E 'accepted|sig_bytes'
@@ -49,7 +51,7 @@ ssh -o BatchMode=yes $GW 'cd /root/aegis/gateway/aegisd && python3 fleet.py once
     > "$LOG/2-attest.json"
 grep -E '"admitted"|pq_signature' "$LOG/2-attest.json" | sed 's/^/   /'
 T=$(ssh -o BatchMode=yes $GW date +%s)
-wait_for "$T" 'ADMITTED.*credential: (issued|valid)' 75
+wait_for "$T" "^$EP ADMITTED.*credential: (issued|valid)" 75
 
 say "2b. A legacy node that cannot attest (Arduino Uno, via the PC)"
 T0=$(ssh -o BatchMode=yes $GW date +%s)
@@ -58,14 +60,14 @@ wait_for "$(( T0 - 40 ))" 'arduino-uno-legacy QUARANTINED' 45 || true
 say "3. Flash a TAMPERED Non-Secure image (validly signed, boots normally)"
 T=$(ssh -o BatchMode=yes $GW date +%s)
 flash "$BAD" && echo "   tampered image running"
-wait_for "$T" 'QUARANTINED.*credential: revoked' 90
-ssh -o BatchMode=yes $GW 'ls /var/lib/aegis/credentials/ | wc -l' | sed 's/^/   credential files left on the gateway: /'
+wait_for "$T" "^$EP QUARANTINED.*credential: revoked" 90
+ssh -o BatchMode=yes $GW "ls /var/lib/aegis/credentials/ | grep -c '^$EP\\.' || true" | sed "s/^/   credential files left on the gateway for $EP: /"
 
 say "4. Flash the good image back"
 T=$(ssh -o BatchMode=yes $GW date +%s)
 flash "$GOOD" && echo "   good image running"
-wait_for "$T" 'ADMITTED.*credential: issued' 120
-wait_for "$T" 'ADMITTED.*credential: valid, heartbeat' 60
+wait_for "$T" "^$EP ADMITTED.*credential: issued" 120
+wait_for "$T" "^$EP ADMITTED.*credential: valid, heartbeat" 60
 ssh -o BatchMode=yes $GW 'cd /root/aegis/gateway/aegisd && python3 fleet.py session ../policy/fleet.json' \
     | grep -E 'same_' | sed 's/^/   /'
 

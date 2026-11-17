@@ -29,3 +29,28 @@ it? Answered with a second STM32H573I-DK (ST-LINK `002E0039...`) set up exactly 
 
 This closes threat T14 on two chips. It does not show uniqueness over a population, and it relies on ST's statement
 that the DHUK is unique per device.
+
+## Both boards on the network (17 November 2026, evening)
+
+With both boards cabled, both used the same MAC address: prover 0.4.0 had a fixed one, because reading the chip's UID
+from the non-secure side had stopped the image. Two devices with one MAC confuse the switch and the DHCP server.
+
+**Prover 0.5.0** takes the MAC from this chip's ML-DSA-65 public key, which the secure partition derives from the
+hardware-unique key: `02:ae` and the key's first four bytes (the public seed, uniformly random per chip; `02` =
+locally administered, unicast). The DHCP hostname ends with the last two bytes. If the key cannot be read, the old fixed
+address is used and the console says so. One image serves every board.
+
+| | Board 1 | Board 2 |
+|---|---|---|
+| MAC (from the device key) | `02:ae:f7:7a:c3:a0` | `02:ae:64:d4:42:ba` |
+| Address | its own DHCP lease | its own DHCP lease, different from board 1's |
+| Non-secure image | prover 0.5.0, measurement `34637a4e...` | the same |
+
+The gateway policy now has two STM32 entries, each with its own pinned ML-DSA key, both on KMAC heartbeats; the
+non-secure measurement was updated for board 1. Both are admitted with their own sessions every cycle, and the Arduino
+is quarantined (`LEGACY-SENSOR uno v1 cannot attest`).
+
+`tools/regression.sh --board`: 13 of 13. `tools/demo.sh` (now naming its ST-LINK with `STM32_SN` and checking only the
+demo board's journal lines): board 1's tampered 0.5.0 image is quarantined and its credential revoked **while board 2
+stays admitted with its heartbeats rising**; the good image is admitted again with a new session
+(`evidence/console/two-endpoints-demo.txt`).

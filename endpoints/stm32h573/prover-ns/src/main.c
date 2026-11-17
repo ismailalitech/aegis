@@ -451,18 +451,30 @@ static void on_netif_status(struct netif *n)
 	}
 }
 
-/* Fixed locally administered unicast MAC. Reading the device UID (0x08FFF800) from the
- * Non-Secure world stopped the image on this board (2026-11-16), so the UID is not used. */
 static void on_link(struct netif *n)
 {
 	put(netif_is_link_up(n) ? "AEGIS-NET link=up\r\n" : "AEGIS-NET link=down\r\n");
 }
 
-static void mac_default(uint8_t mac[6])
+/* The MAC address must differ between boards that run the same image. Reading the device UID (0x08FFF800) from the
+ * Non-Secure world stopped the image (2026-11-16), so the per-chip value used is this chip's ML-DSA-65 public key,
+ * which the secure partition derives from the hardware-unique key: 02:ae followed by its first four bytes (the public
+ * seed rho, uniformly random per chip). 02 = locally administered, unicast. If the key cannot be read, the former fixed
+ * address is used and the console says so. Returns 1 when the address comes from the key. */
+static int mac_from_device(uint8_t mac[6])
 {
-	static const uint8_t m[6] = {0x02, 0xAE, 0x9E, 0x15, 0x73, 0x01};
+	static const uint8_t fixed[6] = {0x02, 0xAE, 0x9E, 0x15, 0x73, 0x01};
+	psa_outvec o[1] = {{pq_buf, PQ_PK_LEN}};
 
-	memcpy(mac, m, 6);
+	if (psa_call(AEGIS_PQ_SERVICE_HANDLE, AEGIS_PQ_GET_PUBKEY, NULL, 0, o, 1) == PSA_SUCCESS &&
+	    o[0].len == PQ_PK_LEN) {
+		mac[0] = 0x02;
+		mac[1] = 0xAE;
+		memcpy(mac + 2, pq_buf, 4);
+		return 1;
+	}
+	memcpy(mac, fixed, 6);
+	return 0;
 }
 
 int main(void)
@@ -483,14 +495,20 @@ int main(void)
 	put("\r\nAEGIS-PROVER " AEGIS_PROVER_VERSION " ready\r\n");
 
 	lwip_init();
-	mac_default(mac);
-	snprintf(b, sizeof(b), "AEGIS-NET mac=%02x:%02x:%02x:%02x:%02x:%02x\r\n",
-		 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-	put(b);
+	{
+		int from_key = mac_from_device(mac);
+
+		snprintf(b, sizeof(b), "AEGIS-NET mac=%02x:%02x:%02x:%02x:%02x:%02x (%s)\r\n", mac[0], mac[1], mac[2],
+			 mac[3], mac[4], mac[5], from_key ? "from the device key" : "FIXED: device key not readable");
+		put(b);
+	}
 	if (aegis_eth_init(&netif, mac) != 0) {
 		put("AEGIS-NET eth-init-failed\r\n");
 	} else {
-		netif_set_hostname(&netif, "aegis-stm32h573");
+		static char host[32];
+
+		snprintf(host, sizeof(host), "aegis-stm32h573-%02x%02x", mac[4], mac[5]);
+		netif_set_hostname(&netif, host);
 		netif_set_status_callback(&netif, on_netif_status);
 		netif_set_link_callback(&netif, on_link);
 		dhcp_start(&netif);
