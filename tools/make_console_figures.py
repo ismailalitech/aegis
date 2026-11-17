@@ -22,6 +22,7 @@ meas = rec('image-measurements.json')
 hard = rec('hardening-journal.txt')
 qvar = rec('quote-variation.txt')
 two = rec('two-boards.txt')
+duo = rec('two-endpoints-demo.txt')
 
 figs = [
  fig('console-demo-journal', 'gateway journal during the demo',
@@ -94,6 +95,16 @@ figs = [
       {'lines': [5, 8], 'title': 'Board 2', 'text': 'A different ML-DSA key; exactly the same PSA instance and implementation IDs.'},
       {'lines': [9, 9], 'title': 'Keys', 'text': '1,941 of 1,952 bytes differ: the key comes from the chip.'},
       {'lines': [10, 11], 'title': 'Impersonation', 'text': "Under board 1's name board 2 is refused; under its own key it is admitted."}]),
+ fig('console-two-endpoints-demo', 'two STM32 endpoints and the Arduino, during the demo',
+     'The gateway journal during the demo with both STM32 boards on the network: board 1 is quarantined when its tampered '
+     'image runs and admitted again with a new session when the good image is back, while board 2 stays admitted with its '
+     'heartbeat counter rising and the Arduino is quarantined every cycle because it cannot attest.',
+     '$ tools/demo.sh      # gateway journal for the run', duo,
+     [{'lines': [1, 3], 'title': 'Before', 'text': 'Both STM32s admitted with their own sessions; the Arduino says it cannot attest.'},
+      {'lines': [4, 4], 'title': 'Board 1 tampered', 'text': 'Its non-secure image is not in the policy: quarantined, credential revoked.'},
+      {'lines': [5, 5], 'title': 'Board 2 unaffected', 'text': 'Same cycle: still admitted, heartbeat 8. Each device is judged on its own evidence.'},
+      {'lines': [7, 7], 'title': 'Board 1 back', 'text': 'The good image: admitted with a new session.'},
+      {'lines': [10, 12], 'title': 'Steady again', 'text': 'Board 1 heartbeat 1, board 2 heartbeat 10, the Arduino quarantined.'}], width=940),
 ]
 yaml.safe_dump(figs, open(os.path.join(ROOT, 'docs', 'diagrams', 'console.yaml'), 'w'), sort_keys=False, width=140, allow_unicode=True)
 print(len(figs), 'console figures')
