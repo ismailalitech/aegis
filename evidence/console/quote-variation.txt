@@ -1,0 +1,5 @@
+challenge 8d4798850ac6d50b7e23c42e... (the same for both requests)
+quote 1: ML-DSA-65 signature 3309 bytes sha256 675abb721623a04d, verifies with the pinned key: True
+quote 2: ML-DSA-65 signature 3309 bytes sha256 7a921a7c683e4cf2, verifies with the pinned key: True
+PSA token payload (the claims) equal: True; TF-M's ECDSA signature equal: False
+so the signed message differs per request, and different ML-DSA signatures do not by themselves show hedging

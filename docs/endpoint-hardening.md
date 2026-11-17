@@ -61,7 +61,7 @@ Baseline before any change: `tools/regression.sh --board` 12 of 12. Then, in thi
 | Secure image `tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac.hex` written to the secure slot (ST-LINK chosen by serial number: a second board is connected) | download verified; `PQKEY` returns the same 1,952-byte key as before (SHA-256 `29b953e6...`): the key comes from the chip, not from the image |
 | Before the policy change | `QUARANTINED component SPE not allowed (measurement a5997cc3...) [credential: revoked]`: an image the policy does not know is refused, as it must be |
 | Policy: SPE measurement `a5997cc3...`, `"heartbeat_mac": "kmac256"`; service restarted | `ADMITTED [credential: issued session cd1126...]`, then `valid, heartbeat 1`, `2`, ... with KMAC256 |
-| Two quotes for one challenge | different signatures (hedged); before, they were identical |
+| Hedged signing | the image running is the hedged build (its measurement is in the policy); the partition's code signs one message twice with two different signatures, both valid with liboqs, on the PC (`tests/host/test_hedged_signing.py`, 3 of 3). **It cannot be seen from outside the board:** two quotes for one challenge always differ, because the PSA token inside each carries TF-M's randomized ECDSA signature, so the message ML-DSA signs changes too (`tools/board/hedged_quotes.py`, `evidence/console/quote-variation.txt`). An earlier version of this table said the quotes "were identical before"; that was never measured, and it is not true. |
 | `tools/regression.sh --board` | 12 of 12 |
 
 ## To deploy both, with someone at the board
@@ -73,7 +73,7 @@ Baseline before any change: `tools/regression.sh --board` 12 of 12. Then, in thi
    STM32CubeProgrammer. Keep the non-secure prover 0.4.0.
 4. In the gateway policy, set the STM32's SPE measurement to `a5997cc3...` (above) and add `"heartbeat_mac": "kmac256"`
    to its entry; then `systemctl restart aegis-fleet`.
-5. Check: `PQKEY` returns the same key as before; two quotes for one challenge have different signatures; the journal
+5. Check: `PQKEY` returns the same key as before; the secure image's measurement is the hedged build's; the journal
    shows `ADMITTED [credential: issued ...]` then `valid, heartbeat 1, 2 ...`; `tools/regression.sh --board` 12 of 12.
 6. If anything fails: write `tfm-s-v2.3.0-aegis-pq-hb.hex` back, restore the policy entry (measurement `1793b3fb...`,
    no `heartbeat_mac`) and the old `fleet.py`, and restart the service.
