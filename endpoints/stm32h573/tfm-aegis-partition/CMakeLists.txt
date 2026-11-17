@@ -11,6 +11,7 @@ add_dependencies(tfm_psa_rot_partition_aegis_pq manifest_tool)
 
 target_sources(tfm_psa_rot_partition_aegis_pq PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/aegis_pq_attest.c
+    ${CMAKE_CURRENT_LIST_DIR}/aegis_kmac.c
     ${MLDSA_NATIVE_DIR}/mldsa_native.c
     ${CMAKE_CURRENT_LIST_DIR}/mlkem_unit.c
     ${CMAKE_SOURCE_DIR}/platform/ext/target/stm/common/stm32h5xx/hal/Src/stm32h5xx_hal_cryp.c

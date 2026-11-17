@@ -36,7 +36,10 @@
  *   type 5 SESSION:    out[0] <- SHA3-256("aegis-session-id-v1" || session) || SHA3-256(credential)
  *   type 6 HEARTBEAT:  in[0] = 32-byte gateway nonce, in[1] = up to 128 bytes of NS status data
  *                      out[0] <- counter (8 bytes LE, increases every call)
- *                                || SHA3-256("aegis-hb-v1" || session || nonce || counter || data)
+ *                                || KMAC256(K = session, X = nonce || counter || data, L = 256,
+ *                                           S = "aegis-hb-v2")   (NIST SP 800-185, aegis_kmac.c)
+ *                      AEGIS_HB_KMAC=0 builds the first version instead:
+ *                                SHA3-256("aegis-hb-v1" || session || nonce || counter || data)
  *                      A light, symmetric proof of the session between full attestations.
  * The Non-Secure world can ask for quotes and run provisioning but never sees the seed, the
  * secret keys, K or the session key.
@@ -55,6 +58,11 @@
 #include "stm32h5xx_hal.h"
 #include "tfm_attest_defs.h"
 #include "gateway_pk.h"
+#include "aegis_kmac.h"
+
+#if !defined(AEGIS_HB_KMAC)
+#define AEGIS_HB_KMAC 1
+#endif
 
 #define AEGIS_PQ_GET_PUBKEY 1
 #define AEGIS_PQ_QUOTE      2
@@ -416,10 +424,15 @@ static uint64_t hb_counter;
 
 static psa_status_t do_heartbeat(const psa_msg_t *msg)
 {
+#if AEGIS_HB_KMAC
+	static const char lbl[] = "aegis-hb-v2"; /* the KMAC customization string */
+	struct aegis_kmac k;
+#else
 	static const char lbl[] = "aegis-hb-v1";
+	struct sha3 h;
+#endif
 	uint8_t nonce[32], data[128], out[40], ctr[8];
 	size_t dlen = msg->in_size[1];
-	struct sha3 h;
 
 	if (!session_ready) {
 		return PSA_ERROR_BAD_STATE;
@@ -432,14 +445,22 @@ static psa_status_t do_heartbeat(const psa_msg_t *msg)
 	}
 	hb_counter++;
 	for (int i = 0; i < 8; i++) ctr[i] = (uint8_t)(hb_counter >> (8 * i));
+	memcpy(out, ctr, 8);
+#if AEGIS_HB_KMAC
+	aegis_kmac256_init(&k, session_key, 32, (const uint8_t *)lbl, sizeof(lbl) - 1);
+	aegis_kmac256_update(&k, nonce, 32);
+	aegis_kmac256_update(&k, ctr, 8);
+	aegis_kmac256_update(&k, data, dlen);
+	aegis_kmac256_final(&k, out + 8, 32); /* also wipes the KMAC state */
+#else
 	sha3_init(&h);
 	sha3_update(&h, (const uint8_t *)lbl, sizeof(lbl) - 1);
 	sha3_update(&h, session_key, 32);
 	sha3_update(&h, nonce, 32);
 	sha3_update(&h, ctr, 8);
 	sha3_update(&h, data, dlen);
-	memcpy(out, ctr, 8);
 	sha3_final(&h, out + 8);
+#endif
 	psa_write(msg->handle, 0, out, sizeof(out));
 	return PSA_SUCCESS;
 }

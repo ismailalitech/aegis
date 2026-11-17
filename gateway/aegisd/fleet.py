@@ -31,6 +31,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..", "common")))
 import psa_token  # noqa: E402
+import kmac  # noqa: E402
 
 PQ_LABEL = b"aegis-endpoint-quote-v1"
 KEM_INIT_LABEL = b"aegis-kem-init-v1"
@@ -156,16 +157,29 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
             "credential_sha3_256": _sha3(cred).hex()}
 
 
+def heartbeat_tag(mode, session_key, nonce, ctr, status):
+    """The heartbeat MAC. Policy key "heartbeat_mac" per endpoint:
+    "kmac256":            KMAC256(K=session, X=nonce || counter || status, L=256, S="aegis-hb-v2")  (SP 800-185)
+    "sha3-256" (default): SHA3-256("aegis-hb-v1" || session || nonce || counter || status)        (the first version)
+    Both sides must use the same one; switch an endpoint's policy entry when its secure image changes."""
+    if mode == "kmac256":
+        return kmac.kmac256(session_key, nonce + ctr + status, 32, b"aegis-hb-v2")
+    if mode in (None, "sha3-256"):
+        return _sha3(b"aegis-hb-v1", session_key, nonce, ctr, status)
+    raise ValueError("unknown heartbeat_mac %r" % mode)
+
+
 def heartbeat(ep, session_key, timeout=10.0):
     """Fresh nonce -> (status bytes, counter); raises ValueError unless the endpoint's tag equals
-    SHA3-256("aegis-hb-v1" || session || nonce || counter || status)."""
+    heartbeat_tag(ep["heartbeat_mac"], ...)."""
     import hmac
     nonce = secrets.token_bytes(32)
     p = _exchange(ep["host"], int(ep["port"]), "PQHB " + nonce.hex(), timeout).split()
     if len(p) != 5 or p[0] != "PQHB" or p[4] != "END":
         raise ValueError("no heartbeat: %r" % " ".join(p)[:40])
     status, ctr, tag = bytes.fromhex(p[1]), bytes.fromhex(p[2]), bytes.fromhex(p[3])
-    if len(ctr) != 8 or not hmac.compare_digest(tag, _sha3(b"aegis-hb-v1", session_key, nonce, ctr, status)):
+    expect = heartbeat_tag(ep.get("heartbeat_mac"), session_key, nonce, ctr, status)
+    if len(ctr) != 8 or not hmac.compare_digest(tag, expect):
         raise ValueError("heartbeat tag invalid")
     return status, int.from_bytes(ctr, "little")
 
