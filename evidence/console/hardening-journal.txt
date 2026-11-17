@@ -1,0 +1,6 @@
+17:13:05 stm32h573-dk ADMITTED  [credential: valid, heartbeat 2 (uptime_s=60;link=1;fw=0.4.0)]
+17:13:35 stm32h573-dk ADMITTED  [credential: valid, heartbeat 3 (uptime_s=91;link=1;fw=0.4.0)]
+17:14:25 stm32h573-dk QUARANTINED component SPE not allowed (measurement a5997cc3c61a...) [credential: revoked]
+17:14:30 stm32h573-dk ADMITTED  [credential: issued session cd1126078134...]
+17:15:01 stm32h573-dk ADMITTED  [credential: valid, heartbeat 1 (uptime_s=53;link=1;fw=0.4.0)]
+17:15:31 stm32h573-dk ADMITTED  [credential: valid, heartbeat 2 (uptime_s=83;link=1;fw=0.4.0)]

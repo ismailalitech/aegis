@@ -1,0 +1,41 @@
+# Endpoint hardening and the two-chip check (docs/endpoint-hardening.md, docs/second-board.md; site labs 55 and 56).
+
+- id: hardening-rollout
+  alt: "Changing a running endpoint one step at a time, each step checked before the next. A baseline regression and a backup of the STM32 come first. Then the gateway gets the new code with the policy unchanged, and the old image must stay admitted. Then the new secure image is flashed, and the gateway must quarantine it because its measurement is not in the policy. Then the policy names the new measurement and the KMAC heartbeat, and the endpoint must be admitted with a new session. A final regression closes it. If any check fails, the old image, policy and gateway code go back."
+  width: 900
+  height: 380
+  nodes:
+    s0: {x: 20,  y: 30,  w: 190, h: 76, kind: plain, title: "0 Baseline", sub: "regression 12 of 12\nbackup of both slots"}
+    s1: {x: 250, y: 30,  w: 190, h: 76, kind: hart,  title: "1 Gateway code", sub: "policy unchanged:\nold image still ADMITTED"}
+    s2: {x: 480, y: 30,  w: 190, h: 76, kind: sw,    title: "2 Flash the image", sub: "same key; new measurement\nmust be QUARANTINED"}
+    s3: {x: 710, y: 30,  w: 170, h: 76, kind: hart,  title: "3 Policy", sub: "new measurement\nKMAC heartbeat"}
+    s4: {x: 710, y: 190, w: 170, h: 76, kind: good,  title: "4 Admitted", sub: "new session\nKMAC heartbeats verify"}
+    s5: {x: 480, y: 190, w: 190, h: 76, kind: good,  title: "5 Regression", sub: "12 of 12 again"}
+    rb: {x: 20,  y: 270, w: 430, h: 76, kind: bad,   title: "Rollback, if any check fails", sub: "old secure image from the backup, old policy entry,\nold gateway code; restart the fleet service"}
+  edges:
+    - {from: s0.right, to: s1.left}
+    - {from: s1.right, to: s2.left}
+    - {from: s2.right, to: s3.left}
+    - {from: s3.bottom, to: s4.top}
+    - {from: s4.left, to: s5.right}
+    - {from: s1.bottom, to: rb.top, label: "any check fails", dashed: true}
+  steps: [s0, e0, s1, e1, s2, e2, s3, e3, s4, e4, s5, e5, rb]
+
+- id: two-chips
+  alt: "Two STM32H573 chips with the same firmware, option bytes and boot loader. Each has its own hardware-unique key, so the Aegis ML-DSA-65 key derived from it differs between the chips. The PSA attestation key comes from TF-M's development provisioning, which writes the same fixed key on every board, so the PSA identity is the same. The gateway pins the ML-DSA key per device, so chip 2 is refused under chip 1's name."
+  width: 900
+  height: 400
+  nodes:
+    fw:  {x: 330, y: 20,  w: 240, h: 70, kind: plain, title: "Same on both", sub: "firmware, option bytes,\nboot loader"}
+    c1:  {x: 40,  y: 150, w: 220, h: 70, kind: mem,   title: "Chip 1: its own DHUK", sub: "hardware-unique key"}
+    c2:  {x: 640, y: 150, w: 220, h: 70, kind: mem,   title: "Chip 2: its own DHUK", sub: "hardware-unique key"}
+    k1:  {x: 40,  y: 290, w: 220, h: 70, kind: good,  title: "ML-DSA key 1", sub: "sha256 29b953e6..."}
+    k2:  {x: 640, y: 290, w: 220, h: 70, kind: good,  title: "ML-DSA key 2", sub: "sha256 c9e2aa6e..."}
+    psa: {x: 330, y: 290, w: 240, h: 70, kind: bad,   title: "PSA identity", sub: "the same on both: TF-M's\ndevelopment attestation key"}
+  edges:
+    - {from: fw.left, to: c1.top}
+    - {from: fw.right, to: c2.top}
+    - {from: c1.bottom, to: k1.top, label: "SAES"}
+    - {from: c2.bottom, to: k2.top, label: "SAES"}
+    - {from: fw.bottom, to: psa.top, label: "dummy provisioning"}
+  steps: [fw, c1, e0, c2, e1, k1, e2, k2, e3, psa, e4]
