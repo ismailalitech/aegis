@@ -1,4 +1,4 @@
-# Endpoint hardening: hedged ML-DSA signing and KMAC heartbeats (branches `hedged-signing` and `kmac-heartbeat`, not deployed)
+# Endpoint hardening: hedged ML-DSA signing and KMAC heartbeats (deployed on the bench 17 November 2026)
 
 Status 2026-11-17: built and checked on the PC. **Not flashed, not tested on the STM32.** Do not merge before the board
 checks below pass.
@@ -49,6 +49,20 @@ which has no length extension, but it is a home-made MAC. It is now the standard
 | `tests/host/test_fleet.py`: a KMAC endpoint with a KMAC policy is accepted; a KMAC endpoint with the old policy is refused; an unknown MAC name is refused | pass |
 | TF-M image with both changes (`OUT=~/aegis-tools/tfm-aegis-build-kmac build_tfm.sh`) | builds without warnings from these files; veneers unchanged at `0x0C085FC0`; SPE measurement `a5997cc3c61af12d780ac4a8d62a2cd574c3343f077a179759f7efd36355750e` |
 | KMAC256 on the gateway's CPU, pure Python, one heartbeat | 46.5 ms (SHA3-256 with hashlib: 35 us). One heartbeat per endpoint every 30 s: about 0.15 % of one core per endpoint |
+
+## Deployed on the bench (17 November 2026)
+
+Baseline before any change: `tools/regression.sh --board` 12 of 12. Then, in this order, each step checked before the next:
+
+| Step | Result |
+|---|---|
+| Backup of the STM32 under reset: both 2 MiB flash views and the option bytes (`backups/stm32h573/20261117-181152-ep1-before-hardening`, checksummed) | the secure slot in the backup is byte-identical to `tfm-s-v2.3.0-aegis-pq-hb.bin`, so the rollback image is the right one |
+| Gateway: old `fleet.py` and `fleet.json` copied aside; new `fleet.py` and `common/kmac.py` installed, policy unchanged | KMAC on the gateway gives NIST sample 4; the endpoint, still on the old image, stays ADMITTED with valid heartbeats (the new gateway code defaults to the first heartbeat) |
+| Secure image `tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac.hex` written to the secure slot (ST-LINK chosen by serial number: a second board is connected) | download verified; `PQKEY` returns the same 1,952-byte key as before (SHA-256 `29b953e6...`): the key comes from the chip, not from the image |
+| Before the policy change | `QUARANTINED component SPE not allowed (measurement a5997cc3...) [credential: revoked]`: an image the policy does not know is refused, as it must be |
+| Policy: SPE measurement `a5997cc3...`, `"heartbeat_mac": "kmac256"`; service restarted | `ADMITTED [credential: issued session cd1126...]`, then `valid, heartbeat 1`, `2`, ... with KMAC256 |
+| Two quotes for one challenge | different signatures (hedged); before, they were identical |
+| `tools/regression.sh --board` | 12 of 12 |
 
 ## To deploy both, with someone at the board
 
