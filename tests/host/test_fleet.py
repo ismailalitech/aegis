@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 import cbor  # noqa: E402
 import mldsa  # noqa: E402
+import kmac  # noqa: E402
 import mlkem  # noqa: E402
 import hashlib  # noqa: E402
 import fleet  # noqa: E402
@@ -125,7 +126,10 @@ class FakeEndpoint:
             self.hb = getattr(self, "hb", 0) + 1
             ctr = self.hb.to_bytes(8, "little")
             status = b"uptime_s=1;link=1;fw=test"
-            tag = sha3(b"aegis-hb-v1", self.session, nonce, ctr, status)
+            if getattr(self, "hb_mac", None) == "kmac256":
+                tag = kmac.kmac256(self.session, nonce + ctr + status, 32, b"aegis-hb-v2")
+            else:
+                tag = sha3(b"aegis-hb-v1", self.session, nonce, ctr, status)
             c.sendall(b"PQHB %s %s %s END\r\n" % (status.hex().encode(), ctr.hex().encode(), tag.hex().encode()))
             return
         if line == "PQSESSION":
@@ -270,6 +274,26 @@ class Fleet(unittest.TestCase):
         self.assertTrue(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state).startswith("valid, heartbeat 2"))
         self.assertEqual(fleet.credential_step(conf, {"admitted": False}, self.dir, state=state), "revoked")
         self.assertFalse(os.path.exists(os.path.join(state, "credentials", "kem-good.session")))
+
+    def test_heartbeat_kmac256(self):
+        ep, conf, _, gw_sk = self.provision_ep("kem-good")
+        r = fleet.provision(conf, self.dir, gw_sk, "gid", {}, timeout=5)
+        ep.hb_mac = "kmac256"
+        conf["heartbeat_mac"] = "kmac256"
+        status, ctr = fleet.heartbeat(conf, r["session_key"], timeout=5)
+        self.assertEqual(ctr, 1)
+        self.assertTrue(status.startswith(b"uptime_s="))
+
+    def test_heartbeat_mac_mismatch_refused(self):
+        ep, conf, _, gw_sk = self.provision_ep("kem-good")
+        r = fleet.provision(conf, self.dir, gw_sk, "gid", {}, timeout=5)
+        ep.hb_mac = "kmac256"          # endpoint on KMAC, gateway policy still on the first version
+        with self.assertRaises(ValueError):
+            fleet.heartbeat(conf, r["session_key"], timeout=5)
+
+    def test_heartbeat_unknown_mac_refused(self):
+        with self.assertRaises(ValueError):
+            fleet.heartbeat_tag("hmac-md5", bytes(32), bytes(32), bytes(8), b"")
 
     def test_cbor_roundtrip(self):
         x = {1: [b"ab", "cd", -5, 2 ** 40, True, None], -75008: cbor.Tag(18, b"x")}
