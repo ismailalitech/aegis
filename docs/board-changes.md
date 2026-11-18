@@ -35,7 +35,9 @@ security views, merged image, all option bytes). The board held a TF-M v2.3.0 BL
 
 To replace the secure image of a board, with backup, policy and checks: `endpoints/stm32h573/upgrade_secure.sh <endpoint>
 <ST-LINK serial> <signed .hex>` (tested on board 2 up to the write, and its gateway steps against the live gateway). For
-board 1, the image with the KEM_INIT fix is `endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix.hex`.
+board 1, the image with the KEM_INIT fix is `endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix.hex`
+(like every image there, kept on the bench PC, not in git; its checksum is in `artifacts/SHA256SUMS`; `build_tfm.sh`
+rebuilds it).
 
 Not touched: BL2, option bytes (product state Open, TrustZone on, WRP on BL2), NV counters, OTP.
 Restore tested 2026-11-16: both slots read back byte-identical to the backup and the old firmware booted;
