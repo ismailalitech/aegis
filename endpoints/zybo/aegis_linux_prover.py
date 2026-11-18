@@ -118,9 +118,15 @@ class Prover:
                 nonce = bytes.fromhex(p[1])
                 if len(nonce) != 32:
                     return "ERR bad-request"
-                ek, dk = mlkem.keypair()
+                # a new exchange replaces a pending one whether or not it completes, and it is kept only once signed
+                # (as on the RW612 and STM32 partitions, 2026-11-18)
+                self.kem = None
+                try:
+                    ek, dk = mlkem.keypair()
+                    sig = mldsa.sign(self.sk, KEM_INIT_LABEL, nonce + ek)
+                except Exception:  # noqa: BLE001 (any failure of the crypto library refuses this exchange only)
+                    return "ERR sign"
                 self.kem = (nonce, dk, ek)
-                sig = mldsa.sign(self.sk, KEM_INIT_LABEL, nonce + ek)
                 return "PQKEMEK %d %s %d %s END" % (len(ek), ek.hex(), len(sig), sig.hex())
             if cmd == "PQKEMFIN" and len(p) == 3:
                 return self.kem_finish(bytes.fromhex(p[1]), bytes.fromhex(p[2]))
@@ -196,7 +202,12 @@ def serve(prover, port):
                     break
                 buf += chunk
             line = buf.split(b"\n")[0].decode("ascii", "replace").strip()
-            c.sendall((prover.handle(line) + "\r\n").encode())
+            try:
+                reply = prover.handle(line)
+            except Exception as e:  # noqa: BLE001 (one bad request must not stop the prover)
+                print("request failed: %s" % type(e).__name__, flush=True)
+                reply = "ERR internal"
+            c.sendall((reply + "\r\n").encode())
         except (OSError, UnicodeError):
             pass
         finally:

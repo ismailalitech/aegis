@@ -121,6 +121,28 @@ class LinuxProver(unittest.TestCase):
         sid, _ = fleet.query_session(self.ep())
         self.assertEqual(sid, r["session_id"], "a refused exchange must not replace the session")
 
+    def test_7_refused_init_leaves_nothing_pending(self):
+        """A PQKEMINIT that fails at its signature cancels the pending exchange and keeps nothing half made; an error
+        inside one request does not stop the server (found by fuzzing the device partitions, 2026-11-18)."""
+        from unittest import mock
+        nonce = os.urandom(32)
+        p = fleet._exchange("127.0.0.1", self.port, "PQKEMINIT " + nonce.hex(), 10).split()
+        ek1 = bytes.fromhex(p[2])
+        with mock.patch.object(prover_mod.mldsa, "sign", side_effect=RuntimeError("no randomness")):
+            self.assertEqual(fleet._exchange("127.0.0.1", self.port, "PQKEMINIT " + os.urandom(32).hex(), 10).strip(),
+                             "ERR sign")
+        ct, _ = mlkem.encaps(ek1)
+        body = {"v": 1, "type": "credential", "endpoint": "zybo",
+                "endpoint_pq_pk_sha256": hashlib.sha256(self.prover.pk).hexdigest(),
+                "kem_ct_sha3_256": fleet._sha3(ct).hex(), "kem_ek_sha3_256": fleet._sha3(ek1).hex(),
+                "expires": 4102444800}
+        cred = wire.canonical(body) + b"\n" + mldsa.sign(self.gw_sk, fleet.CRED_LABEL, wire.canonical(body))
+        self.assertIn("ERR cred no-exchange",
+                      fleet._exchange("127.0.0.1", self.port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), 10))
+        with mock.patch.object(self.prover, "handle", side_effect=KeyError("boom")):
+            self.assertEqual(fleet._exchange("127.0.0.1", self.port, "PQKEY", 10).strip(), "ERR internal")
+        self.assertTrue(fleet._exchange("127.0.0.1", self.port, "PQKEY", 10).startswith("PQKEY "))
+
     def test_6_malformed_requests(self):
         for line in ("", "PQCHAL zz", "PQCHAL " + "00" * 31, "PQKEMFIN 00", "HELLO", "PQHB " + "00" * 32 + " extra"):
             reply = fleet._exchange("127.0.0.1", self.port, line, 10)
