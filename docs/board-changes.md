@@ -61,12 +61,13 @@ then the Aegis images were written again.
 No fuse, OTP word or key was written: the prover only reads ELS key properties and uses slot 0 for CKDF into a
 temporary slot it deletes again.
 
-## Trenz TE0808 (XCZU4EG) on a TEBF0808 carrier
+## Trenz TE0807 (XCZU4EG) on a TEBF0808 carrier
 
 | Change | Undo |
 |---|---|
 | 18 November 2026: the microSD card erased (on the owner's request) and written by `endpoints/zynqmp/make_sd.sh`: the boot files the card came with (BOOT.BIN, image.ub) and a Debian 12 arm64 root file system from `setup_rootfs.sh`. The card's earlier image is kept as a full copy on the PC, outside the repository | write the copy back with `dd` |
 | On that card, after the first boot: `/etc/network/interfaces` for `end0`, autologin on `ttyPS0`, persistent journal (now in `setup_rootfs.sh`); haveged installed | write the card again |
+| Later that day: the card's BOOT.BIN replaced by ours (`evidence/zynqmp/boot-chain.txt`, sha256 `ddab49f0...`), the card's one kept as `boot-2019.bin`; `boot.scr` added; the prover also measures boot.scr. Gateway policy: the new BOOT and KERNEL values allowed, the 2019 ones removed (backups `fleet.json.bak-20261118-203634`, `-204528`). JTAG boots into RAM set BOOT_MODE_USER (volatile) | copy `boot-2019.bin` over BOOT.BIN, delete boot.scr; restore the policy backup |
 
 Nothing written to eFUSEs, BBRAM, the QSPI flash or the U-Boot environment (U-Boot `setenv` only in RAM, never
-`saveenv`). The TE0790 adapters' EEPROMs were never touched.
+`saveenv`; our U-Boot has no environment at all). The TE0790 adapters' EEPROMs were never touched.

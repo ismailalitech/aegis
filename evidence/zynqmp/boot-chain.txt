@@ -1,0 +1,120 @@
+Zynq UltraScale+ endpoint: the boot chain built here, 18 November 2026
+LAN addresses masked; the kernel builder's name removed (the kernel is still the one the card came with).
+
+Components (BOOT.BIN sha256 ddab49f0ca4302d615c502e4b68eb3dcc9ec3fe74636432572d43663408f3349, bootgen 2025.2,
+endpoints/zynqmp/boot.bif):
+  fsbl.elf        Vitis 2025.2 zynqmp_fsbl with Trenz's TE0807 hooks (carrier I2C switches, Si5345 PLL), ported
+                  from Trenz's 2022.2 StarterKit; XSA from Vivado 2025.2, board part te0807_4eg_1e_tebf0808 rev 4.0,
+                  PS only, timing met
+  pmufw.elf       Vitis 2025.2 zynqmp_pmufw
+  system.bit      Vivado 2025.2, empty PL (the Aegis accelerator comes next: hw/vivado/aegis_pqc2_zynqmp_bd.tcl)
+  bl31.elf        TF-A xilinx-v2025.2 (v2.12), PLAT=zynqmp RESET_TO_BL31=1
+  u-boot.elf      u-boot-xlnx xilinx-v2025.2, endpoints/zynqmp/dts/zynqmp-te0807-aegis.dts and u-boot-aegis.config:
+                  no environment (nothing written to the QSPI), eMMC and QSPI disabled, bootcmd = boot.scr from SD
+  boot.scr        endpoints/zynqmp/boot.cmd: image.ub (the card's Linux 4.19 kernel and device tree), bootm
+
+Test 1: JTAG boot into RAM (xsdb 2025.2; BOOT_MODE_USER set to JTAG, a volatile register): FSBL, BL31, U-Boot, boot.scr,
+Linux, Debian, on the first attempt. It showed a random MAC and a JTAG/PXE detour in U-Boot's default boot order,
+both fixed (local-mac-address in the device tree, bootcmd).
+Test 2: the same chain written to the card's BOOT.BIN (the 2019 one kept as boot-2019.bin), power-on reset, SD boot:
+TE0807 TE_XFsbl_HookPsuInit_Custom
+Configure Carrier I2C Switch 0x77
+Configure PLL: SI5345-B
+Si534x Init Registers Write.
+Si534x Init Complete.
+Status   0xC:0x0, 0xE:0x0, 0xD:0x0, 0x11:0, 0xF:0 (...waiting for calibration...256 us).PLL Status Register   0xC:0x0, 0xE:0x0, 0xD:0x0, 0x11:0, 0xF:0.
+USB Reset Complete 
+PCIe Reset Complete
+Zynq MP First Stage Boot Loader (TE0807 hooks, Aegis 2025.2) 
+Release 2025.2   Nov 18 2026  -  20:27:58
+TE0807 TE_XFsbl_BoardInit_Custom
+Configure Carrier I2C Switch 0x73 for EEPROM access
+Configure Carrier I2C Switch 0x77 to avoid conflicts with EEPROM
+NOTICE:  BL31: Non secure code at 0x8000000
+NOTICE:  BL31: v2.12.0(release):xilinx-v2025.2
+NOTICE:  BL31: Built : 19:39:32, Nov 18 2026
+U-Boot 2025.01-gdf4ec3c8da27-dirty (Nov 18 2026 - 20:35:45 +0100)
+CPU:   ZynqMP
+Silicon: v3
+Chip:  zu4
+Model: Trenz TE0807 (XCZU4EG) on TEBF0808, Aegis endpoint
+Board: Xilinx ZynqMP
+DRAM:  2 GiB (effective 4 GiB)
+EL Level:	EL2
+Secure Boot:	not authenticated, not encrypted
+Core:  31 devices, 19 uclasses, devicetree: board
+NAND:  0 MiB
+MMC:   mmc@ff170000: 0
+Loading Environment from nowhere... OK
+In:    serial
+Out:   serial,vidconsole
+Err:   serial,vidconsole
+Bootmode: SD_MODE1
+Reset reason:	EXTERNAL 
+Net:   
+ZYNQ GEM: ff0e0000, mdio bus ff0e0000, phyaddr 1, interface rgmii-id
+eth0: ethernet@ff0e0000
+[?25h
+scanning bus for devices...
+starting USB...
+No USB controllers found
+Hit any key to stop autoboot:  2  1  0 
+switch to partitions #0, OK
+mmc0 is current device
+384 bytes read in 8 ms (46.9 KiB/s)
+## Executing script at 20000000
+17973788 bytes read in 1339 ms (12.8 MiB/s)
+## Loading kernel from FIT Image at 10000000 ...
+   Using 'conf@system-top.dtb' configuration
+   Trying 'kernel@1' kernel subimage
+     Description:  Linux kernel
+     Created:      2022-09-30   8:42:00 UTC
+     Type:         Kernel Image
+     Compression:  uncompressed
+     Data Start:   0x100000f8
+     Data Size:    17943040 Bytes = 17.1 MiB
+     Architecture: AArch64
+     OS:           Linux
+     Load Address: 0x00080000
+     Entry Point:  0x00080000
+     Hash algo:    sha1
+     Hash value:   e07ec1b6f563256e743562d3d73876d00f5afacd
+   Verifying Hash Integrity ... sha1+ OK
+## Loading fdt from FIT Image at 10000000 ...
+   Using 'conf@system-top.dtb' configuration
+   Trying 'fdt@system-top.dtb' fdt subimage
+     Description:  Flattened Device Tree blob
+     Created:      2022-09-30   8:42:00 UTC
+     Type:         Flat Device Tree
+     Compression:  uncompressed
+     Data Start:   0x1111cbfc
+     Data Size:    28842 Bytes = 28.2 KiB
+     Architecture: AArch64
+     Hash algo:    sha1
+     Hash value:   edbc38e745f78574679ef5bda5e7a70526cede36
+   Verifying Hash Integrity ... sha1+ OK
+   Booting using the fdt blob at 0x1111cbfc
+Working FDT set to 1111cbfc
+   Loading Kernel Image to 80000
+   Loading Device Tree to 0000000077cda000, end 0000000077ce40a9 ... OK
+Working FDT set to 77cda000
+No RNG device
+Starting kernel ...
+   ... (Linux 4.19.0-rt1, Debian 12; prover and ssh started; end0 link up 1000/Full)
+
+The gateway, with the new values allowed and the 2019 ones removed:
+19:43:07 zynqmp-te0808 ADMITTED (software trust)  [credential: issued session 744132daf956...]
+19:43:41 zynqmp-te0808 ADMITTED (software trust)  [credential: valid, heartbeat 1 (uptime_s=57;link=1;fw=linux-0.1.0)]
+19:44:15 zynqmp-te0808 ADMITTED (software trust)  [credential: valid, heartbeat 2 (uptime_s=90;link=1;fw=linux-0.1.0)]
+19:44:49 zynqmp-te0808 ADMITTED (software trust)  [credential: valid, heartbeat 3 (uptime_s=124;link=1;fw=linux-0.1.0)]
+19:45:23 zynqmp-te0808 ADMITTED (software trust)  [credential: valid, heartbeat 4 (uptime_s=158;link=1;fw=linux-0.1.0)]
+19:45:56 zynqmp-te0808 QUARANTINED (software trust) component KERNEL not allowed (measurement d65da5fa0dc5...) [credential: revoked]
+19:46:30 zynqmp-te0808 ADMITTED (software trust)  [credential: issued session dc38f54525ee...]
+19:47:04 zynqmp-te0808 ADMITTED (software trust)  [credential: valid, heartbeat 1 (uptime_s=260;link=1;fw=linux-0.1.0)]
+  BOOT    ddab49f0ca4302d615c502e4b68eb3dcc9ec3fe74636432572d43663408f3349  SHA256 of BOOT.BIN
+  KERNEL  5bebe237c6cb21ef24f5afc8bbd49ec04c2448e9aa2a83efb78b445782b9107f  SHA256 of image.ub, boot.scr
+  PROVER  69e3cc1798daae90de7c5b7c6c667951ffe2e74747d8392eec5bffb5a49642d8  SHA256 of aegis_linux_prover.py
+The QUARANTINED line at 19:45:56 is a tamper test: boot.scr with one added "echo" line, put back right after.
+
+Still software trust: Linux takes these measurements. Steps 4-6 move the key to the PUF and the measurements
+into the boot chain and the A53 secure world.
