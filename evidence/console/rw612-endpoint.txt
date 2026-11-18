@@ -1,0 +1,36 @@
+# NXP FRDM-RW612 as an Aegis endpoint (kind aegis-device), 2026-11-18
+# Board console after a reset (prover 0.1.0, image endpoints/rw612/artifacts/aegis-rw612-prover-0.1.0.bin)
+*** Booting Zephyr OS build v4.5.0 ***
+AEGIS-RW612-PROVER 0.1.0
+els slot  0: props 0x60010161
+els slot  1: props 0x60010121
+els slot  2: props 0x88000320
+els slot  3: props 0x001000a0
+els slot  6: props 0x800100e1
+els slot  7: props 0x800100a1
+aegis: key sha256 219414c54e7bbf34..., image 146308 bytes, sha256 864ac72280f7200b...
+aegis: mac 02:ae:dd:dd:6b:a1
+[01:06:11.755,700] <inf> phy_mc_ksz8081: PHY (2) is entering autonegotiation sequence
+[01:06:14.458,542] <inf> phy_mc_ksz8081: PHY 2 is up
+[01:06:14.458,561] <inf> phy_mc_ksz8081: PHY (2) Link speed 100 Mb, full duplex
+
+[01:06:21.526,276] <inf> net_dhcpv4: Received: <lan address>
+aegis: address <lan address>, listening on 7444
+
+# From the PC, gateway verifier code (fleet.attest) over the network
+PQKEY 1952 bytes, sha256 219414c54e7bbf34 (the same on every boot and with every image: derived in ELS from the die key)
+20 attestations back to back: 20 admitted; quote time min 0.073 max 0.302 s
+APP measured == sha256(zephyr.bin): True 146308 bytes
+wrong reference -> QUARANTINED ['component APP not allowed (measurement 864ac72280f7...)']
+
+# Gateway (aegis-fleet journal): good image, then the tampered image (only CONFIG_NET_HOSTNAME changed), then the good image again
+00:47:58 frdm-rw612 ADMITTED (device-key trust)  [credential: issued session 62eea2ec5d6e...]
+00:48:32 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 1 (uptime_s=110;link=1;fw=rw612-0.1.0)]
+00:49:06 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 2 (uptime_s=143;link=1;fw=rw612-0.1.0)]
+00:49:40 frdm-rw612 QUARANTINED (device-key trust) component APP not allowed (measurement 06da0d22095c...) [credential: revoked]
+00:50:14 frdm-rw612 QUARANTINED (device-key trust) component APP not allowed (measurement 06da0d22095c...) [credential: revoked]
+00:50:48 frdm-rw612 QUARANTINED (device-key trust) component APP not allowed (measurement 06da0d22095c...) [credential: revoked]
+00:51:22 frdm-rw612 ADMITTED (device-key trust)  [credential: issued session 43e7064f4227...]
+00:51:56 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 1 (uptime_s=63;link=1;fw=rw612-0.1.0)]
+00:52:30 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 2 (uptime_s=97;link=1;fw=rw612-0.1.0)]
+00:53:03 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 3 (uptime_s=130;link=1;fw=rw612-0.1.0)]

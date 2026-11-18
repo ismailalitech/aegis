@@ -13,6 +13,8 @@ What runs on the bench today:
   Keccak/NTT accelerator (`hw/`) that passes the NIST ACVP vectors;
 - an STM32H573I-DK (TF-M v2.3.0 plus a PQ partition) is attested over Ethernet and held in a
   session with heartbeats (`endpoints/stm32h573/`);
+- an NXP FRDM-RW612 (Zephyr, ML-DSA-65 key derived in the chip's ELS from the die key) is attested,
+  provisioned and held in a session the same way, labelled device-key trust (`endpoints/rw612/`);
 - a tampered Non-Secure image, and an Arduino Uno that cannot attest, are quarantined;
 - a red-team harness and a regression run (`tests/`, `tools/regression.sh`) that checks all of it.
 
