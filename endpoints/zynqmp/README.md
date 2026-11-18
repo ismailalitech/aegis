@@ -1,15 +1,27 @@
-# Zynq UltraScale+ endpoint (steps 1-3 done on 18 November 2026: admitted with software trust)
+# Zynq UltraScale+ endpoint (18 November 2026: our own boot chain, admitted with software trust)
 
-The board: a Trenz **TEBF0808-04A** UltraITX+ carrier with a **TE0808 (XCZU4EG)** module under a fan, plus two TE0790
+The board: a Trenz **TEBF0808-04A** UltraITX+ carrier with a **TE0807 (XCZU4EG-1E, 4 GB DDR4)** module under a fan, plus two TE0790
 JTAG adapters (the one with the licence, green dot, on J12 for the MPSoC's JTAG and UART). This endpoint replaces the
 Zybo (`../zybo`). Its Linux prover runs here unchanged for the "software trust" step, and the chip adds what the
 Zynq-7010 lacks: a PUF, the CSU's AES and SHA-3, and TrustZone on the Cortex-A53s.
 
-Status and evidence: `evidence/zynqmp/software-trust.txt`. Files here:
+Status and evidence: `evidence/zynqmp/software-trust.txt`, `evidence/zynqmp/boot-chain.txt`. (The gateway names
+it `zynqmp-te0808`, from before the module was identified; it is a TE0807.) Files here:
 - `setup_rootfs.sh`: configures a Debian 12 arm64 root file system (after debootstrap) with the prover, the gateway's
   key and liboqs 0.16.0 built for aarch64.
 - `make_sd.sh`: writes the card: BOOT.BIN and image.ub on a FAT partition, the root file system on the second.
-- `aegis-linux-prover.service`: the prover on TCP 7444, measuring BOOT.BIN, image.ub and itself.
+- `aegis-linux-prover.service`: the prover on TCP 7444, measuring BOOT.BIN, image.ub with boot.scr, and itself.
+- `windows/`: the Vivado/Vitis 2025.2 build (XSA, bitstream, FSBL with Trenz's TE0807 hooks, PMU firmware) and the
+  JTAG boot test, run on the bench's Windows PC; its README gives the order and the Trenz download it expects.
+- `boot.bif`, `boot.cmd`, `dts/zynqmp-te0807-aegis.dts`, `u-boot-aegis.config`: BOOT.BIN (bootgen), the U-Boot
+  script, and U-Boot (u-boot-xlnx xilinx-v2025.2, `xilinx_zynqmp_virt_defconfig` plus the fragment). TF-A is
+  xilinx-v2025.2 with `make PLAT=zynqmp RESET_TO_BL31=1 bl31`. U-Boot keeps no environment and has the eMMC and
+  QSPI disabled, so it writes neither.
+- `../../hw/rtl/aegis_pqc2_zynqmp.v`, `../../hw/vivado/aegis_pqc2_zynqmp_bd.tcl`: the Aegis accelerator for the
+  PL (registers through an AXI APB bridge on HPM0_LPD, DMA into DDR on HP0). Simulated, not built yet.
+
+A new BOOT.BIN is tried over JTAG into RAM first (`windows/jtag_boot.tcl`), and only then written to the card; the
+previous one stays on the card (`boot-2019.bin`, the one the board came with).
 
 Power-on: 12 V, then press **S1** (the 12 V input alone powers only the carrier's controller). Boot mode is SD; with
 no card the carrier falls back to the QSPI flash.
@@ -33,9 +45,9 @@ no card the carrier falls back to the QSPI flash.
 
 1. **Identify the chip.** Done: XCZU4EG (IDCODE 04721093; eFUSE IPDISABLE shows the VCU disabled and the GPU
    present), read with xsdb over the TE0790.
-2. **Boot Linux and join the network.** Done: the boot files of the card the board came with (Trenz FSBL 2019.2,
-   U-Boot 2019.01, Linux 4.19) and Debian 12 from `setup_rootfs.sh`, DHCP on `end0`. Our own boot chain (built with
-   Vitis 2025.2) comes with step 4, since the PUF registration lives in the boot image.
+2. **Boot Linux and join the network.** Done: Debian 12 from `setup_rootfs.sh`, DHCP on `end0`. First on the boot
+   files the card came with; then on our own boot chain: FSBL and PMU firmware from Vitis 2025.2, TF-A and U-Boot
+   xilinx-v2025.2 (`evidence/zynqmp/boot-chain.txt`). The kernel is still the card's Linux 4.19.
 3. **Software trust.** Done: `../zybo/aegis_linux_prover.py`, enrolled as `zynqmp-te0808` (kind `aegis-linux`),
    admitted with "software trust", ML-KEM credential issued, KMAC heartbeats checked. This is the baseline the next
    steps improve on.

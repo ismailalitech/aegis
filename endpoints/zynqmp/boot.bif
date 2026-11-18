@@ -1,0 +1,11 @@
+// bootgen -arch zynqmp -image boot.bif -o BOOT.BIN -w
+// FSBL and PMU firmware from Vitis 2025.2 (XSA: te0807_4eg_1e_tebf0808, PS only); bitstream from Vivado 2025.2;
+// TF-A and U-Boot from AMD's xilinx-v2025.2 sources, built on Linux.
+the_ROM_image:
+{
+	[bootloader, destination_cpu=a53-0] fsbl.elf
+	[pmufw_image] pmufw.elf
+	[destination_device=pl] system.bit
+	[destination_cpu=a53-0, exception_level=el-3, trustzone] bl31.elf
+	[destination_cpu=a53-0, exception_level=el-2] u-boot.elf
+}

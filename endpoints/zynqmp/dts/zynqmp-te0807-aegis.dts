@@ -1,0 +1,60 @@
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Trenz TE0807 (XCZU4EG, 4 GiB DDR4) on a TEBF0808 carrier, as the Aegis endpoint uses it: UART0 (the TE0790 on
+ * J12), the SD card on SD1, GEM3 with the Marvell 88E1510 at MDIO address 1. Written from the device tree the board
+ * came with. The module's eMMC (SD0) and the QSPI flash are left disabled, so neither U-Boot nor Linux can write
+ * them; U-Boot keeps no environment (ENV_IS_NOWHERE).
+ */
+/dts-v1/;
+
+#include "zynqmp.dtsi"
+#include "zynqmp-clk-ccf.dtsi"
+
+/ {
+	model = "Trenz TE0807 (XCZU4EG) on TEBF0808, Aegis endpoint";
+	compatible = "trenz,te0807-aegis", "xlnx,zynqmp";
+
+	aliases {
+		ethernet0 = &gem3;
+		mmc0 = &sdhci1;
+		serial0 = &uart0;
+	};
+
+	chosen {
+		bootargs = "earlycon";
+		stdout-path = "serial0:115200n8";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x0 0x0 0x7ff00000>, <0x8 0x00000000 0x0 0x80000000>;
+	};
+};
+
+&uart0 {
+	status = "okay";
+	bootph-all;
+};
+
+&sdhci1 {
+	status = "okay";
+	no-1-8-v;
+	disable-wp;
+	xlnx,mio-bank = <1>;
+	bootph-all;
+};
+
+&gem3 {
+	status = "okay";
+	phy-mode = "rgmii-id";
+	/* the address the board had with its original image (U-Boot keeps no environment, so it comes from here) */
+	local-mac-address = [00 0a 35 00 22 01];
+	phy-handle = <&phy0>;
+	mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		phy0: ethernet-phy@1 {
+			reg = <1>;
+		};
+	};
+};

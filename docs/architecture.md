@@ -69,7 +69,7 @@ flowchart LR
 | `endpoints/rw612/prover` | RW612, Zephyr (the first, single-image prover) | same protocol code; it measures itself, labelled device-key trust; superseded on the bench by the TF-M version |
 | `endpoints/arduino-uno` | Arduino Uno, through `host/serial_bridge.py` | a node with no keys and no measured boot: always quarantined |
 | `endpoints/zybo` | a Linux endpoint (written for a Zybo Z7-10); tested on the PC, not on the bench | the same protocol in Python; key in a file, measurements by the running Linux, labelled software trust |
-| `endpoints/zynqmp` | Trenz TE0808 (XCZU4EG), Debian 12 on the A53s | the Linux prover above, on the bench since 18 November 2026 and admitted as `zynqmp-te0808` with software trust; next: a PUF-derived key and the proofs in the A53 secure world |
+| `endpoints/zynqmp` | Trenz TE0807 (XCZU4EG), Debian 12 on the A53s, boot chain built here (Vitis 2025.2 FSBL, TF-A, U-Boot) | the Linux prover above, on the bench since 18 November 2026 and admitted as `zynqmp-te0808` with software trust; next: a PUF-derived key and the proofs in the A53 secure world |
 | `host/` | PC | gateway verifier, console tools, the Arduino relay |
 | `tests/fuzz` | PC and CI | libFuzzer harnesses for both endpoint partitions, with a model of the protocol |
 
