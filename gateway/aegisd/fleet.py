@@ -38,8 +38,11 @@ LINUX_PROFILE = "aegis-linux-software-v1"   # kind aegis-linux: key and measurem
 DEVICE_PROFILE = "aegis-rw612-els-v1"       # kind aegis-device: key from the chip's ELS, measurement by the firmware
 DEVICE_TFM_PROFILE = "aegis-rw612-tfm-v1"   # the same chip with TF-M: key and measurements in the TrustZone secure side
 # kinds whose quote is a plain CBOR claims map signed only with ML-DSA-65: {accepted profile: trust label}
+TEE_DEVHUK_PROFILE = "aegis-zynqmp-optee-devhuk-v1"  # ZynqMP, OP-TEE: key in the secure world, from a fixed HUK
+TEE_PROFILE = "aegis-zynqmp-optee-v1"         # ZynqMP, OP-TEE: key from the PUF-protected device key (design)
 PLAIN_KINDS = {"aegis-linux": {LINUX_PROFILE: "software"},
-               "aegis-device": {DEVICE_PROFILE: "device-key", DEVICE_TFM_PROFILE: "trustzone"}}
+               "aegis-device": {DEVICE_PROFILE: "device-key", DEVICE_TFM_PROFILE: "trustzone"},
+               "aegis-tee": {TEE_DEVHUK_PROFILE: "trustzone-devkey", TEE_PROFILE: "trustzone"}}
 PQ_KINDS = ("aegis-pq",) + tuple(PLAIN_KINDS)
 KEM_INIT_LABEL = b"aegis-kem-init-v1"
 CRED_LABEL = b"aegis-credential-v1"

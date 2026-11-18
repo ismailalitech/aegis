@@ -1,0 +1,44 @@
+Zynq UltraScale+ endpoint, phase A of docs/zynqmp-key-design.md: OP-TEE with the Aegis trusted application,
+18 November 2026. LAN addresses masked.
+
+Build (endpoints/zynqmp/optee, boot.bif):
+  OP-TEE 4.7.0, PLATFORM=zynqmp-zcu102 (UART0, 4 GiB, TZDRAM 0x6000_0000, 256 MiB), the Aegis TA built in
+  (EARLY_TA_PATHS: it is part of BOOT.BIN, not loaded from Linux); TF-A xilinx-v2025.2 with SPD=opteed;
+  device tree: 0x6000_0000-0x7FFF_FFFF reserved (no-map) for U-Boot and Linux; bridge: aegis_tee_bridge (TCP 7444,
+  libteec, static), the Linux prover disabled.
+  BOOT.BIN sha256 aab8d7b9dd26f1156a9939200865562d4999629c47ce0a69abdeadcd85b553ee
+Found on the way:
+  - tee.elf cannot be loaded as an ELF: OP-TEE's start-up reads __init_size at __data_end, past the ELF's file
+    data (gen_tee_bin appends it to tee-raw.bin only). Loaded from the ELF it read 0xFFFFFFFF and took an alignment
+    fault in copy_init (ESR_EL1 0x96000021 at 0x60000078, read over JTAG). BOOT.BIN uses tee-raw.bin at 0x6000_0000.
+  - a JTAG test must start from power-on: Linux 6.12 powers down unused PM domains, which stay off across
+    "rst -system", and the FSBL's init_serdes then stalls.
+Boot (JTAG into RAM first, then from the card, power-on reset):
+  NOTICE:  BL31: Secure code at 0x60000000
+  NOTICE:  BL31: v2.12.0(release):xilinx-v2025.2
+  I/TC: OP-TEE version: 4.7.0 (gcc version 13.3.0 ...) aarch64
+  I/TC: Primary CPU switching to normal world boot
+  U-Boot 2025.01 ... Linux 6.12.0
+  OF: reserved mem: 0x0000000060000000..0x000000006fffffff (262144 KiB) nomap non-reusable optee_core@60000000
+  optee: revision 4.7 (86846f4fdf14f25b)
+  optee: initialized driver
+  I/TA: Aegis TA: key ready
+  AEGIS-TEE-BRIDGE ready on 7444
+From the PC, through the bridge:
+  PQKEY: ML-DSA-65 key sha256 5aefce9c1df80ffd6c0402b4f348d33576f49b0d6b8a81d79d2ca664ae00b684
+  PQCHAL: quote in 0.03 s, ML-DSA-65 signature valid; claims: profile aegis-zynqmp-optee-devhuk-v1, instance ID
+  0x02 || the key hash, one component BOOTCHAIN = 0 with "not measured (phase A: no boot hand-off)"
+Gateway (fleet.py: kind aegis-tee; the entry pins the -devhuk profile and its key; BOOTCHAIN 0 allowed only for
+this phase), from the card's boot:
+22:22:25 zynqmp-te0808 QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]
+22:22:59 zynqmp-te0808 ADMITTED (trustzone-devkey trust)  [credential: issued session 7c4fc689152b...]
+22:23:32 zynqmp-te0808 ADMITTED (trustzone-devkey trust)  [credential: valid, heartbeat 1 (requests=5;fw=zynqmp-optee-0.1.0)]
+22:24:06 zynqmp-te0808 ADMITTED (trustzone-devkey trust)  [credential: valid, heartbeat 2 (requests=7;fw=zynqmp-optee-0.1.0)]
+  (the QUARANTINED line is the power-on reset; after it the same key, so the pin held across the reboot)
+The accelerator self-test still passes on this boot (pqc_selftest 100: 0 mismatches).
+
+What phase A shows: the protocol, the ML-DSA-65 key, the ML-KEM exchange and the KMAC session now live in the
+secure world; Linux holds none of them and only carries lines. What it does not: the key comes from OP-TEE's
+fixed development HUK, the same on every chip (hence "trustzone-devkey"), and nothing is measured. Phase B binds
+the key to the PUF and hands the boot chain's measurements to OP-TEE; phase C keeps Linux away from the CSU and
+from OP-TEE's memory (today only the device tree does).
