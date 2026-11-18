@@ -5,18 +5,20 @@ which endpoints may be trusted, from evidence their secure hardware produces, an
 endpoints a credential and an ML-KEM-768 session key. Identities and quotes are signed with
 ML-DSA-65 (FIPS 204); key exchange uses ML-KEM-768 (FIPS 203).
 
-![The Aegis system: a PC checks the gateway, the PolarFire gateway attests the endpoints, the STM32 is admitted and the Arduino Uno is quarantined](docs/diagrams/system-overview.svg)
+![The Aegis system: a PC checks the gateway, the PolarFire gateway attests the endpoints, two STM32s and an NXP RW612 are admitted and the Arduino Uno is quarantined](docs/diagrams/system-overview.svg)
 
 What runs on the bench today:
 
 - the PolarFire gateway signs its own quote and attests endpoints (`gateway/`), with a fabric
-  Keccak/NTT accelerator (`hw/`) that passes the NIST ACVP vectors;
-- an STM32H573I-DK (TF-M v2.3.0 plus a PQ partition) is attested over Ethernet and held in a
-  session with heartbeats (`endpoints/stm32h573/`);
-- an NXP FRDM-RW612 (Zephyr, ML-DSA-65 key derived in the chip's ELS from the die key) is attested,
-  provisioned and held in a session the same way, labelled device-key trust (`endpoints/rw612/`);
-- a tampered Non-Secure image, and an Arduino Uno that cannot attest, are quarantined;
-- a red-team harness and a regression run (`tests/`, `tools/regression.sh`) that checks all of it.
+  SHA-3 sponge/NTT accelerator (`hw/`) that passes the NIST ACVP vectors and makes liboqs 1.2-1.5 times faster;
+- two STM32H573I-DK (TF-M v2.3.0 plus a PQ partition) are attested over Ethernet and held in
+  sessions with KMAC256 heartbeats (`endpoints/stm32h573/`);
+- an NXP FRDM-RW612 runs the prover as a TF-M secure partition: its ML-DSA-65 key comes from the die
+  key in ELS, both flash partitions are measured before non-secure code runs, and the verdict says
+  trustzone trust (`endpoints/rw612/tfm/`; the earlier single-image Zephyr prover is in `endpoints/rw612/prover/`);
+- a tampered non-secure image, and an Arduino Uno that cannot attest, are quarantined;
+- a red-team harness, fuzzers for both secure partitions and a regression run (`tests/`, `tools/regression.sh`)
+  check all of it.
 
 One decision cycle, every 30 seconds per endpoint:
 
@@ -34,6 +36,7 @@ Copy `bench.env.example` to `bench.env` and set your addresses. Then:
     tools/regression.sh        # host stages; add --board for the real boards
     tools/demo.sh              # the live demo (needs the boards and an STM32 programmer)
     sudo tests/host/test_enforcement.sh   # the enforcement rules in network namespaces
+    tests/fuzz/run.sh                     # fuzz the RW612 partition's protocol code (STM32=1: the STM32 partition)
 
 ## Layout
 
