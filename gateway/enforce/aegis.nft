@@ -23,6 +23,10 @@ table inet aegis {
     chain input {
         type filter hook input priority filter; policy accept;
         iifname $ENDPOINT_IF udp dport 67 accept comment "DHCP for endpoints"
+        # Replies to connections the gateway opened (attestation, provisioning, heartbeats): without this the next
+        # rule dropped them, so a non-admitted endpoint could never be attested, and never admitted. Connections an
+        # endpoint opens are in the original direction and still go through the rules below.
+        iifname $ENDPOINT_IF ct direction reply accept comment "replies to the gateway's own connections"
         iifname $ENDPOINT_IF ip saddr != @admitted tcp dport != { 7443 } counter drop comment "quarantined: nothing but the quote service"
     }
 }
