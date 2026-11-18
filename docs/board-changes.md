@@ -18,6 +18,7 @@
 | 18 November 2026: `fleet.py` and `common/psa_token.py` with the plain-claims kinds (aegis-linux, aegis-device); policy entry `frdm-rw612` and its key `keys/frdm-rw612.mldsa65.pub`. Backup `/root/aegis-backup-20261118-004725/` (gateway clock) | copy the three files back from the backup; restart `aegis-fleet` |
 | 18 November 2026, later: `fleet.py` with profile `aegis-rw612-tfm-v1` ("trustzone") and profile pinning; the `frdm-rw612` entry pins that profile and allows SPE and NSPE. Backup `/root/aegis-backup-20261118-063344/` (gateway clock) | copy `fleet.py` and `fleet.json` back from the backup; restart `aegis-fleet` |
 | 18 November 2026, after the security review: `fleet.py` names the ML-KEM key in credentials (`kem_ek_sha3_256`) and `enroll-pq` keeps existing pins; `frdm-rw612` references updated for the reviewed firmware; STM32 board 2's session moved to `/root/aegis-backup-session-20261118-073735/` to re-provision it in the new format. Backup `/root/aegis-backup-20261118-073649/` | copy the files back; restart `aegis-fleet` |
+| 18 November 2026: policy entry `zynqmp-te0808` (kind aegis-linux, BOOT/KERNEL/PROVER allowed) and its key `keys/zynqmp-te0808.mldsa65.pub` (enrolled with `enroll-pq`; the other pins kept). Backup `gateway/policy/fleet.json.bak-20261118-192548` | copy the backup back; remove the key file |
 
 Nothing written to eNVM, keys, locks or the SD card's boot and payload partitions.
 
@@ -58,3 +59,13 @@ then the Aegis images were written again.
 
 No fuse, OTP word or key was written: the prover only reads ELS key properties and uses slot 0 for CKDF into a
 temporary slot it deletes again.
+
+## Trenz TE0808 (XCZU4EG) on a TEBF0808 carrier
+
+| Change | Undo |
+|---|---|
+| 18 November 2026: the microSD card erased (on the owner's request) and written by `endpoints/zynqmp/make_sd.sh`: the boot files the card came with (BOOT.BIN, image.ub) and a Debian 12 arm64 root file system from `setup_rootfs.sh`. The card's earlier image is kept as a full copy on the PC, outside the repository | write the copy back with `dd` |
+| On that card, after the first boot: `/etc/network/interfaces` for `end0`, autologin on `ttyPS0`, persistent journal (now in `setup_rootfs.sh`); haveged installed | write the card again |
+
+Nothing written to eFUSEs, BBRAM, the QSPI flash or the U-Boot environment (U-Boot `setenv` only in RAM, never
+`saveenv`). The TE0790 adapters' EEPROMs were never touched.
