@@ -1,0 +1,61 @@
+# FRDM-RW612 with TrustZone: the Aegis prover as a TF-M secure partition (work in progress)
+
+The Zephyr prover (`../prover`) is a single secure image: the firmware that derives the key also measures itself, so
+the gateway labels it "device-key trust". Here the key and the measurements move into the TrustZone secure side,
+under NXP's TF-M (v2.1.4, from the MCUXpresso SDK), and the non-secure image only carries the network.
+
+## What runs where
+
+- **Secure (TF-M + `aegis_pq`, a PSA-RoT partition, SID 0xAE10):**
+  - At initialisation, before the non-secure image runs: SHA-256 of the whole secure partition (`SPE`,
+    0x18001000-0x1809FFFF) and of the whole non-secure partition (`NSPE`, 0x180A0000-0x1839FFFF).
+  - At the first request: the ML-DSA-65 key from ELS (CKDF from the die key, then HMAC, as in `../prover`). Not at
+    initialisation, because TF-M's crypto partition sets ELS up during its own initialisation. Using ELS before that
+    left the chip resetting moments later.
+  - Every request: one line of the Aegis protocol in, the reply out. The code is `../prover/src/aegis_proto.c`, the
+    same code the PC tests run against the gateway.
+- **Non-secure:** a client that passes lines to the partition with `psa_call`. It never holds the key, the seed or the
+  session, and it cannot reach ELS, which TF-M makes secure-privileged only.
+
+The key is the same as the Zephyr prover's (`sha256(pk)` starts `dddd6ba1`): it is bound to the chip, not to the
+firmware. What TrustZone adds is that a compromised **non-secure** image (a bug in the network stack, say) can neither
+use the key nor change a measurement. Someone who reflashes the **secure** image with a debugger still can, as on the
+STM32 with TF-M's development keys, until secure boot is fused on (not done on this bench).
+
+## Build and flash
+
+    cd ~/aegis-tools/mcuxsdk/mcuxsdk
+    export ARMGCC_DIR=~/aegis-tools/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi PATH=~/aegis-tools/zephyr-venv/bin:$PATH
+    west build -p always --sysbuild ~/aegis/endpoints/rw612/tfm/aegis_ns_test --toolchain armgcc --config release \
+        -b frdmrw612 -d ~/aegis-tools/rw-tfm/aegis-test
+    ~/aegis/endpoints/rw612/tfm/flash.sh ~/aegis-tools/rw-tfm/aegis-test/aegis_s/aegis_s.bin \
+        ~/aegis-tools/rw-tfm/aegis-test/aegis_ns_test/aegis_ns_test.bin
+
+Needs the MCUXpresso SDK (`west init -m https://github.com/nxp-mcuxpresso/mcuxsdk-manifests.git`, then
+`west update_board --set board frdmrw612`), CMake 3.30 or newer and Ninja 1.12 (pip, in the west venv), and the Arm GNU
+toolchain 14.2. The projects change no SDK file: TF-M's linker scripts are preprocessed into the build directory, and
+the one TF-M setting changed (the crypto IOVEC scratch, 33000 bytes on this board, lowered to 12288 so the partition
+fits in the 192 KB of secure RAM) is set by a generated `config_tfm_target.h` that includes NXP's file first.
+
+## Safety
+
+Flashing writes only the external flash. The secure build keeps the board port's `-DOCOTP_NV_COUNTERS_RAM_EMULATION=1`:
+without it, TF-M's NV counters would program real OTP fuses (`rw61x/nv_counters.c` stops the build with an `#error`
+then). Never run the SDK's `tfm_secureboot/scripts`: they burn the secure-boot keys and can close the chip's lifecycle.
+`flash.sh` erases the secure and non-secure partitions only, not TF-M's storage, the Wi-Fi firmware or anything else.
+
+## Results so far (evidence/rw612-tfm/)
+
+- NXP's TF-M regression on this board: 164 of 164 tests, 16 of 16 suites.
+- The Aegis partition with the test client: the key from ELS (`rc=0`), a `PQKEY` reply, a 378-byte claims token with
+  profile `aegis-rw612-tfm-v1` and its ML-DSA-65 signature, and the expected errors for the other requests.
+
+## Next
+
+1. The non-secure network prover: ENET, lwIP and a TCP server on port 7444 that pipes lines to the partition.
+2. Hardening TF-M's defaults for this use: today the non-secure side can reach the OTP controller, the FlexSPI
+   controller and the flash caches, and the ELS reset and clock (`target_cfg.c`), and an always-built loader service
+   lets a non-secure caller make secure code write memory. Each has to be closed, or the measurements mean less than
+   they claim.
+3. Gateway profile `aegis-rw612-tfm-v1`, the reference values (`tools`), PC tests, the tamper test, an adversarial
+   review of the secure code, the site.

@@ -24,7 +24,7 @@
 #include "aegis_els.h"
 #include "aegis_proto.h"
 #include "gateway_pk.h"
-#include "sha256.h"
+#include "aegis_sha256.h"
 
 #define PORT 7444
 
@@ -52,7 +52,8 @@ static uint32_t dev_uptime(void)
 	return (uint32_t)(k_uptime_get() / 1000);
 }
 
-static const struct aegis_proto_platform platform = {dev_random, dev_measure, dev_uptime};
+static const struct aegis_proto_platform platform = {
+	.random = dev_random, .measure = dev_measure, .uptime_s = dev_uptime};
 
 static K_SEM_DEFINE(got_ip, 0, 1);
 static struct net_mgmt_event_callback mgmt_cb;

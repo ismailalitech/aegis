@@ -13,7 +13,7 @@
 #include <unistd.h>
 
 #include "aegis_proto.h"
-#include "sha256.h"
+#include "aegis_sha256.h"
 
 static const char *image_path;
 static time_t t0;
@@ -46,7 +46,8 @@ static void unhex(const char *s, uint8_t *o, size_t n)
 
 int main(int argc, char **argv)
 {
-	static const struct aegis_proto_platform pl = {host_random, host_measure, host_uptime};
+	static const struct aegis_proto_platform pl = {
+		.random = host_random, .measure = host_measure, .uptime_s = host_uptime};
 	static char line[AEGIS_LINE_MAX + 2], reply[AEGIS_REPLY_MAX];
 	static char gwhex[2 * 1952 + 8];
 	uint8_t seed[32], root[32], gw[1952], fp[32];

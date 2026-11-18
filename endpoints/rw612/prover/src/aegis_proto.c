@@ -29,7 +29,7 @@
 
 #include "aegis_kmac.h"
 #include "aegis_proto.h"
-#include "sha256.h"
+#include "aegis_sha256.h"
 
 #define KEM_EK_LEN  MLKEM_PUBLICKEYBYTES(768)
 #define KEM_DK_LEN  MLKEM_SECRETKEYBYTES(768)
@@ -37,7 +37,7 @@
 #define PK_LEN      MLDSA_PUBLICKEYBYTES(65)
 #define SIG_LEN     MLDSA_BYTES(65)
 #define CRED_MAX    6144u
-#define CLAIMS_MAX  512u
+#define CLAIMS_MAX  1024u
 
 /* PSA claim numbers (common/psa_token.py), so the gateway's measurement check applies unchanged */
 #define C_PROFILE   (-75000)
@@ -278,32 +278,51 @@ static int verify_framed(const uint8_t *s, const char *label, const uint8_t *m, 
 	return aegis_mldsa_verify_internal(s, msgbuf, l + n, pre, sizeof(pre), gw_pk, 0);
 }
 
+static uint8_t *put_component(uint8_t *p, const char *label, const uint8_t value[32], const char *desc)
+{
+	static const uint8_t zero[32];
+
+	p = cbor_head(p, 5, 5);
+	p = cbor_int(p, 1); p = cbor_text(p, label);
+	p = cbor_int(p, 2); p = cbor_bytes(p, value, 32);
+	p = cbor_int(p, 4); p = cbor_text(p, AEGIS_DEVICE_VERSION);
+	p = cbor_int(p, 5); p = cbor_bytes(p, zero, 32);
+	p = cbor_int(p, 6); p = cbor_text(p, desc);
+	return p;
+}
+
 static size_t make_claims(const uint8_t challenge[32])
 {
-	char desc[64];
-	uint8_t meas[32], zero[32] = {0}, inst[33];
-	size_t img_len;
+	static struct aegis_measurement m[AEGIS_MAX_MEASUREMENTS];
+	uint8_t inst[33];
+	size_t n = 0;
 	uint8_t *p = claims;
 
-	plat->measure(meas, &img_len);
-	snprintf(desc, sizeof(desc), "SHA256 of the firmware image (%u bytes)", (unsigned)img_len);
+	if (plat->measure_all) {
+		n = plat->measure_all(m, AEGIS_MAX_MEASUREMENTS);
+		if (n > AEGIS_MAX_MEASUREMENTS) n = AEGIS_MAX_MEASUREMENTS;
+	} else {
+		size_t img_len;
+
+		plat->measure(m[0].value, &img_len);
+		m[0].label = "APP";
+		snprintf(m[0].desc, sizeof(m[0].desc), "SHA256 of the firmware image (%u bytes)", (unsigned)img_len);
+		n = 1;
+	}
 	inst[0] = 0x02; /* not a PSA IAK-based instance ID: SHA-256 of the ML-DSA key */
 	memcpy(inst + 1, pk_sha256, 32);
 	p = cbor_head(p, 5, 4);
 	p = cbor_int(p, C_PROFILE);
-	p = cbor_text(p, AEGIS_DEVICE_PROFILE);
+	p = cbor_text(p, plat->profile ? plat->profile : AEGIS_DEVICE_PROFILE);
 	p = cbor_int(p, C_CHALLENGE);
 	p = cbor_bytes(p, challenge, 32);
 	p = cbor_int(p, C_INSTANCE);
 	p = cbor_bytes(p, inst, sizeof(inst));
 	p = cbor_int(p, C_SWC);
-	p = cbor_head(p, 4, 1);
-	p = cbor_head(p, 5, 5);
-	p = cbor_int(p, 1); p = cbor_text(p, "APP");
-	p = cbor_int(p, 2); p = cbor_bytes(p, meas, 32);
-	p = cbor_int(p, 4); p = cbor_text(p, AEGIS_DEVICE_VERSION);
-	p = cbor_int(p, 5); p = cbor_bytes(p, zero, 32);
-	p = cbor_int(p, 6); p = cbor_text(p, desc);
+	p = cbor_head(p, 4, n);
+	for (size_t i = 0; i < n; i++) {
+		p = put_component(p, m[i].label, m[i].value, m[i].desc);
+	}
 	return (size_t)(p - claims);
 }
 
@@ -466,8 +485,13 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		if (get_hex(tok[1], nonce, 32) != 32) return snprintf(out, cap, "ERR bad-request");
 		hb_counter++;
 		for (int i = 0; i < 8; i++) ctr[i] = (uint8_t)(hb_counter >> (8 * i));
-		sl = snprintf(status, sizeof(status), "uptime_s=%u;link=1;fw=%s-%s", (unsigned)plat->uptime_s(),
-			      AEGIS_DEVICE_FW, AEGIS_DEVICE_VERSION);
+		if (plat->status) {
+			sl = plat->status(status, sizeof(status));
+		} else {
+			sl = snprintf(status, sizeof(status), "uptime_s=%u;link=1;fw=%s-%s", (unsigned)plat->uptime_s(),
+				      AEGIS_DEVICE_FW, AEGIS_DEVICE_VERSION);
+		}
+		if (sl < 0 || (size_t)sl >= sizeof(status)) return snprintf(out, cap, "ERR status");
 		aegis_kmac256_init(&km, session_key, 32, (const uint8_t *)"aegis-hb-v2", 11);
 		aegis_kmac256_update(&km, nonce, 32);
 		aegis_kmac256_update(&km, ctr, 8);
