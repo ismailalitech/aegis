@@ -9,6 +9,11 @@
  * IO_STRICT_DEVMEM blocks /dev/mem for that page because drivers own parts of it, so UIO is
  * the only route that needs no kernel or device-tree change.
  *
+ * Zynq UltraScale+ (endpoints/zynqmp): the core is at 0x8000_0000 behind an AXI APB bridge, and no driver
+ * claims that page, so AEGIS_PQC_DEVMEM=0x80000000 maps it through /dev/mem instead of UIO (the kernel's
+ * STRICT_DEVMEM only refuses RAM). Only with the accelerator's bitstream loaded: with an empty PL nothing answers
+ * on M_AXI_HPM0_LPD, and the first read hangs the CPU until a power cycle (seen 18 November 2026).
+ *
  * Environment for the liboqs hook (aegis_pqc_keccak_hook):
  *   AEGIS_PQC_KECCAK=hw     every Keccak-f[1600] permutation runs in the fabric
  *   AEGIS_PQC_KECCAK=check  run both fabric and software, abort on any difference
@@ -79,22 +84,32 @@ int aegis_pqc_open(void)
 	int fd;
 	void *m;
 
+	const char *devmem = getenv("AEGIS_PQC_DEVMEM");
+	unsigned long long pa = 0;
+	size_t in_page = PAGE_OFFSET_IN_UIO;
+
 	if (regs) {
 		return 0;
 	}
-	if (find_uio(dev, sizeof(dev)) != 0) {
-		return -1;
+	if (devmem && *devmem) {
+		pa = strtoull(devmem, NULL, 0);
+		in_page = (size_t)(pa & 0xFFFu);
+		fd = open("/dev/mem", O_RDWR | O_SYNC);
+	} else {
+		if (find_uio(dev, sizeof(dev)) != 0) {
+			return -1;
+		}
+		fd = open(dev, O_RDWR | O_SYNC);
 	}
-	fd = open(dev, O_RDWR | O_SYNC);
 	if (fd < 0) {
 		return -1;
 	}
-	m = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	m = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)(pa & ~0xFFFull));
 	close(fd);
 	if (m == MAP_FAILED) {
 		return -1;
 	}
-	regs = (volatile uint32_t *)((volatile uint8_t *)m + PAGE_OFFSET_IN_UIO);
+	regs = (volatile uint32_t *)((volatile uint8_t *)m + in_page);
 	if (regs[R_ID] != AEGIS_PQC_ID && regs[R_ID] != AEGIS_PQC_ID_V2) {
 		fprintf(stderr, "aegis_pqc: unexpected ID 0x%08x\n", (unsigned int)regs[R_ID]);
 		munmap(m, 0x1000);
