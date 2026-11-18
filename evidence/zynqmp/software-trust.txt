@@ -1,0 +1,39 @@
+Zynq UltraScale+ endpoint, steps 1-3 of endpoints/zynqmp/README.md (18 November 2026)
+LAN addresses masked as 192.168.x.x; MAC addresses left out.
+
+1. The chip, read over JTAG (TE0790 on J12, Vivado 2019.1 xsdb on the bench's Windows PC; reads only)
+   jtag targets:  xczu4 (idcode 04721093 irlen 12 fpga), arm_dap (idcode 5ba00477 irlen 4)
+   targets:       PSU / APU: Cortex-A53 #0-#3; RPU: Cortex-R5 #0-#1
+   mrd -force 0xFFCA0040 (CSU IDCODE)        04721093   xczu4
+   mrd -force 0xFFCA0044 (CSU VERSION)       00000513
+   mrd -force 0xFF5E0200 (BOOT_MODE_USER)    00000005   SD1
+   mrd -force 0xFFCC1018 (eFUSE IPDISABLE)   00000100   bit 8 VCU_DIS set, bit 5 GPU_DIS clear, bits 0-3 clear: XCZU4EG
+   TF-A and U-Boot agree: "ATF running on XCZU4EG/silicon v4", "Chip ID: zu4eg".
+   The SoM is powered only after the carrier's S1 button (the 12 V input alone powers the carrier's controller).
+
+2. Linux on the network
+   Boot chain from the card the board came with (not built here): Trenz-modified FSBL 2019.2, TF-A v2.0
+   (xilinx-v2019.2), PMU firmware v1.1, U-Boot 2019.01 (fatload image.ub; bootm), Linux 4.19.0-rt1 (image.ub).
+   Root file system: Debian 12 arm64 from endpoints/zynqmp/setup_rootfs.sh, written by make_sd.sh.
+     dhclient: DHCPACK of 192.168.x.x ... bound to 192.168.x.x
+   First-boot findings, fixed in setup_rootfs.sh:
+     - systemd renames the GEM's eth0 to end0: interfaces names both.
+     - "random: crng init done" came 3 minutes after boot (no TRNG used by this kernel): sshd's start timed out and
+       the first quote took 17 s against the gateway's 20 s timeout. With haveged a quote takes 0.09 s.
+
+3. Software trust at the gateway
+   enroll-pq (the other endpoints' pins kept):
+     enrolled zynqmp-te0808: ML-DSA-65 key sha256 f43f9ebb4df48493a3ebf4140fca63ff075536696737bbab0f997aa52ea12f15
+   The quote's claims (profile aegis-linux-software-v1, instance ID 0x02 || that key hash):
+     BOOT    e1b6ca332d8897b00d5db1b474e73bed187fec26fdb99ac5e7968b645a92a799  SHA256 of BOOT.BIN
+     KERNEL  e60443772a8b81f6c50e043347daec3d99d720916bd4590d28652235299402ab  SHA256 of image.ub
+     PROVER  69e3cc1798daae90de7c5b7c6c667951ffe2e74747d8392eec5bffb5a49642d8  SHA256 of aegis_linux_prover.py
+   aegis-fleet (the policy is reloaded every cycle):
+18:26:21 zynqmp-te0808 ADMITTED (software trust)  [credential: issued session 5b5f0b6e512a...]
+18:26:58 zynqmp-te0808 ADMITTED (software trust)  [credential: valid, heartbeat 1 (uptime_s=529;link=1;fw=linux-0.1.0)]
+18:27:34 zynqmp-te0808 ADMITTED (software trust)  [credential: valid, heartbeat 2 (uptime_s=565;link=1;fw=linux-0.1.0)]
+
+What this shows, and what it does not: the board runs the Aegis protocol and the gateway admits it, provisions an
+ML-KEM session and checks KMAC heartbeats. The key is a file and the measurements are taken by the running Linux,
+so a modified Linux could report false values; hence "software trust". Steps 4-6 move the key to the PUF and the
+proofs into the A53 secure world.
