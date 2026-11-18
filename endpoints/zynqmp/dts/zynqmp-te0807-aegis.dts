@@ -29,6 +29,24 @@
 		device_type = "memory";
 		reg = <0x0 0x0 0x0 0x7ff00000>, <0x8 0x00000000 0x0 0x80000000>;
 	};
+
+	/* OP-TEE (docs/zynqmp-key-design.md): its secure memory and its static shared memory, kept away from U-Boot and
+	 * Linux. The ZynqMP has no TZASC: until the XMPU guards this range (phase C), only this keeps them out. */
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		optee_core@60000000 {
+			reg = <0x0 0x60000000 0x0 0x10000000>;
+			no-map;
+		};
+
+		optee_shm@70000000 {
+			reg = <0x0 0x70000000 0x0 0x10000000>;
+			no-map;
+		};
+	};
 };
 
 &uart0 {

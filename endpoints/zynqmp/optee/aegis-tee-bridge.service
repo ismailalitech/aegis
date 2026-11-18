@@ -1,0 +1,14 @@
+[Unit]
+Description=Aegis bridge to the OP-TEE trusted application (Zynq UltraScale+ endpoint, TrustZone), TCP 7444
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/dev/tee0
+Conflicts=aegis-linux-prover.service
+
+[Service]
+ExecStart=/usr/local/sbin/aegis_tee_bridge 7444
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

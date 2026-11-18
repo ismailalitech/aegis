@@ -1,4 +1,4 @@
-# Zynq UltraScale+ endpoint (18 November 2026: our own boot chain, admitted with software trust)
+# Zynq UltraScale+ endpoint (18 November 2026: OP-TEE with the Aegis TA, admitted as trustzone-devkey)
 
 The board: a Trenz **TEBF0808-04A** UltraITX+ carrier with a **TE0807 (XCZU4EG-1E, 4 GB DDR4)** module under a fan, plus two TE0790
 JTAG adapters (the one with the licence, green dot, on J12 for the MPSoC's JTAG and UART). This endpoint replaces the
@@ -27,6 +27,13 @@ it `zynqmp-te0808`, from before the module was identified; it is a TE0807.) File
   HP0), 100 MHz, in the card's BOOT.BIN; `gateway/pqc/pqc_selftest` with `AEGIS_PQC_DEVMEM=0x80000000` passes on the
   board (`evidence/zynqmp/pl-accelerator.txt`). Only read 0x8000_0000 with this bitstream loaded: with an empty PL
   the read is never answered and the CPU hangs.
+
+- `optee/`: phase A of `docs/zynqmp-key-design.md`. `ta/` is the Aegis trusted application: the RW612's protocol
+  code in OP-TEE, with the key from OP-TEE's system PTA. `bridge/` is the Linux pipe (TCP 7444 to `/dev/tee0`).
+  `build_ta.sh` stages the shared sources and builds the TA, and OP-TEE 4.7 takes it in with `EARLY_TA_PATHS`.
+  TF-A is built with `SPD=opteed`, and the device tree reserves 0x6000_0000-0x7FFF_FFFF. The gateway kind is
+  `aegis-tee`: the profile `aegis-zynqmp-optee-devhuk-v1` ("trustzone-devkey") until the HUK comes from the PUF
+  (phase B). Evidence: `evidence/zynqmp/optee-phase-a.txt`.
 
 A new BOOT.BIN is tried over JTAG into RAM first (`windows/jtag_boot.tcl`), and only then written to the card; the
 previous ones stay on the card (`boot-2019.bin`, the one the board came with; `boot-2025.2-nopl.bin`).

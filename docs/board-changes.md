@@ -19,6 +19,7 @@
 | 18 November 2026, later: `fleet.py` with profile `aegis-rw612-tfm-v1` ("trustzone") and profile pinning; the `frdm-rw612` entry pins that profile and allows SPE and NSPE. Backup `/root/aegis-backup-20261118-063344/` (gateway clock) | copy `fleet.py` and `fleet.json` back from the backup; restart `aegis-fleet` |
 | 18 November 2026, after the security review: `fleet.py` names the ML-KEM key in credentials (`kem_ek_sha3_256`) and `enroll-pq` keeps existing pins; `frdm-rw612` references updated for the reviewed firmware; STM32 board 2's session moved to `/root/aegis-backup-session-20261118-073735/` to re-provision it in the new format. Backup `/root/aegis-backup-20261118-073649/` | copy the files back; restart `aegis-fleet` |
 | 18 November 2026: policy entry `zynqmp-te0808` (kind aegis-linux, BOOT/KERNEL/PROVER allowed) and its key `keys/zynqmp-te0808.mldsa65.pub` (enrolled with `enroll-pq`; the other pins kept). Backup `gateway/policy/fleet.json.bak-20261118-192548` | copy the backup back; remove the key file |
+| 18 November 2026, later: `fleet.py` with the kind `aegis-tee` (OP-TEE profiles); the entry `zynqmp-te0808` moved to that kind, pinned to the `-devhuk` profile, key `keys/zynqmp-te0807-tee.mldsa65.pub`. Backup `/root/aegis-backup-20261118-231911/` | copy the backup back; restart `aegis-fleet` |
 
 Nothing written to eNVM, keys, locks or the SD card's boot and payload partitions.
 
@@ -70,6 +71,7 @@ temporary slot it deletes again.
 | Later that day: the card's BOOT.BIN replaced by ours (`evidence/zynqmp/boot-chain.txt`, sha256 `ddab49f0...`), the card's one kept as `boot-2019.bin`; `boot.scr` added; the prover also measures boot.scr. Gateway policy: the new BOOT and KERNEL values allowed, the 2019 ones removed (backups `fleet.json.bak-20261118-203634`, `-204528`). JTAG boots into RAM set BOOT_MODE_USER (volatile) | copy `boot-2019.bin` over BOOT.BIN, delete boot.scr; restore the policy backup |
 | Later: BOOT.BIN with the accelerator's bitstream (`0f999af3...`; the previous one kept as `boot-2025.2-nopl.bin`); policy BOOT value replaced; `/root/pqc_selftest` on the board | copy `boot-2025.2-nopl.bin` over BOOT.BIN; restore the policy backup |
 | Later: our kernel (Image, `zynqmp-te0807-aegis.dtb`; modules in `/usr/lib/modules/6.12.0-...`) and a boot.scr that boots it (the previous one kept as `boot-k419.scr`); policy KERNEL value replaced | copy `boot-k419.scr` over boot.scr; restore the policy backup |
+| Later: phase A: BOOT.BIN with TF-A (SPD=opteed) and OP-TEE with the Aegis TA (`aab8d7b9...`; the previous one kept as `boot-2025.2-pqc.bin`), a device tree reserving OP-TEE's memory (the previous one kept as `zynqmp-te0807-aegis-noreserve.dtb`), `/usr/local/sbin/aegis_tee_bridge` and its service enabled, the Linux prover disabled | copy the kept files back; `systemctl disable aegis-tee-bridge; systemctl enable aegis-linux-prover` |
 
 Nothing written to eFUSEs, BBRAM, the QSPI flash or the U-Boot environment (U-Boot `setenv` only in RAM, never
 `saveenv`; our U-Boot has no environment at all). The TE0790 adapters' EEPROMs were never touched.
