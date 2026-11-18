@@ -6,7 +6,12 @@ Run it, then tools/gen_diagrams.py.
 """
 import os, re, yaml
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-def rec(name): return [l.rstrip('\n') for l in open(os.path.join(ROOT, 'evidence', 'console', name)) if l.strip()]
+def clean(line):
+    """A log line as drawn: without control characters (a board can emit a NUL on its UART; XML cannot carry it)."""
+    return ''.join(c for c in line.rstrip('\n') if c == '\t' or ord(c) >= 32)
+
+
+def rec(name): return [clean(l) for l in open(os.path.join(ROOT, 'evidence', 'console', name)) if l.strip()]
 def fig(id, title, alt, cmd, lines, callouts, step=3.4, width=900):
     n = 1 + len(lines)
     return {'id': id, 'type': 'terminal', 'title': title, 'alt': alt, 'width': width, 'step': step,
@@ -24,8 +29,8 @@ qvar = rec('quote-variation.txt')
 two = rec('two-boards.txt')
 duo = rec('two-endpoints-demo.txt')
 rw = rec('rw612-endpoint.txt')
-tz = [l.rstrip('\n') for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'trustzone-prover.txt')) if l.strip()]
-prb = [l.rstrip('\n') for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'hardening-probes.txt')) if l.strip()]
+tz = [clean(l) for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'trustzone-prover.txt')) if l.strip()]
+prb = [clean(l) for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'hardening-probes.txt')) if l.strip()]
 
 
 def section(lines, head):

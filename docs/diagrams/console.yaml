@@ -529,7 +529,7 @@
   lines:
   - $ board console (USB serial), after a reset
   - Booting TF-M v2.1.4
-  - "\0[Aegis] partitions measured (SPE, NSPE); the key is made at the first request"
+  - '[Aegis] partitions measured (SPE, NSPE); the key is made at the first request'
   - Creating an empty ITS flash layout.
   - '[INF][PS] Encryption alg: 0x5500100'
   - AEGIS-RW612-TFM-PROVER 0.2.0 (non-secure network side; the key and the proofs are in the secure partition)
