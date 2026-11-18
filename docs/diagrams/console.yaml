@@ -517,3 +517,133 @@
     - 10
     title: Steady
     text: Heartbeats 1, 2, 3 of the new session.
+- id: console-rw612-tz-boot
+  type: terminal
+  title: the FRDM-RW612 starting TF-M and the Aegis partition
+  alt: 'The board console after a reset with TrustZone: TF-M boots, the Aegis partition measures both flash partitions before any non-secure code
+    runs, the non-secure prover starts, the partition derives its key in ELS at the first request, and the network comes up with the MAC address
+    taken from that key.'
+  width: 980
+  step: 3.4
+  height: 344
+  lines:
+  - $ board console (USB serial), after a reset
+  - Booting TF-M v2.1.4
+  - "\0[Aegis] partitions measured (SPE, NSPE); the key is made at the first request"
+  - Creating an empty ITS flash layout.
+  - '[INF][PS] Encryption alg: 0x5500100'
+  - AEGIS-RW612-TFM-PROVER 0.2.0 (non-secure network side; the key and the proofs are in the secure partition)
+  - '[Aegis] key from ELS: rc=0'
+  - 'aegis: mac  2:ae:dd:dd:6b:a1'
+  - Initializing PHY...
+  - 'aegis: address <lan address>, listening on 7444'
+  callouts:
+  - lines:
+    - 1
+    - 1
+    title: TF-M
+    text: NXP's TF-M v2.1.4 boots the secure image.
+  - lines:
+    - 2
+    - 2
+    title: Measured first
+    text: SPE and NSPE are hashed before the non-secure image runs.
+  - lines:
+    - 5
+    - 6
+    title: Non-secure prover, key
+    text: The network side starts; its first request makes the partition derive the key in ELS.
+  - lines:
+    - 7
+    - 9
+    title: On the network
+    text: MAC from the key (the console drops the leading 0), PHY up, DHCP, port 7444.
+- id: console-rw612-tz-probes
+  type: terminal
+  title: non-secure reads of protected peripherals
+  alt: 'A test build of the non-secure prover reads one register of a peripheral at start-up. Under NXP rules the fuse controller and FlexSPI
+    read fine. Under the Aegis rules every protected block faults: the chip restarts and the read never returns. The ENET register the prover
+    needs still reads.'
+  width: 900
+  step: 3.4
+  height: 464
+  lines:
+  - '$ endpoints/rw612/tfm/probe.sh <out> NAME=0xADDR ...   # summarised from the console of each run'
+  - 'NXP rules:   OCOTP          read-ok=1  aegis-probe: read ok, value 0x    2000'
+  - 'NXP rules:   FLEXSPI        read-ok=1  aegis-probe: read ok, value 0xffff8010'
+  - 'Aegis rules: OCOTP          boots=7 probe-attempts=6 read-ok=0'
+  - 'Aegis rules: FLEXSPI        boots=7 probe-attempts=6 read-ok=0'
+  - 'Aegis rules: CACHE64_CTRL0  boots=8 probe-attempts=7 read-ok=0'
+  - 'Aegis rules: TRNG           boots=8 probe-attempts=7 read-ok=0'
+  - 'Aegis rules: RSTCTL0        boots=3 probe-attempts=2 read-ok=0'
+  - 'Aegis rules: CLKCTL0        boots=7 probe-attempts=6 read-ok=0'
+  - 'Aegis rules: SYSCTL0        boots=7 probe-attempts=6 read-ok=0'
+  - 'Aegis rules: MCI_IO_MUX     boots=3 probe-attempts=2 read-ok=0'
+  - 'Aegis rules: SOCCTRL        boots=7 probe-attempts=6 read-ok=0'
+  - 'Aegis rules: SOC_OTP_CTRL   boots=7 probe-attempts=6 read-ok=0'
+  - 'Aegis rules: PMU            boots=7 probe-attempts=6 read-ok=0'
+  - 'Aegis rules: SYSCTL2        boots=7 probe-attempts=6 read-ok=0'
+  - 'Aegis rules: ENET_EIR       boots=1 probe-attempts=1 read-ok=1'
+  callouts:
+  - lines:
+    - 1
+    - 2
+    title: NXP rules
+    text: Non-secure code reads the fuse controller and the flash controller.
+  - lines:
+    - 3
+    - 6
+    title: Aegis rules
+    text: 'Fuses, flash controller, flash cache and TRNG: a fault on every attempt.'
+  - lines:
+    - 7
+    - 9
+    title: Reset, clock, system
+    text: 'They hold the ELS reset and clock: secure only.'
+  - lines:
+    - 10
+    - 14
+    title: After the review
+    text: The pin mux, SOC_TOP (with the SoC OTP controller), PMU and SYSCTL2 too.
+  - lines:
+    - 15
+    - 15
+    title: Control
+    text: The ENET register the prover needs still reads.
+- id: console-rw612-tz-gateway
+  type: terminal
+  title: 'the gateway journal: TrustZone, a modified non-secure image, and back'
+  alt: 'The gateway journal for the RW612 with TrustZone: admitted with trustzone trust, a credential issued through the secure partition and
+    KMAC heartbeats; with a non-secure image changed by one byte, quarantined because the NSPE measurement is not allowed, credential revoked;
+    with the good image back, admitted with a new session.'
+  width: 1100
+  step: 3.4
+  height: 364
+  lines:
+  - $ ssh <gateway> journalctl -u aegis-fleet -o cat | grep frdm-rw612
+  - '06:33:52 frdm-rw612 ADMITTED (trustzone trust)  [credential: issued session f5ba87c14aa9...]'
+  - '06:34:26 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=10;fw=rw612-tfm-0.2.0)]'
+  - '06:35:00 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 2 (requests=12;fw=rw612-tfm-0.2.0)]'
+  - '06:35:48 frdm-rw612 QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]'
+  - '06:36:21 frdm-rw612 QUARANTINED (trustzone trust) component NSPE not allowed (measurement dea2a3b37159...) [credential: revoked]'
+  - '06:36:55 frdm-rw612 QUARANTINED (trustzone trust) component NSPE not allowed (measurement dea2a3b37159...) [credential: revoked]'
+  - '06:37:43 frdm-rw612 QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]'
+  - '06:38:17 frdm-rw612 ADMITTED (trustzone trust)  [credential: issued session 0a3caec39a2c...]'
+  - '06:38:50 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=6;fw=rw612-tfm-0.2.0)]'
+  - '06:39:24 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 2 (requests=8;fw=rw612-tfm-0.2.0)]'
+  callouts:
+  - lines:
+    - 1
+    - 3
+    title: TrustZone admitted
+    text: A credential through the secure partition, then heartbeats.
+  - lines:
+    - 4
+    - 6
+    title: Modified non-secure image
+    text: 'Unreachable while it is flashed, then NSPE not allowed: credential revoked.'
+  - lines:
+    - 7
+    - 10
+    title: Good image back
+    text: Flashed again, then admitted with a new session and heartbeats.

@@ -24,6 +24,8 @@ qvar = rec('quote-variation.txt')
 two = rec('two-boards.txt')
 duo = rec('two-endpoints-demo.txt')
 rw = rec('rw612-endpoint.txt')
+tz = [l.rstrip('\n') for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'trustzone-prover.txt')) if l.strip()]
+prb = [l.rstrip('\n') for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'hardening-probes.txt')) if l.strip()]
 
 
 def section(lines, head):
@@ -40,6 +42,16 @@ def section(lines, head):
 rw_boot = [re.sub(r'^\[\d\d:\d\d:\d\d\.\d{3},\d{3}\] <inf> ', '', l) for l in section(rw, '# Board console')]  # Zephyr's timestamps
 rw_pc = section(rw, '# From the PC')
 rw_gw = section(rw, '# Gateway')
+tz_boot = section(tz, '# Boot')
+tz_gw = section(tz, '# Gateway journal')
+# the probe table: NXP's rules, then every Aegis-rules probe line (not the gateway sections); the ENET control once
+prb_h = [x.replace('## ', '# ', 1) if x.startswith('## ') else x for x in prb]
+PROBED = ('OCOTP', 'FLEXSPI', 'CACHE64_CTRL0', 'TRNG', 'RSTCTL0', 'CLKCTL0', 'SYSCTL0', 'MCI_IO_MUX', 'SOCCTRL',
+          'SOC_OTP_CTRL', 'PMU', 'SYSCTL2')
+tz_probe = ['NXP rules:   ' + l for l in section(prb_h, "# NXP") if l.split()[0] in ('OCOTP', 'FLEXSPI')]
+for head in ('# Aegis target_cfg.c', '# Stage B', '# After the security review'):
+    tz_probe += ['Aegis rules: ' + l for l in section(prb_h, head) if l.split()[0] in PROBED]
+tz_probe += ['Aegis rules: ' + [l for l in section(prb_h, '# After the security review') if l.startswith('ENET_EIR')][0]]
 
 figs = [
  fig('console-demo-journal', 'gateway journal during the demo',
@@ -150,6 +162,33 @@ figs = [
       {'lines': [4, 6], 'title': 'Modified image', 'text': 'The key still signs, but APP is not allowed: quarantined, credential revoked.'},
       {'lines': [7, 7], 'title': 'Good image back', 'text': 'Admitted again with a new session.'},
       {'lines': [8, 10], 'title': 'Steady', 'text': 'Heartbeats 1, 2, 3 of the new session.'}], width=1100),
+ fig('console-rw612-tz-boot', 'the FRDM-RW612 starting TF-M and the Aegis partition',
+     'The board console after a reset with TrustZone: TF-M boots, the Aegis partition measures both flash partitions '
+     'before any non-secure code runs, the non-secure prover starts, the partition derives its key in ELS at the first '
+     'request, and the network comes up with the MAC address taken from that key.',
+     '$ board console (USB serial), after a reset', tz_boot,
+     [{'lines': [1, 1], 'title': 'TF-M', 'text': "NXP's TF-M v2.1.4 boots the secure image."},
+      {'lines': [2, 2], 'title': 'Measured first', 'text': 'SPE and NSPE are hashed before the non-secure image runs.'},
+      {'lines': [5, 6], 'title': 'Non-secure prover, key', 'text': 'The network side starts; its first request makes the partition derive the key in ELS.'},
+      {'lines': [7, 9], 'title': 'On the network', 'text': 'MAC from the key (the console drops the leading 0), PHY up, DHCP, port 7444.'}], width=980),
+ fig('console-rw612-tz-probes', 'non-secure reads of protected peripherals',
+     'A test build of the non-secure prover reads one register of a peripheral at start-up. Under NXP rules the fuse '
+     'controller and FlexSPI read fine. Under the Aegis rules every protected block faults: the chip restarts and the '
+     'read never returns. The ENET register the prover needs still reads.',
+     '$ endpoints/rw612/tfm/probe.sh <out> NAME=0xADDR ...   # summarised from the console of each run', tz_probe,
+     [{'lines': [1, 2], 'title': 'NXP rules', 'text': 'Non-secure code reads the fuse controller and the flash controller.'},
+      {'lines': [3, 6], 'title': 'Aegis rules', 'text': 'Fuses, flash controller, flash cache and TRNG: a fault on every attempt.'},
+      {'lines': [7, 9], 'title': 'Reset, clock, system', 'text': 'They hold the ELS reset and clock: secure only.'},
+      {'lines': [10, 14], 'title': 'After the review', 'text': 'The pin mux, SOC_TOP (with the SoC OTP controller), PMU and SYSCTL2 too.'},
+      {'lines': [15, 15], 'title': 'Control', 'text': 'The ENET register the prover needs still reads.'}], width=900),
+ fig('console-rw612-tz-gateway', 'the gateway journal: TrustZone, a modified non-secure image, and back',
+     'The gateway journal for the RW612 with TrustZone: admitted with trustzone trust, a credential issued through the '
+     'secure partition and KMAC heartbeats; with a non-secure image changed by one byte, quarantined because the NSPE '
+     'measurement is not allowed, credential revoked; with the good image back, admitted with a new session.',
+     '$ ssh <gateway> journalctl -u aegis-fleet -o cat | grep frdm-rw612', tz_gw,
+     [{'lines': [1, 3], 'title': 'TrustZone admitted', 'text': 'A credential through the secure partition, then heartbeats.'},
+      {'lines': [4, 6], 'title': 'Modified non-secure image', 'text': 'Unreachable while it is flashed, then NSPE not allowed: credential revoked.'},
+      {'lines': [7, 10], 'title': 'Good image back', 'text': 'Flashed again, then admitted with a new session and heartbeats.'}], width=1100),
 ]
 yaml.safe_dump(figs, open(os.path.join(ROOT, 'docs', 'diagrams', 'console.yaml'), 'w'), sort_keys=False, width=140, allow_unicode=True)
 print(len(figs), 'console figures')
