@@ -1,0 +1,21 @@
+# sudo tests/host/test_enforcement.sh with the ruleset before the reply fix (aegis.nft of 2026-11-17), 2026-11-18
+
+-- an endpoint that has not attested
+PASS ping the network (block)
+PASS TCP to the network (block)
+PASS TCP to the gateway quote port (allow)
+FAIL the gateway reaches the endpoint's prover (attestation) (wanted allow, got block)
+-- admitted
+PASS ping the network (allow)
+PASS TCP to the network (allow)
+-- a long-lived connection, then quarantine
+PASS the open connection is cut within 1 s of quarantine
+-- quarantined again
+PASS new TCP to the network (block)
+PASS ping the network (block)
+PASS TCP to the gateway quote port (allow)
+FAIL the gateway still attests the quarantined endpoint (wanted allow, got block)
+PASS the endpoint reaches another gateway port (SSH) (block)
+-- re-admitted
+PASS TCP to the network (allow)
+passed 11, failed 2

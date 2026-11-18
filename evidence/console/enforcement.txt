@@ -1,0 +1,21 @@
+# sudo tests/host/test_enforcement.sh, 2026-11-18, with the gateway attesting the endpoint (the reply fix)
+
+-- an endpoint that has not attested
+PASS ping the network (block)
+PASS TCP to the network (block)
+PASS TCP to the gateway quote port (allow)
+PASS the gateway reaches the endpoint's prover (attestation) (allow)
+-- admitted
+PASS ping the network (allow)
+PASS TCP to the network (allow)
+-- a long-lived connection, then quarantine
+PASS the open connection is cut within 1 s of quarantine
+-- quarantined again
+PASS new TCP to the network (block)
+PASS ping the network (block)
+PASS TCP to the gateway quote port (allow)
+PASS the gateway still attests the quarantined endpoint (allow)
+PASS the endpoint reaches another gateway port (SSH) (block)
+-- re-admitted
+PASS TCP to the network (allow)
+passed 13, failed 0
