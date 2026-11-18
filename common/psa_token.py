@@ -89,16 +89,32 @@ def parse(token):
         raise TokenError("protected header is not a map")
     if hdr.get(1) != -7:
         raise TokenError("algorithm is not ES256 (got %r)" % hdr.get(1))
-    raw = cbor.loads(payload)
+    return protected, payload, signature, claims_from_map(cbor.loads(payload))
+
+
+def claims_from_map(raw):
+    """PSA claim keys (numbers) to names, as in parse()."""
     if not isinstance(raw, dict):
         raise TokenError("claims are not a map")
     claims = {}
     for k, v in raw.items():
         name = CLAIMS.get(k, str(k))
         if name == "sw_components":
+            if not isinstance(v, list) or not all(isinstance(c, dict) for c in v):
+                raise TokenError("sw_components is not a list of maps")
             v = [{SWC.get(a, str(a)): b for a, b in comp.items()} for comp in v]
         claims[name] = v
-    return protected, payload, signature, claims
+    return claims
+
+
+def parse_plain(token):
+    """Claims of an unsigned CBOR claims map (kind aegis-linux: the ML-DSA-65 signature over it is the only
+    signature, and it is checked by the caller)."""
+    try:
+        raw = cbor.loads(token)
+    except Exception as e:  # noqa: BLE001 - any decoding failure is a bad token
+        raise TokenError("claims do not decode: %s" % e)
+    return claims_from_map(raw)
 
 
 def verify(token, pub_pem, ecdsa_verify):

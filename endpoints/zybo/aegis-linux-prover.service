@@ -1,0 +1,15 @@
+[Unit]
+Description=Aegis prover (Linux endpoint, software trust), TCP 7444
+After=network-online.target boot-firmware.mount
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/aegis-prover/aegis_linux_prover.py --state /var/lib/aegis-prover \
+    --gateway-pk /etc/aegis-prover/gateway.mldsa65.pub \
+    --measure BOOT=/boot/firmware/boot.bin,/boot/firmware/u-boot.img \
+    --measure KERNEL=/boot/firmware/zImage,/boot/firmware/zynq-zybo-z7.dtb,/boot/firmware/boot.scr
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
