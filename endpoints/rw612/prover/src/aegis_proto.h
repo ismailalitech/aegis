@@ -23,7 +23,14 @@ struct aegis_measurement {
 	uint8_t value[32];
 	char desc[64];
 };
+/* The defaults fit every endpoint but the ZynqMP TA, whose build raises both (endpoints/zynqmp/optee/ta/sub.mk).
+ * The claims take 121 bytes plus, per component, 81 + its label + its description (2 more from 24 characters). */
+#ifndef AEGIS_MAX_MEASUREMENTS
 #define AEGIS_MAX_MEASUREMENTS 4
+#endif
+#ifndef AEGIS_CLAIMS_MAX
+#define AEGIS_CLAIMS_MAX 1024u
+#endif
 
 struct aegis_proto_platform {
 	int (*random)(uint8_t *out, size_t n);           /* hardware randomness; 0 on success */

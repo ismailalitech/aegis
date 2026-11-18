@@ -7,12 +7,17 @@
  * (endpoints/zynqmp/optee/bridge): it never holds the key, the seed or the session.
  *
  * Keys: seed and provisioning root come from OP-TEE's system PTA (PTA_SYSTEM_DERIVE_TA_UNIQUE_KEY), that is from the
- * hardware unique key (HUK) and this TA's UUID. Phase A: the HUK is OP-TEE's default (zero on this platform), so the
- * key is the same on every chip and the profile says so ("-devhuk"); phase B gives OP-TEE a HUK derived in the FSBL
- * from the PUF-protected device key.
+ * hardware unique key (HUK) and this TA's UUID. Where the HUK comes from is asked of OP-TEE's "aegis.boot" PTA
+ * (aegis_boot_pta.h, added by ../os-patches), and the profile follows:
+ *   aegis-zynqmp-optee-v1         the FSBL handed over a seed derived under the PUF-protected device key (flags
+ *                                 SEED_VALID and KEY_BH_BLACK) and OP-TEE made its HUK from it: the key belongs to
+ *                                 the chip;
+ *   aegis-zynqmp-optee-devhuk-v1  anything else (no hand-off, no such seed, or an OP-TEE without the PTA): the HUK
+ *                                 is OP-TEE's default (zero on this platform), the same on every chip.
  *
- * Measurements: phase A has no hand-off from the boot chain yet. The claims carry one component, BOOTCHAIN, with a
- * zero value and the description "not measured", so a verifier cannot mistake it for a measurement.
+ * Measurements: the hand-off's list, as the FSBL took it. Without a hand-off the claims carry one component,
+ * BOOTCHAIN, with a zero value and the description "not measured", so a verifier cannot mistake it for a
+ * measurement.
  */
 #include <string.h>
 #include <stdio.h>
@@ -21,14 +26,28 @@
 
 #include "aegis_ta.h"
 #include "user_ta_header_defines.h"
+#include "aegis_boot_pta.h"
 #include "aegis_proto.h"
 #include "gateway_pk.h"
 
-#ifndef AEGIS_ZYNQMP_PROFILE
-#define AEGIS_ZYNQMP_PROFILE "aegis-zynqmp-optee-devhuk-v1"
-#endif
+#define PROFILE_CHIP   "aegis-zynqmp-optee-v1"
+#define PROFILE_DEVHUK "aegis-zynqmp-optee-devhuk-v1"
+
+/* every entry of the hand-off is reported, and the claims fit their buffer (aegis_proto.c writes them without a
+ * length check): 121 bytes with the longer profile name, then per component 81 with a 5-character version, a label
+ * of up to 15 and a description of up to 63 characters behind a 2-byte head */
+_Static_assert(AEGIS_MAX_MEASUREMENTS >= AEGIS_HANDOFF_MAX_MEAS, "measurements");
+_Static_assert(sizeof(PROFILE_DEVHUK) - 1 <= 28 && sizeof(AEGIS_DEVICE_VERSION) - 1 <= 23, "claims header");
+_Static_assert(AEGIS_CLAIMS_MAX >= 121 + AEGIS_MAX_MEASUREMENTS * (76 + sizeof(AEGIS_DEVICE_VERSION) - 1 + 15 + 2 + 63),
+	       "claims buffer");
+_Static_assert(AEGIS_REPLY_MAX >= 2 * (AEGIS_CLAIMS_MAX + 3309) + 64, "PQCHAL reply");
 
 static const uint8_t gateway_pk[1952] = AEGIS_GATEWAY_PK;
+/* what OP-TEE kept of the FSBL's hand-off; all zero (AEGIS_BOOT_HO_ABSENT) when there is none */
+static struct {
+	uint32_t status, flags, bh_key_src, csu_status, count, huk;
+	struct aegis_ho_meas meas[AEGIS_HANDOFF_MAX_MEAS];
+} boot;
 static int ready;
 static uint32_t served;
 static char line[AEGIS_TA_LINE_MAX + 1];
@@ -56,12 +75,26 @@ static uint32_t s_uptime_s(void)
 
 static size_t s_measure_all(struct aegis_measurement *m, size_t max)
 {
+	size_t n;
+
 	if (max < 1)
 		return 0;
-	m[0].label = "BOOTCHAIN";
-	memset(m[0].value, 0, sizeof(m[0].value));
-	snprintf(m[0].desc, sizeof(m[0].desc), "not measured (phase A: no boot hand-off)");
-	return 1;
+	if (boot.status != AEGIS_BOOT_HO_VALID || boot.count == 0) {
+		m[0].label = "BOOTCHAIN";
+		memset(m[0].value, 0, sizeof(m[0].value));
+		snprintf(m[0].desc, sizeof(m[0].desc), "not measured (%s)",
+			 boot.status == AEGIS_BOOT_HO_VALID ? "the boot hand-off has no measurement" :
+			 boot.status == AEGIS_BOOT_HO_REJECTED ? "boot hand-off rejected" :
+			 "phase A: no boot hand-off");
+		return 1;
+	}
+	for (n = 0; n < boot.count && n < max; n++) {
+		m[n].label = boot.meas[n].label;
+		memcpy(m[n].value, boot.meas[n].value, sizeof(m[n].value));
+		snprintf(m[n].desc, sizeof(m[n].desc), "SHA3-384/256 of partition %s as stored (%u bytes)",
+			 boot.meas[n].label, (unsigned int)boot.meas[n].length);
+	}
+	return n;
 }
 
 static int s_status(char *buf, size_t cap)
@@ -69,11 +102,11 @@ static int s_status(char *buf, size_t cap)
 	return snprintf(buf, cap, "requests=%u;fw=zynqmp-optee-%s", (unsigned int)served, TA_VERSION);
 }
 
-static const struct aegis_proto_platform platform = {
+static struct aegis_proto_platform platform = {
 	.random = s_random,
 	.measure = s_measure_unused,
 	.uptime_s = s_uptime_s,
-	.profile = AEGIS_ZYNQMP_PROFILE,
+	.profile = PROFILE_DEVHUK, /* query_boot() decides */
 	.measure_all = s_measure_all,
 	.status = s_status,
 };
@@ -104,11 +137,55 @@ static TEE_Result derive(const char *label, uint8_t out[32])
 	return res;
 }
 
+/* Ask OP-TEE's aegis.boot PTA for the hand-off. An OP-TEE without it (TEE_ERROR_ITEM_NOT_FOUND) or any failure
+ * leaves "no hand-off". */
+static void query_boot(void)
+{
+	static const TEE_UUID pta = PTA_AEGIS_BOOT_UUID;
+	const uint32_t need = AEGIS_HO_SEED_VALID | AEGIS_HO_KEY_BH_BLACK;
+	TEE_TASessionHandle s = TEE_HANDLE_NULL;
+	TEE_Param p[TEE_NUM_PARAMS] = { };
+	uint32_t ro = 0;
+	TEE_Result res;
+
+	memset(&boot, 0, sizeof(boot));
+	platform.profile = PROFILE_DEVHUK;
+	res = TEE_OpenTASession(&pta, TEE_TIMEOUT_INFINITE, 0, NULL, &s, &ro);
+	if (res != TEE_SUCCESS) {
+		IMSG("Aegis TA: no aegis.boot PTA (%#x)", (unsigned int)res);
+		return;
+	}
+	p[3].memref.buffer = boot.meas;
+	p[3].memref.size = sizeof(boot.meas);
+	res = TEE_InvokeTACommand(s, TEE_TIMEOUT_INFINITE, PTA_AEGIS_BOOT_CMD_GET_INFO,
+				  TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_OUTPUT, TEE_PARAM_TYPE_VALUE_OUTPUT,
+						  TEE_PARAM_TYPE_VALUE_OUTPUT, TEE_PARAM_TYPE_MEMREF_OUTPUT),
+				  p, &ro);
+	TEE_CloseTASession(s);
+	if (res != TEE_SUCCESS || p[2].value.a > AEGIS_HANDOFF_MAX_MEAS ||
+	    p[3].memref.size != p[2].value.a * sizeof(boot.meas[0])) {
+		EMSG("Aegis TA: aegis.boot failed (%#x)", (unsigned int)res);
+		memset(&boot, 0, sizeof(boot));
+		return;
+	}
+	boot.status = p[0].value.a;
+	boot.flags = p[0].value.b;
+	boot.bh_key_src = p[1].value.a;
+	boot.csu_status = p[1].value.b;
+	boot.count = p[2].value.a;
+	boot.huk = p[2].value.b;
+	for (uint32_t i = 0; i < AEGIS_HANDOFF_MAX_MEAS; i++)
+		boot.meas[i].label[sizeof(boot.meas[i].label) - 1] = '\0';
+	if (boot.status == AEGIS_BOOT_HO_VALID && boot.huk == AEGIS_BOOT_HUK_SEED && (boot.flags & need) == need)
+		platform.profile = PROFILE_CHIP;
+}
+
 TEE_Result TA_CreateEntryPoint(void)
 {
 	uint8_t seed[32], root[32];
 	TEE_Result res;
 
+	query_boot();
 	res = derive("aegis-zynqmp-mldsa65-seed-v1", seed);
 	if (res == TEE_SUCCESS)
 		res = derive("aegis-zynqmp-provision-root-v1", root);
@@ -118,7 +195,9 @@ TEE_Result TA_CreateEntryPoint(void)
 	TEE_MemFill(root, 0, sizeof(root));
 	ready = (res == TEE_SUCCESS);
 	if (ready)
-		IMSG("Aegis TA: key ready");
+		IMSG("Aegis TA: key ready, profile %s, hand-off status %u flags %#x bh_key_src %#x csu_status %#x, "
+		     "%u measurements", platform.profile, (unsigned int)boot.status, (unsigned int)boot.flags,
+		     (unsigned int)boot.bh_key_src, (unsigned int)boot.csu_status, (unsigned int)boot.count);
 	else
 		EMSG("Aegis TA: key FAILED");
 	return res;

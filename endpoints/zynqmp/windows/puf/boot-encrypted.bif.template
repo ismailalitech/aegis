@@ -1,0 +1,31 @@
+// Aegis ZynqMP phase B: BOOT.BIN with the FSBL (and the PMU firmware, see below) encrypted under the red key,
+// key source = black key in the boot header, PUF helper data in the boot header (boot-header mode, no eFUSE).
+// Filled in by make_boot_encrypted.py; @...@ are placeholders. bootgen -arch zynqmp -image <this> -o BOOT.BIN -w on
+//
+// Syntax (bootgen 2025.2, UG1283 "Attributes", and `bootgen -arch zynqmp -bif_help <attr>`):
+//   [fsbl_config] puf4kmode, shutter=<PUF_SHUT value>, pufhd_bh   (+ bh_auth_enable in the -Auth bh variant)
+//   [keysrc_encryption] bh_blk_key      key source: black key stored in the boot header
+//   [bh_keyfile] / [bh_key_iv] / [puf_file]   black key (32 bytes), its IV (12 bytes), helper data (1544 bytes)
+//   [bootloader, ..., encryption=aes, aeskeyfile=red.nky]   Key 0 of red.nky = the red key
+// The other partitions are exactly those of ../../boot.bif, unencrypted.
+// [pmufw_image]: the boot ROM loads it as part of the boot-loader partition, and bootgen encrypts it together with
+// the FSBL under the same key file (bootgen zynqmp/src/encryption-zynqmp.cpp: "Encrypting the PMU Firmware").
+// It needs no attribute of its own. To keep it plain it would have to be loaded by the FSBL instead
+// ([destination_cpu=pmu] pmufw.elf), which changes the boot flow, so that is not done.
+// bootgen 2025.2 prints "[WARNING]: BIF attribute error !!! [keysrc_encryption] not supported for the specified
+// architecture" for zynqmp: a bug in its parser (parser/bif.y line 361-362: the condition `!= ZYNQ || != ZYNQMP` is always true). The key source is
+// applied anyway; make_boot_encrypted.py checks it in the boot header (offset 0x28 = 0xA35C7C53, BH_BLACK_KEY).
+the_ROM_image:
+{
+	[fsbl_config] @BH_AUTH@puf4kmode, shutter=@SHUTTER@, pufhd_bh
+@AUTH_LINES@	[keysrc_encryption] bh_blk_key
+	[bh_keyfile] black_key.txt
+	[bh_key_iv] black_iv.txt
+	[puf_file] helperdata.txt
+	[bootloader, destination_cpu=a53-0, @FSBL_AUTH@encryption=aes, aeskeyfile=red.nky] fsbl.elf
+	[pmufw_image] pmufw.elf
+	[destination_device=pl] system.bit
+	[destination_cpu=a53-0, exception_level=el-3, trustzone] bl31.elf
+	[destination_cpu=a53-0, exception_level=el-1, trustzone, load=0x60000000, startup=0x60000000] tee-raw.bin
+	[destination_cpu=a53-0, exception_level=el-2] u-boot.elf
+}

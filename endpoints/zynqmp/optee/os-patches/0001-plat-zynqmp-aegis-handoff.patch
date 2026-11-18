@@ -1,0 +1,681 @@
+diff --git a/core/arch/arm/plat-zynqmp/aegis_boot_pta.c b/core/arch/arm/plat-zynqmp/aegis_boot_pta.c
+new file mode 100644
+index 0000000..b0c92e9
+--- /dev/null
++++ b/core/arch/arm/plat-zynqmp/aegis_boot_pta.c
+@@ -0,0 +1,75 @@
++// SPDX-License-Identifier: Apache-2.0
++/*
++ * Pseudo trusted application "aegis.boot" (aegis_boot_pta.h): the flags and measurements of the FSBL's hand-off
++ * page, for the Aegis TA only. The seed is not kept in a form this code can reach (aegis_handoff.c).
++ */
++#include <kernel/pseudo_ta.h>
++#include <kernel/ts_manager.h>
++#include <kernel/user_access.h>
++#include <kernel/user_ta.h>
++#include <string.h>
++#include <tee_api_types.h>
++
++#include "aegis_boot_pta.h"
++#include "aegis_handoff.h"
++
++static TEE_Result open_session(uint32_t param_types __unused, TEE_Param params[TEE_NUM_PARAMS] __unused,
++			       void **sess_ctx __unused)
++{
++	static const TEE_UUID client = PTA_AEGIS_BOOT_CLIENT_UUID;
++	struct ts_session *s = ts_get_calling_session();
++
++	/* no calling session: the request comes from the normal world */
++	if (!s || !is_user_ta_ctx(s->ctx) || memcmp(&s->ctx->uuid, &client, sizeof(client)))
++		return TEE_ERROR_ACCESS_DENIED;
++
++	return TEE_SUCCESS;
++}
++
++static TEE_Result get_info(uint32_t param_types, TEE_Param params[TEE_NUM_PARAMS])
++{
++	const uint32_t exp_pt = TEE_PARAM_TYPES(TEE_PARAM_TYPE_VALUE_OUTPUT, TEE_PARAM_TYPE_VALUE_OUTPUT,
++						TEE_PARAM_TYPE_VALUE_OUTPUT, TEE_PARAM_TYPE_MEMREF_OUTPUT);
++	const struct aegis_ho_info *info = NULL;
++	uint32_t huk_source = 0;
++	size_t size = 0;
++
++	if (param_types != exp_pt)
++		return TEE_ERROR_BAD_PARAMETERS;
++	info = aegis_handoff_info(&huk_source);
++	if (!info)
++		return TEE_ERROR_BAD_STATE;
++
++	params[0].value.a = info->status;
++	params[0].value.b = info->flags;
++	params[1].value.a = info->bh_key_src;
++	params[1].value.b = info->csu_status;
++	params[2].value.a = info->count;
++	params[2].value.b = huk_source;
++
++	size = info->count * sizeof(info->meas[0]);
++	if (params[3].memref.size < size) {
++		params[3].memref.size = size;
++		return TEE_ERROR_SHORT_BUFFER;
++	}
++	params[3].memref.size = size;
++	if (!size)
++		return TEE_SUCCESS;
++
++	/* the caller is a user TA: its buffer is user memory */
++	return copy_to_user(params[3].memref.buffer, info->meas, size);
++}
++
++static TEE_Result invoke_command(void *sess_ctx __unused, uint32_t cmd_id, uint32_t param_types,
++				 TEE_Param params[TEE_NUM_PARAMS])
++{
++	if (cmd_id == PTA_AEGIS_BOOT_CMD_GET_INFO)
++		return get_info(param_types, params);
++
++	return TEE_ERROR_NOT_SUPPORTED;
++}
++
++pseudo_ta_register(.uuid = PTA_AEGIS_BOOT_UUID, .name = PTA_AEGIS_BOOT_NAME,
++		   .flags = PTA_DEFAULT_FLAGS,
++		   .open_session_entry_point = open_session,
++		   .invoke_command_entry_point = invoke_command);
+diff --git a/core/arch/arm/plat-zynqmp/aegis_boot_pta.h b/core/arch/arm/plat-zynqmp/aegis_boot_pta.h
+new file mode 100644
+index 0000000..fd0cfea
+--- /dev/null
++++ b/core/arch/arm/plat-zynqmp/aegis_boot_pta.h
+@@ -0,0 +1,42 @@
++/* SPDX-License-Identifier: Apache-2.0
++ *
++ * OP-TEE pseudo trusted application "aegis.boot" on the Zynq UltraScale+ Aegis endpoint: what OP-TEE kept of the
++ * FSBL's hand-off page (aegis_zynqmp_handoff.h), for the Aegis TA only. The seed is never returned.
++ *
++ * Shared by OP-TEE (endpoints/zynqmp/optee/os-patches carries a copy) and the TA (endpoints/zynqmp/optee/ta).
++ */
++#ifndef AEGIS_BOOT_PTA_H
++#define AEGIS_BOOT_PTA_H
++
++#include "aegis_zynqmp_handoff.h"
++
++#define PTA_AEGIS_BOOT_UUID \
++	{ 0xc452052e, 0x9c90, 0x40fc, { 0xbf, 0x0f, 0x70, 0xcc, 0xca, 0xbf, 0x18, 0xdd } }
++#define PTA_AEGIS_BOOT_NAME "aegis.boot"
++
++/* The only client, the Aegis TA (AEGIS_TA_UUID in aegis_ta.h). Any other caller, and the normal world, get
++ * TEE_ERROR_ACCESS_DENIED at open session. */
++#define PTA_AEGIS_BOOT_CLIENT_UUID \
++	{ 0xb56a99ca, 0x1c3c, 0x40c8, { 0xaf, 0x55, 0xb8, 0xdd, 0x5e, 0xe0, 0x32, 0x13 } }
++
++/*
++ * PTA_AEGIS_BOOT_CMD_GET_INFO
++ *   params[0] value output   a: status (AEGIS_BOOT_HO_*), b: the hand-off's flags (AEGIS_HO_*)
++ *   params[1] value output   a: bh_key_src, b: csu_status
++ *   params[2] value output   a: count, b: what OP-TEE derives its keys and the TAs' keys from (AEGIS_BOOT_HUK_*)
++ *   params[3] memref output  count entries of struct aegis_ho_meas, each label NUL-terminated; its size is set to
++ *                            count * sizeof(struct aegis_ho_meas) (TEE_ERROR_SHORT_BUFFER if the buffer is smaller)
++ * Unless the status is AEGIS_BOOT_HO_VALID, the flags, bh_key_src, csu_status and count are 0.
++ */
++#define PTA_AEGIS_BOOT_CMD_GET_INFO 0
++
++#define AEGIS_BOOT_HO_ABSENT   0u /* no magic in the page: the FSBL handed nothing over */
++#define AEGIS_BOOT_HO_VALID    1u
++#define AEGIS_BOOT_HO_REJECTED 2u /* magic found, but version, count or digest wrong: nothing of it is used */
++
++#define AEGIS_BOOT_HUK_DEFAULT 0u /* OP-TEE's development hardware unique key (16 zero bytes), the same on every
++                                   * chip */
++#define AEGIS_BOOT_HUK_SEED    1u /* 32 bytes derived from the hand-off's seed (AEGIS_HO_SEED_VALID and
++                                   * AEGIS_HO_KEY_BH_BLACK were both set) */
++
++#endif
+diff --git a/core/arch/arm/plat-zynqmp/aegis_handoff.c b/core/arch/arm/plat-zynqmp/aegis_handoff.c
+new file mode 100644
+index 0000000..0038cd7
+--- /dev/null
++++ b/core/arch/arm/plat-zynqmp/aegis_handoff.c
+@@ -0,0 +1,199 @@
++// SPDX-License-Identifier: Apache-2.0
++/*
++ * Aegis on the Zynq UltraScale+: the FSBL's hand-off page (aegis_zynqmp_handoff.h) and the hardware unique key.
++ *
++ * The page is the last one of TZDRAM, so it lies in the pool that TA memory comes from. Two steps, both on the
++ * primary CPU before the first return to the normal world:
++ *   preinit_early  the first initcall. The page is allocated in the pool and never freed, so no TA can ever get
++ *                  it, then copied into .bss and wiped. Before this point the pool has only served the core's own
++ *                  early allocations, lowest address first.
++ *   service_init   the hashes are registered by then (service_init_crypto). Magic, version, count and digest are
++ *                  checked. With a seed that belongs to the chip, a 32-byte root and the hardware unique key are
++ *                  derived from it (aegis_handoff_kdf.h). The copy of the page, seed included, is wiped.
++ * A key request between the two steps runs the second one itself, and fails while the hashes are missing. The
++ * state does not change after initialisation, so it has no lock.
++ *
++ * Keys. OP-TEE derives every key of its own and of the TAs with huk_subkey_derive(), an HMAC-SHA-256 keyed with
++ * the 16-byte hardware unique key: 128 bits at most, whatever the seed holds. With a seed that belongs to the chip
++ * this file replaces that function (it is a weak alias) by the same construction keyed with the 32-byte root.
++ * Without such a seed it calls OP-TEE's own function, with OP-TEE's default key: nothing changes.
++ */
++#include <assert.h>
++#include <config.h>
++#include <crypto/crypto.h>
++#include <initcall.h>
++#include <kernel/huk_subkey.h>
++#include <kernel/panic.h>
++#include <kernel/tee_common_otp.h>
++#include <mm/core_memprot.h>
++#include <mm/core_mmu.h>
++#include <mm/phys_mem.h>
++#include <platform_config.h>
++#include <string.h>
++#include <string_ext.h>
++#include <tee/tee_cryp_utl.h>
++#include <trace.h>
++#include <utee_defines.h>
++
++#include "aegis_handoff.h"
++#include "aegis_handoff_kdf.h"
++
++static_assert(AEGIS_HANDOFF_SIZE == SMALL_PAGE_SIZE);
++static_assert(AEGIS_HANDOFF_PA >= TZDRAM_BASE + TEE_RAM_VA_SIZE &&
++	      AEGIS_HANDOFF_PA + AEGIS_HANDOFF_SIZE <= TZDRAM_BASE + TZDRAM_SIZE);
++static_assert(HW_UNIQUE_KEY_LENGTH == AEGIS_KDF_HUK_LEN);
++static_assert(HUK_SUBKEY_MAX_LEN == AEGIS_KDF_SUBKEY_MAX);
++static_assert(sizeof(((struct aegis_zynqmp_handoff *)0)->seed) == AEGIS_KDF_SEED_LEN);
++
++enum ho_step { HO_NOT_READ, HO_READ, HO_CHECKED };
++
++static enum ho_step ho_step;
++static struct aegis_zynqmp_handoff ho_page; /* the page's content between the two steps */
++static struct aegis_ho_info ho_info;
++static uint8_t ho_root[AEGIS_KDF_ROOT_LEN]; /* keys huk_subkey_derive() when ho_keys_from_seed */
++static uint8_t ho_huk[HW_UNIQUE_KEY_LENGTH];
++static bool ho_keys_from_seed;
++static TEE_Result ho_hash_res;
++
++static TEE_Result aegis_handoff_read(void)
++{
++	void *page = NULL;
++
++	if (!phys_mem_alloc2(AEGIS_HANDOFF_PA, AEGIS_HANDOFF_SIZE))
++		panic("Aegis hand-off page is not free");
++	page = phys_to_virt(AEGIS_HANDOFF_PA, MEM_AREA_SEC_RAM_OVERALL, AEGIS_HANDOFF_SIZE);
++	if (!page)
++		panic("Aegis hand-off page is not mapped");
++
++	memcpy(&ho_page, page, sizeof(ho_page));
++	memzero_explicit(page, AEGIS_HANDOFF_SIZE);
++	/* into the DRAM now, not when the cache lines are evicted */
++	if (cache_op_inner(DCACHE_AREA_CLEAN, page, AEGIS_HANDOFF_SIZE))
++		panic();
++	ho_step = HO_READ;
++
++	return TEE_SUCCESS;
++}
++preinit_early(aegis_handoff_read);
++
++static int sha3_384(const uint8_t *data, size_t len, uint8_t digest[48])
++{
++	ho_hash_res = tee_hash_createdigest(TEE_ALG_SHA3_384, data, len, digest, 48);
++
++	return ho_hash_res ? -1 : 0;
++}
++
++static int hmac_sha256(const uint8_t *key, size_t key_len, const struct aegis_kdf_part *part, size_t n,
++		       uint8_t mac[32])
++{
++	TEE_Result res = TEE_SUCCESS;
++	void *ctx = NULL;
++	size_t i = 0;
++
++	res = crypto_mac_alloc_ctx(&ctx, TEE_ALG_HMAC_SHA256);
++	if (res)
++		return -1;
++	res = crypto_mac_init(ctx, key, key_len);
++	for (i = 0; !res && i < n; i++)
++		if (part[i].len)
++			res = crypto_mac_update(ctx, part[i].data, part[i].len);
++	if (!res)
++		res = crypto_mac_final(ctx, mac, TEE_SHA256_HASH_SIZE);
++	crypto_mac_free_ctx(ctx);
++
++	return res ? -1 : 0;
++}
++
++static TEE_Result aegis_handoff_check(void)
++{
++	struct aegis_ho_info info = { };
++
++	if (ho_step == HO_CHECKED)
++		return TEE_SUCCESS;
++	if (ho_step != HO_READ)
++		return TEE_ERROR_BAD_STATE;
++
++	ho_hash_res = TEE_SUCCESS;
++	aegis_handoff_parse(&ho_page, sha3_384, &info);
++	if (ho_hash_res)
++		return ho_hash_res; /* no SHA3-384 (yet): not the same as a wrong digest, so nothing is decided */
++
++	if (info.status == AEGIS_BOOT_HO_VALID && aegis_handoff_seed_chip_bound(info.flags)) {
++		if (aegis_kdf_from_seed(ho_page.seed, hmac_sha256, ho_root, ho_huk))
++			return TEE_ERROR_GENERIC;
++		ho_keys_from_seed = true;
++	}
++	memzero_explicit(&ho_page, sizeof(ho_page));
++	ho_info = info;
++	ho_step = HO_CHECKED;
++
++	switch (info.status) {
++	case AEGIS_BOOT_HO_VALID:
++		IMSG("Aegis hand-off: flags %#"PRIx32", %"PRIu32" measurements, keys from %s", info.flags,
++		     info.count, ho_keys_from_seed ? "the device seed" : "the development HUK");
++		break;
++	case AEGIS_BOOT_HO_REJECTED:
++		EMSG("Aegis hand-off: REJECTED (version, count or digest), development HUK");
++		break;
++	default:
++		IMSG("Aegis hand-off: none, development HUK");
++		break;
++	}
++
++	return TEE_SUCCESS;
++}
++
++static TEE_Result aegis_handoff_init(void)
++{
++	if (aegis_handoff_check())
++		panic("Aegis hand-off cannot be checked");
++
++	return TEE_SUCCESS;
++}
++service_init(aegis_handoff_init);
++
++const struct aegis_ho_info *aegis_handoff_info(uint32_t *huk_source)
++{
++	if (ho_step != HO_CHECKED)
++		return NULL;
++	*huk_source = ho_keys_from_seed ? AEGIS_BOOT_HUK_SEED : AEGIS_BOOT_HUK_DEFAULT;
++
++	return &ho_info;
++}
++
++TEE_Result tee_otp_get_hw_unique_key(struct tee_hw_unique_key *hwkey)
++{
++	TEE_Result res = aegis_handoff_check();
++
++	if (res)
++		return res;
++	if (ho_keys_from_seed) {
++		memcpy(hwkey->data, ho_huk, sizeof(hwkey->data));
++		return TEE_SUCCESS;
++	}
++	/* as OP-TEE's default (core/kernel/otp_stubs.c): a constant key, and only in a CFG_INSECURE build */
++	if (!IS_ENABLED(CFG_INSECURE))
++		return TEE_ERROR_NO_DATA;
++	memset(hwkey->data, 0, sizeof(hwkey->data));
++
++	return TEE_SUCCESS;
++}
++
++TEE_Result huk_subkey_derive(enum huk_subkey_usage usage, const void *const_data, size_t const_data_len,
++			     uint8_t *subkey, size_t subkey_len)
++{
++	TEE_Result res = aegis_handoff_check();
++
++	if (res)
++		return res;
++	/* no seed of the chip's: OP-TEE's derivation from its 16-byte key, unchanged */
++	if (!ho_keys_from_seed)
++		return __huk_subkey_derive(usage, const_data, const_data_len, subkey, subkey_len);
++
++	if (subkey_len > HUK_SUBKEY_MAX_LEN || (!const_data && const_data_len))
++		return TEE_ERROR_BAD_PARAMETERS;
++	if (aegis_kdf_subkey(ho_root, usage, const_data, const_data_len, hmac_sha256, subkey, subkey_len))
++		return TEE_ERROR_GENERIC;
++
++	return TEE_SUCCESS;
++}
+diff --git a/core/arch/arm/plat-zynqmp/aegis_handoff.h b/core/arch/arm/plat-zynqmp/aegis_handoff.h
+new file mode 100644
+index 0000000..b3a60c0
+--- /dev/null
++++ b/core/arch/arm/plat-zynqmp/aegis_handoff.h
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: Apache-2.0 */
++#ifndef AEGIS_HANDOFF_H
++#define AEGIS_HANDOFF_H
++
++#include <stdint.h>
++
++#include "aegis_handoff_parse.h"
++
++/*
++ * What was kept of the FSBL's hand-off page, and where the hardware unique key comes from (AEGIS_BOOT_HUK_*).
++ * NULL until the page has been checked (service_init); never NULL once the normal world runs.
++ */
++const struct aegis_ho_info *aegis_handoff_info(uint32_t *huk_source);
++
++#endif
+diff --git a/core/arch/arm/plat-zynqmp/aegis_handoff_kdf.c b/core/arch/arm/plat-zynqmp/aegis_handoff_kdf.c
+new file mode 100644
+index 0000000..4135572
+--- /dev/null
++++ b/core/arch/arm/plat-zynqmp/aegis_handoff_kdf.c
+@@ -0,0 +1,51 @@
++// SPDX-License-Identifier: Apache-2.0
++/* Keys from the hand-off's seed: see aegis_handoff_kdf.h. */
++#include <string.h>
++
++#include "aegis_handoff_kdf.h"
++
++static void wipe(void *p, size_t n)
++{
++	volatile uint8_t *b = p;
++
++	while (n--)
++		*b++ = 0;
++}
++
++int aegis_kdf_from_seed(const uint8_t seed[AEGIS_KDF_SEED_LEN], aegis_hmac_sha256_fn hmac,
++			uint8_t root[AEGIS_KDF_ROOT_LEN], uint8_t huk[AEGIS_KDF_HUK_LEN])
++{
++	const struct aegis_kdf_part root_label = { AEGIS_KDF_ROOT_LABEL, sizeof(AEGIS_KDF_ROOT_LABEL) - 1 };
++	const struct aegis_kdf_part huk_label = { AEGIS_KDF_HUK_LABEL, sizeof(AEGIS_KDF_HUK_LABEL) - 1 };
++	uint8_t mac[32] = { 0 };
++	int rc = -1;
++
++	if (hmac(seed, AEGIS_KDF_SEED_LEN, &root_label, 1, root) == 0 &&
++	    hmac(seed, AEGIS_KDF_SEED_LEN, &huk_label, 1, mac) == 0) {
++		memcpy(huk, mac, AEGIS_KDF_HUK_LEN);
++		rc = 0;
++	} else {
++		wipe(root, AEGIS_KDF_ROOT_LEN);
++		wipe(huk, AEGIS_KDF_HUK_LEN);
++	}
++	wipe(mac, sizeof(mac));
++	return rc;
++}
++
++int aegis_kdf_subkey(const uint8_t root[AEGIS_KDF_ROOT_LEN], uint32_t usage, const void *data, size_t data_len,
++		     aegis_hmac_sha256_fn hmac, uint8_t *subkey, size_t subkey_len)
++{
++	const uint8_t u[4] = { (uint8_t)usage, (uint8_t)(usage >> 8), (uint8_t)(usage >> 16), (uint8_t)(usage >> 24) };
++	const struct aegis_kdf_part part[2] = { { u, sizeof(u) }, { data, data_len } };
++	uint8_t mac[32] = { 0 };
++	int rc = -1;
++
++	if (subkey_len <= AEGIS_KDF_SUBKEY_MAX && hmac(root, AEGIS_KDF_ROOT_LEN, part, 2, mac) == 0) {
++		memcpy(subkey, mac, subkey_len);
++		rc = 0;
++	} else {
++		wipe(subkey, subkey_len);
++	}
++	wipe(mac, sizeof(mac));
++	return rc;
++}
+diff --git a/core/arch/arm/plat-zynqmp/aegis_handoff_kdf.h b/core/arch/arm/plat-zynqmp/aegis_handoff_kdf.h
+new file mode 100644
+index 0000000..ead4083
+--- /dev/null
++++ b/core/arch/arm/plat-zynqmp/aegis_handoff_kdf.h
+@@ -0,0 +1,44 @@
++/* SPDX-License-Identifier: Apache-2.0
++ *
++ * Keys OP-TEE takes from the hand-off's seed when it belongs to the chip. No OP-TEE dependency: the same file is
++ * compiled on a PC by the Aegis repository's unit tests (endpoints/zynqmp/optee/tests).
++ *
++ *   root = HMAC-SHA-256(key = seed, "aegis-zynqmp-optee-subkey-root-v1")           32 bytes, kept by OP-TEE
++ *   HUK  = HMAC-SHA-256(key = seed, "aegis-zynqmp-optee-huk-v1"), first 16 bytes   OP-TEE's hardware unique key
++ *   subkey(usage, data) = HMAC-SHA-256(key = root, usage as 32 bits little-endian || data), cut to the length asked
++ *
++ * The subkey is OP-TEE's own huk_subkey_derive() construction (without its CFG_CORE_HUK_SUBKEY_COMPAT exceptions,
++ * which exist for keys older than that function), keyed with 32 bytes instead of the 16-byte HUK. The labels are
++ * used without a NUL. Root and HUK come from different labels, so the one tells nothing about the other.
++ */
++#ifndef AEGIS_HANDOFF_KDF_H
++#define AEGIS_HANDOFF_KDF_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define AEGIS_KDF_ROOT_LABEL "aegis-zynqmp-optee-subkey-root-v1"
++#define AEGIS_KDF_HUK_LABEL  "aegis-zynqmp-optee-huk-v1"
++#define AEGIS_KDF_SEED_LEN   32u
++#define AEGIS_KDF_ROOT_LEN   32u
++#define AEGIS_KDF_HUK_LEN    16u
++#define AEGIS_KDF_SUBKEY_MAX 32u
++
++struct aegis_kdf_part {
++	const void *data;
++	size_t len;
++};
++
++/* HMAC-SHA-256 with the given key over the n parts one after the other (a part may be empty); 0 on success */
++typedef int (*aegis_hmac_sha256_fn)(const uint8_t *key, size_t key_len, const struct aegis_kdf_part *part, size_t n,
++				    uint8_t mac[32]);
++
++/* 0 on success; on failure root and huk are zero */
++int aegis_kdf_from_seed(const uint8_t seed[AEGIS_KDF_SEED_LEN], aegis_hmac_sha256_fn hmac,
++			uint8_t root[AEGIS_KDF_ROOT_LEN], uint8_t huk[AEGIS_KDF_HUK_LEN]);
++
++/* 0 on success; -1 when subkey_len is above AEGIS_KDF_SUBKEY_MAX or hmac failed, and subkey is then zero */
++int aegis_kdf_subkey(const uint8_t root[AEGIS_KDF_ROOT_LEN], uint32_t usage, const void *data, size_t data_len,
++		     aegis_hmac_sha256_fn hmac, uint8_t *subkey, size_t subkey_len);
++
++#endif
+diff --git a/core/arch/arm/plat-zynqmp/aegis_handoff_parse.c b/core/arch/arm/plat-zynqmp/aegis_handoff_parse.c
+new file mode 100644
+index 0000000..d3417fb
+--- /dev/null
++++ b/core/arch/arm/plat-zynqmp/aegis_handoff_parse.c
+@@ -0,0 +1,65 @@
++// SPDX-License-Identifier: Apache-2.0
++/* Checks on the FSBL's hand-off page: see aegis_handoff_parse.h. */
++#include <string.h>
++
++#include "aegis_handoff_parse.h"
++
++#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
++#error "the hand-off page is little-endian"
++#endif
++
++/* the layout the FSBL writes */
++_Static_assert(sizeof(struct aegis_ho_meas) == 56, "hand-off entry size");
++_Static_assert(offsetof(struct aegis_zynqmp_handoff, seed) == 32, "hand-off seed offset");
++_Static_assert(offsetof(struct aegis_zynqmp_handoff, meas) == 64, "hand-off entries offset");
++_Static_assert(offsetof(struct aegis_zynqmp_handoff, sha3_384) == 512, "hand-off digest offset");
++_Static_assert(sizeof(struct aegis_zynqmp_handoff) == 560, "hand-off size");
++_Static_assert(sizeof(struct aegis_zynqmp_handoff) <= AEGIS_HANDOFF_SIZE, "hand-off fits its page");
++
++static void clean_label(char label[16])
++{
++	size_t i = 0;
++
++	label[15] = '\0';
++	for (i = 0; label[i]; i++)
++		if (label[i] < 0x21 || label[i] > 0x7e)
++			label[i] = '?';
++	memset(label + i, 0, 16 - i);
++}
++
++uint32_t aegis_handoff_parse(const struct aegis_zynqmp_handoff *h, aegis_ho_sha3_384_fn sha3_384,
++			     struct aegis_ho_info *info)
++{
++	uint8_t digest[48] = { 0 };
++	uint32_t i = 0;
++
++	memset(info, 0, sizeof(*info));
++	if (h->magic != AEGIS_HANDOFF_MAGIC) {
++		info->status = AEGIS_BOOT_HO_ABSENT;
++		return info->status;
++	}
++	info->status = AEGIS_BOOT_HO_REJECTED;
++	if (h->version != AEGIS_HANDOFF_VERSION || h->count > AEGIS_HANDOFF_MAX_MEAS)
++		return info->status;
++	if (sha3_384((const uint8_t *)h, offsetof(struct aegis_zynqmp_handoff, sha3_384), digest) != 0 ||
++	    memcmp(digest, h->sha3_384, sizeof(digest)) != 0)
++		return info->status;
++
++	info->flags = h->flags;
++	info->count = h->count;
++	info->bh_key_src = h->bh_key_src;
++	info->csu_status = h->csu_status;
++	for (i = 0; i < h->count; i++) {
++		info->meas[i] = h->meas[i];
++		clean_label(info->meas[i].label);
++	}
++	info->status = AEGIS_BOOT_HO_VALID;
++	return info->status;
++}
++
++int aegis_handoff_seed_chip_bound(uint32_t flags)
++{
++	const uint32_t need = AEGIS_HO_SEED_VALID | AEGIS_HO_KEY_BH_BLACK;
++
++	return (flags & need) == need;
++}
+diff --git a/core/arch/arm/plat-zynqmp/aegis_handoff_parse.h b/core/arch/arm/plat-zynqmp/aegis_handoff_parse.h
+new file mode 100644
+index 0000000..e99377b
+--- /dev/null
++++ b/core/arch/arm/plat-zynqmp/aegis_handoff_parse.h
+@@ -0,0 +1,44 @@
++/* SPDX-License-Identifier: Apache-2.0
++ *
++ * Checks on the FSBL's hand-off page (aegis_zynqmp_handoff.h). No OP-TEE dependency: the same file is compiled on
++ * a PC by the Aegis repository's unit test (endpoints/zynqmp/optee/tests).
++ */
++#ifndef AEGIS_HANDOFF_PARSE_H
++#define AEGIS_HANDOFF_PARSE_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include "aegis_boot_pta.h"
++
++/* What is kept of a hand-off page: everything but the seed and the digest. */
++struct aegis_ho_info {
++	uint32_t status; /* AEGIS_BOOT_HO_* */
++	uint32_t flags;
++	uint32_t count;
++	uint32_t bh_key_src;
++	uint32_t csu_status;
++	struct aegis_ho_meas meas[AEGIS_HANDOFF_MAX_MEAS];
++};
++
++/* SHA3-384 (FIPS 202 padding, the CSU's XSECURE_CSU_NIST_SHA3) of data; 0 on success */
++typedef int (*aegis_ho_sha3_384_fn)(const uint8_t *data, size_t len, uint8_t digest[48]);
++
++/*
++ * h must be a private copy of the page, not the page itself. Fills info and returns its status:
++ *   AEGIS_BOOT_HO_ABSENT    no magic (sha3_384 is not called);
++ *   AEGIS_BOOT_HO_REJECTED  wrong version, count above AEGIS_HANDOFF_MAX_MEAS (sha3_384 not called for either),
++ *                           sha3_384 failed, or the digest differs;
++ *   AEGIS_BOOT_HO_VALID     flags, count, bh_key_src, csu_status and the first count entries copied. Each label is
++ *                           cut at 15 characters, bytes outside 0x21-0x7e in it become '?', and the bytes after its
++ *                           end are zero.
++ * In the first two cases everything in info but the status is zero.
++ */
++uint32_t aegis_handoff_parse(const struct aegis_zynqmp_handoff *h, aegis_ho_sha3_384_fn sha3_384,
++			     struct aegis_ho_info *info);
++
++/* 1 when the flags say the seed belongs to this chip: derived under the device key (AEGIS_HO_SEED_VALID), and that
++ * key is the boot header's black key (AEGIS_HO_KEY_BH_BLACK) */
++int aegis_handoff_seed_chip_bound(uint32_t flags);
++
++#endif
+diff --git a/core/arch/arm/plat-zynqmp/aegis_zynqmp_handoff.h b/core/arch/arm/plat-zynqmp/aegis_zynqmp_handoff.h
+new file mode 100644
+index 0000000..928e31b
+--- /dev/null
++++ b/core/arch/arm/plat-zynqmp/aegis_zynqmp_handoff.h
+@@ -0,0 +1,56 @@
++/* SPDX-License-Identifier: Apache-2.0
++ *
++ * Hand-off from the FSBL to OP-TEE on the Zynq UltraScale+ Aegis endpoint (docs/zynqmp-key-design.md, phase B).
++ *
++ * The FSBL fills one 4 KiB page at AEGIS_HANDOFF_PA, inside OP-TEE's secure memory (TZDRAM 0x6000_0000-0x6FFF_FFFF;
++ * its last page, which OP-TEE gives to TAs only later), just before it hands off to TF-A. OP-TEE reads it once during
++ * its own initialisation, before the normal world runs, keeps a copy, and wipes the page. Nothing in the normal world
++ * runs between the two.
++ *
++ * Shared by the FSBL hook (endpoints/zynqmp/fsbl) and OP-TEE (endpoints/zynqmp/optee). Plain C, fixed layout, no
++ * pointers, little-endian, every field naturally aligned.
++ */
++#ifndef AEGIS_ZYNQMP_HANDOFF_H
++#define AEGIS_ZYNQMP_HANDOFF_H
++
++#include <stdint.h>
++
++#define AEGIS_HANDOFF_PA       0x6FFFF000u
++#define AEGIS_HANDOFF_SIZE     0x1000u
++#define AEGIS_HANDOFF_MAGIC    0x48474541u /* "AEGH" */
++#define AEGIS_HANDOFF_VERSION  1u
++#define AEGIS_HANDOFF_MAX_MEAS 8u
++
++/* flags */
++#define AEGIS_HO_SEED_VALID    (1u << 0) /* seed was derived under the CSU AES device key */
++#define AEGIS_HO_KEY_BH_BLACK  (1u << 1) /* that device key is the boot header's black key, decrypted by this chip's
++                                          * PUF KEK (boot header key source = BH black key, and the FSBL itself was
++                                          * decrypted with it). Only with this bit is the seed bound to the chip. */
++#define AEGIS_HO_AES_CLEARED   (1u << 2) /* the FSBL cleared the AES key and KUP registers afterwards */
++
++/* The seed is AES-256-GCM-encrypt(device key, IV = AEGIS_SEED_IV, plaintext = AEGIS_SEED_LABEL) (ciphertext only,
++ * the tag is not used): deterministic, the same chip and boot header give the same 32 bytes every boot. */
++#define AEGIS_SEED_LABEL "aegis-zynqmp-device-seed-v1-----" /* exactly 32 bytes */
++#define AEGIS_SEED_IV    { 0x61, 0x65, 0x67, 0x69, 0x73, 0x2d, 0x7a, 0x79, 0x6e, 0x71, 0x6d, 0x70 } /* "aegis-zynqmp" */
++
++struct aegis_ho_meas {
++	char label[16];     /* NUL-padded, e.g. "FSBL", "PMUFW", "PL", "TFA", "TEE", "UBOOT" */
++	uint8_t value[32];  /* the first 32 bytes of the CSU's SHA3-384 over the partition as stored in the boot image */
++	uint32_t length;    /* bytes hashed */
++	uint32_t attrib;    /* the partition header's attribute word, for the record */
++};
++
++struct aegis_zynqmp_handoff {
++	uint32_t magic;     /* AEGIS_HANDOFF_MAGIC */
++	uint32_t version;   /* AEGIS_HANDOFF_VERSION */
++	uint32_t flags;     /* AEGIS_HO_* */
++	uint32_t count;     /* entries used in meas[] */
++	uint32_t bh_key_src;    /* the boot header's encryption-status word, as the FSBL read it */
++	uint32_t csu_status;    /* CSU_STATUS when the hook ran (authentication and encryption bits) */
++	uint32_t reserved[2];
++	uint8_t seed[32];
++	struct aegis_ho_meas meas[AEGIS_HANDOFF_MAX_MEAS];
++	uint8_t sha3_384[48]; /* CSU SHA3-384 over everything above: a consistency check, not a security mechanism */
++};
++
++#endif
+diff --git a/core/arch/arm/plat-zynqmp/conf.mk b/core/arch/arm/plat-zynqmp/conf.mk
+index 60ff011..4205dae 100644
+--- a/core/arch/arm/plat-zynqmp/conf.mk
++++ b/core/arch/arm/plat-zynqmp/conf.mk
+@@ -80,6 +80,23 @@ $(call force,CFG_ZYNQMP_CSU_PUF,y,Mandated by CFG_ZYNQMP_HUK)
+ endif
+ endif
+ 
++# Aegis: read the FSBL's hand-off page (the last page of TZDRAM) during
++# initialisation. A seed that belongs to the chip becomes the hardware unique
++# key, and the pseudo TA aegis.boot gives the measurements to the Aegis TA.
++# See aegis_handoff.c.
++CFG_AEGIS_ZYNQMP_HANDOFF ?= n
++ifeq ($(CFG_AEGIS_ZYNQMP_HANDOFF),y)
++ifeq ($(CFG_ZYNQMP_HUK),y)
++$(error CFG_AEGIS_ZYNQMP_HANDOFF and CFG_ZYNQMP_HUK both provide the hardware unique key)
++endif
++ifneq (,$(filter y,$(CFG_WITH_PAGER) $(CFG_NS_VIRTUALIZATION)))
++$(error CFG_AEGIS_ZYNQMP_HANDOFF needs the plain memory layout: no pager, no virtualization)
++endif
++$(call force,CFG_CRYPTO_SHA3_384,y,Mandated by CFG_AEGIS_ZYNQMP_HANDOFF)
++$(call force,CFG_CRYPTO_HMAC,y,Mandated by CFG_AEGIS_ZYNQMP_HANDOFF)
++$(call force,CFG_CRYPTO_SHA256,y,Mandated by CFG_AEGIS_ZYNQMP_HANDOFF)
++endif
++
+ ifeq ($(CFG_ZYNQMP_CSU_AES),y)
+ $(call force,CFG_ZYNQMP_CSUDMA,y,Mandated by CFG_ZYNQMP_CSU_AES)
+ $(call force,CFG_DT,y,Mandated by CFG_ZYNQMP_CSU_AES)
+diff --git a/core/arch/arm/plat-zynqmp/sub.mk b/core/arch/arm/plat-zynqmp/sub.mk
+index 8ddc2fd..ee66449 100644
+--- a/core/arch/arm/plat-zynqmp/sub.mk
++++ b/core/arch/arm/plat-zynqmp/sub.mk
+@@ -1,2 +1,3 @@
+ global-incdirs-y += .
+ srcs-y += main.c
++srcs-$(CFG_AEGIS_ZYNQMP_HANDOFF) += aegis_handoff.c aegis_handoff_parse.c aegis_handoff_kdf.c aegis_boot_pta.c
