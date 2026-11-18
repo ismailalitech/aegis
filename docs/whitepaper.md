@@ -67,7 +67,7 @@ hardware produces**, signed and exchanged with the NIST post-quantum algorithms 
 | Tampered but correctly signed firmware is caught | a Non-Secure image signed with the trusted key boots normally and is QUARANTINED on its measurement; its credential is revoked |
 | Devices that cannot attest are refused | the Uno is QUARANTINED on every cycle |
 | Attacks on the protocol | 3000 token mutations accepted: 0; 800 hostile endpoint replies admitted: 0; classic-token downgrade and KEM key replay refused; malformed frames do not stop the services |
-| Whole system | the regression passes 12 of 12 stages (host and boards) |
+| Whole system | the regression passes 13 of 13 stages on host and boards, including ACVP with the second accelerator and heartbeats from the STM32 and the RW612 (`evidence/console/regression-13of13.txt`) |
 
 **The fabric accelerator, second version.** The first core computed a Keccak permutation in 24 cycles, but moving
 the whole state over the APB bus for every permutation made liboqs 6-12 % slower than software. The second version
