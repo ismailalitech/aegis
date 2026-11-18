@@ -1,0 +1,51 @@
+# STM32H573 board 2: the Aegis partition with the KEM_INIT fix and the encapsulation-key binding, 2026-11-18
+# Source: endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c. PC tests: STM32=1 tests/fuzz/run.sh (fuzzing.txt).
+
+## Build (OUT=~/aegis-tools/tfm-aegis-build-kemfix build_tfm.sh)
+no warnings from the Aegis files
+secure veneers: symbol table identical to the running build (tfm_psa_call_veneer at 0x0c085fe0)
+image version 2.3.0, signer e30466f6... (both as the running build: MCUboot's security counter is unchanged)
+SPE (tools/image_measurement.py): 3cacd9d03cddccd58fbe55fdf595ec155cf8cf0d66bb1712b2f7e68850258790
+running build before: a5997cc3c61af12d780ac4a8d62a2cd574c3343f077a179759f7efd36355750e
+
+## Deployment
+1. Backup under reset: both 2 MiB flash views and the option bytes (backups/stm32h573/20261118-100835-board2-before-kemfix,
+   checksummed); its secure slot is byte-identical to the running build, so restore_from_backup.sh rolls back.
+2. Policy for stm32h573-dk-2 only: new SPE added beside the old one (board 1 is not connected and keeps its value).
+3. tfm_s_signed.bin written to the secure slot (0x0C038000), ST-LINK chosen by serial: "Download verified successfully".
+4. Admitted; then the old SPE removed from the policy: still admitted, so the board runs the new image. The pinned key
+   is unchanged (it comes from the chip's DHUK, not from the image).
+5. A reset of the board to make the gateway provision a new session, captured on the gateway (tcpdump on port 7444).
+
+## Gateway journal (journalctl -u aegis-fleet -o cat | grep stm32h573-dk-2)
+09:07:06 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1183 (uptime_s=40601;link=1;fw=0.5.0)]
+09:07:40 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1184 (uptime_s=40634;link=1;fw=0.5.0)]
+09:08:13 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1185 (uptime_s=40668;link=1;fw=0.5.0)]
+09:09:07 stm32h573-dk-2 QUARANTINED no attestation: timed out [credential: revoked]
+09:09:40 stm32h573-dk-2 ADMITTED  [credential: issued session 54ed7660b315...]
+09:10:14 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1 (uptime_s=70;link=1;fw=0.5.0)]
+09:10:48 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 2 (uptime_s=103;link=1;fw=0.5.0)]
+09:11:22 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 3 (uptime_s=137;link=1;fw=0.5.0)]
+09:11:56 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 4 (uptime_s=171;link=1;fw=0.5.0)]
+09:12:29 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 5 (uptime_s=205;link=1;fw=0.5.0)]
+09:13:03 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 6 (uptime_s=238;link=1;fw=0.5.0)]
+09:13:36 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 7 (uptime_s=272;link=1;fw=0.5.0)]
+09:14:30 stm32h573-dk-2 QUARANTINED no attestation: timed out [credential: revoked]
+09:15:04 stm32h573-dk-2 ADMITTED  [credential: issued session 46bd3f986284...]
+09:15:37 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1 (uptime_s=86;link=1;fw=0.5.0)]
+09:16:11 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 2 (uptime_s=119;link=1;fw=0.5.0)]
+09:16:45 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 3 (uptime_s=153;link=1;fw=0.5.0)]
+09:17:19 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 4 (uptime_s=187;link=1;fw=0.5.0)]
+09:17:53 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 5 (uptime_s=220;link=1;fw=0.5.0)]
+09:18:26 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 6 (uptime_s=254;link=1;fw=0.5.0)]
+
+## Replay on the board (from the PC; one request per connection, as the gateway sends them)
+The PQKEMFIN the gateway sent at 09:15:04 (10,073 bytes, from the capture), sent again at 09:16:59 gateway time
+(between heartbeats 3 and 4):
+  with no exchange pending              -> ERR pq -137   (PSA_ERROR_BAD_STATE)
+  after a new PQKEMINIT (PQKEMEK, 9009 bytes back) -> ERR pq -149   (PSA_ERROR_INVALID_SIGNATURE: the credential names
+                                                                    another encapsulation key)
+The gateway's session was not replaced: heartbeats 4, 5 and 6 of the same session follow in the journal above.
+The unfixed code accepts this replay (the seed replay-after-new-init, run on the PC against the committed source:
+"ORACLE: credential accepted, but the model says invalid"); on the board it would have replaced the session with a key
+the gateway does not share. It was not flashed back to show that.

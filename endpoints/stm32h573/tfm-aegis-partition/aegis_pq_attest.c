@@ -32,7 +32,10 @@
  *                      Mutual authentication: the credential must be "<canonical JSON body>\n<ML-DSA-65
  *                      signature>" signed by the gateway key pinned in this image (gateway_pk.h,
  *                      label "aegis-credential-v1"), and its body must name SHA3-256(ct) in
- *                      "kem_ct_sha3_256"; otherwise PSA_ERROR_INVALID_SIGNATURE and no session.
+ *                      "kem_ct_sha3_256" and SHA3-256(ek) of the pending exchange in "kem_ek_sha3_256";
+ *                      otherwise PSA_ERROR_INVALID_SIGNATURE and no session (a refused exchange leaves an
+ *                      established session alone). A KEM_INIT with valid arguments cancels the pending
+ *                      exchange first, so a refused one leaves nothing pending.
  *   type 5 SESSION:    out[0] <- SHA3-256("aegis-session-id-v1" || session) || SHA3-256(credential)
  *   type 6 HEARTBEAT:  in[0] = 32-byte gateway nonce, in[1] = up to 128 bytes of NS status data
  *                      out[0] <- counter (8 bytes LE, increases every call)
@@ -57,7 +60,11 @@
 #include "psa_manifest/sid.h"
 #include "stm32h5xx_hal.h"
 #include "tfm_attest_defs.h"
-#include "gateway_pk.h"
+/* the pinned gateway key; the PC tests (tests/fuzz/stm32) point this at a test key */
+#ifndef AEGIS_GATEWAY_PK_HEADER
+#define AEGIS_GATEWAY_PK_HEADER "gateway_pk.h"
+#endif
+#include AEGIS_GATEWAY_PK_HEADER
 #include "aegis_kmac.h"
 
 #if !defined(AEGIS_HB_KMAC)
@@ -291,6 +298,12 @@ static psa_status_t do_kem_init(const psa_msg_t *msg)
 	if (msg->in_size[0] != 32 || msg->out_size[0] < KEM_EK_LEN || msg->out_size[1] < sizeof(sig)) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
+	/* A new exchange replaces a pending one whether or not it completes. Without this, a KEM_INIT refused after
+	 * the key was made (no signing randomness, a signing error) left the older exchange pending with this nonce
+	 * and key in it: unusable, its decapsulation key kept in memory (found by fuzzing the RW612 prover's copy of
+	 * this construction, tests/fuzz, 2026-11-18). */
+	kem_pending = 0;
+	wipe(kem_dk, sizeof(kem_dk));
 	if (psa_read(msg->handle, 0, kem_nonce, 32) != 32) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
@@ -319,11 +332,13 @@ static psa_status_t do_kem_init(const psa_msg_t *msg)
 	memcpy(signed_msg + sizeof(lbl) + 32, kem_ek, KEM_EK_LEN);
 	st = signing_rnd(rnd);
 	if (st != PSA_SUCCESS) {
+		wipe(kem_dk, sizeof(kem_dk));
 		return st;
 	}
 	if (aegis_mldsa_signature_internal(sig, signed_msg, sizeof(lbl) + 32 + KEM_EK_LEN, pre, sizeof(pre), rnd, sk,
 					   0) != 0) {
 		wipe(rnd, sizeof(rnd));
+		wipe(kem_dk, sizeof(kem_dk));
 		return PSA_ERROR_GENERIC_ERROR;
 	}
 	wipe(rnd, sizeof(rnd));
@@ -335,17 +350,43 @@ static psa_status_t do_kem_init(const psa_msg_t *msg)
 	return PSA_SUCCESS;
 }
 
+/* the body contains "<key>":"<hex of v>" (canonical JSON: no spaces) */
+static int names(const uint8_t *body, size_t n, const char *key, const uint8_t v[32])
+{
+	static const char hx[] = "0123456789abcdef";
+	char want[96];
+	size_t k = strlen(key), w = k + 69, i;
+
+	if (w > sizeof(want)) {
+		return 0;
+	}
+	want[0] = '"';
+	memcpy(want + 1, key, k);
+	memcpy(want + 1 + k, "\":\"", 3);
+	for (i = 0; i < 32; i++) {
+		want[4 + k + 2 * i] = hx[v[i] >> 4];
+		want[4 + k + 2 * i + 1] = hx[v[i] & 15];
+	}
+	want[w - 1] = '"';
+	for (i = 0; i + w <= n; i++) {
+		if (memcmp(body + i, want, w) == 0) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 /* Credential = body || '\n' || ML-DSA-65 signature by the pinned gateway key over
- * "aegis-credential-v1\0" || body (pure ML-DSA, empty context). The body must contain
- * "kem_ct_sha3_256":"<hex of SHA3-256(ct)>" (canonical JSON), binding it to this exchange. */
+ * "aegis-credential-v1\0" || body (pure ML-DSA, empty context). The body must name SHA3-256(ct) in
+ * "kem_ct_sha3_256" and SHA3-256(ek) of the pending exchange in "kem_ek_sha3_256": without the second, an old
+ * KEM_FINISH replayed after a new KEM_INIT passed the check, decapsulated to an unrelated key and replaced a
+ * working session (found on the RW612 by review, 2026-11-18; the gateway names both). */
 static int check_credential(const uint8_t *c, size_t len, const uint8_t h_ct[32])
 {
 	static const char lbl[] = "aegis-credential-v1";
-	static const char key[] = "\"kem_ct_sha3_256\":\"";
-	static const char hx[] = "0123456789abcdef";
 	const uint8_t pre[2] = {0, 0};
-	char want[sizeof(key) - 1 + 64 + 1];
-	size_t body_len = 0, i;
+	uint8_t h_ek[32];
+	size_t body_len = 0;
 
 	while (body_len < len && c[body_len] != '\n') body_len++;
 	if (body_len == len || len - body_len - 1 != MLDSA_BYTES(65) ||
@@ -358,18 +399,11 @@ static int check_credential(const uint8_t *c, size_t len, const uint8_t h_ct[32]
 					gateway_pk, 0) != 0) {
 		return -1;
 	}
-	memcpy(want, key, sizeof(key) - 1);
-	for (i = 0; i < 32; i++) {
-		want[sizeof(key) - 1 + 2 * i] = hx[h_ct[i] >> 4];
-		want[sizeof(key) - 1 + 2 * i + 1] = hx[h_ct[i] & 15];
+	sha3_256(kem_ek, KEM_EK_LEN, h_ek);
+	if (!names(c, body_len, "kem_ct_sha3_256", h_ct) || !names(c, body_len, "kem_ek_sha3_256", h_ek)) {
+		return -1;
 	}
-	want[sizeof(want) - 1] = '"';
-	for (i = 0; i + sizeof(want) <= body_len; i++) {
-		if (memcmp(c + i, want, sizeof(want)) == 0) {
-			return 0;
-		}
-	}
-	return -1;
+	return 0;
 }
 
 static psa_status_t do_kem_finish(const psa_msg_t *msg)

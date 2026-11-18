@@ -55,7 +55,9 @@ plays the gateway and checks every answer against a model of the protocol (detai
 - **Found and fixed (low):** a `PQKEMINIT` refused after the ML-KEM key was made (`ERR sign`, `ERR kem`) left the
   older exchange pending with the new key and nonce in it, unusable, and the new decapsulation key stayed in memory.
   The review had read past it. Fixed in 0.2.1: a valid `PQKEMINIT` cancels the pending exchange and wipes its
-  decapsulation key first. The STM32 partition has the same pattern.
+  decapsulation key first. The STM32 partition had the same pattern, and worse: without the encapsulation-key check,
+  it accepted a credential into the half-replaced exchange. Fixed there too, with that check added, and deployed on
+  STM32 board 2 (`evidence/stm32-kemfix/`).
 - **No memory error, no undefined behaviour, no other disagreement with the model** in the runs recorded in
   `evidence/rw612-tfm/fuzzing.txt`.
 - **Stack:** the partition reports the high-water mark of its 32 KB stack in every heartbeat: 19,368 bytes on the
