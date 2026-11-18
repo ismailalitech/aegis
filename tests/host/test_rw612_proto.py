@@ -175,5 +175,95 @@ class Rw612Proto(unittest.TestCase):
         self.assertTrue(reply.startswith("ERR"), reply)
 
 
+@unittest.skipUnless(os.path.isdir(MLDSA) and os.path.isdir(MLKEM), "mldsa-native / mlkem-native not found")
+class Rw612TfmProfile(unittest.TestCase):
+    """The same protocol code configured as the TF-M partition does it (endpoints/rw612/tfm/aegis_pq): profile
+    aegis-rw612-tfm-v1 with SPE and NSPE, the gateway's "trustzone" label, and the profile pin that stops the
+    single-image prover (same chip, same key) from passing as the TrustZone one."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = tempfile.mkdtemp()
+        cls.exe = os.path.join(cls.d, "aegis_rw612_host")
+        build(cls.exe)
+        cls.gw_pk, cls.gw_sk = mldsa.keypair()
+        with open(os.path.join(cls.d, "gw.pub"), "w") as f:
+            f.write(cls.gw_pk.hex())
+        cls.spe, cls.nspe = os.path.join(cls.d, "spe.bin"), os.path.join(cls.d, "nspe.bin")
+        for path, n in ((cls.spe, 0x9F000), (cls.nspe, 70001)):
+            with open(path, "wb") as f:
+                f.write(os.urandom(n))
+        cls.seed, cls.root = os.urandom(32).hex(), os.urandom(32).hex()
+        cls.procs = []
+        cls.port_tfm = cls.start(cls.spe, cls.nspe)
+        cls.port_els = cls.start(cls.spe)          # the single-image prover on the same chip (same seed)
+        with socket.create_connection(("127.0.0.1", cls.port_tfm), timeout=5) as s:
+            s.sendall(b"PQKEY\n")
+            reply = b""
+            while not reply.endswith(b"\r\n"):
+                reply += s.recv(65536)
+        cls.pk = bytes.fromhex(reply.split()[2].decode())
+        with open(os.path.join(cls.d, "ep.pub"), "w") as f:
+            f.write(cls.pk.hex())
+
+    @classmethod
+    def start(cls, *images):
+        port = free_port()
+        pr = subprocess.Popen([cls.exe, str(port), cls.seed, cls.root, os.path.join(cls.d, "gw.pub"), *images],
+                              stdout=subprocess.PIPE, text=True)
+        cls.procs.append(pr)
+        assert pr.stdout.readline().startswith("READY")
+        return port
+
+    @classmethod
+    def tearDownClass(cls):
+        for pr in cls.procs:
+            pr.kill()
+            pr.wait()
+
+    def sha(self, path):
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+
+    def ep(self, port, **kw):
+        e = {"name": "frdm-rw612", "kind": "aegis-device", "host": "127.0.0.1", "port": port, "pq_pub_file": "ep.pub",
+             "heartbeat_mac": "kmac256", "profile": "aegis-rw612-tfm-v1",
+             "allowed": [{"type": "SPE", "measurement_value": self.sha(self.spe)},
+                         {"type": "NSPE", "measurement_value": self.sha(self.nspe)}]}
+        e.update(kw)
+        return e
+
+    def test_1_trustzone_admitted_with_both_measurements(self):
+        v = fleet.attest(self.ep(self.port_tfm), None, self.d, timeout=10)
+        self.assertTrue(v["admitted"], v["reasons"])
+        self.assertEqual(v["trust"], "trustzone")
+        self.assertEqual(v["measurements"], {"SPE": self.sha(self.spe), "NSPE": self.sha(self.nspe)})
+
+    def test_2_changed_non_secure_image_quarantined(self):
+        e = self.ep(self.port_tfm)
+        e["allowed"][1]["measurement_value"] = "00" * 32
+        v = fleet.attest(e, None, self.d, timeout=10)
+        self.assertFalse(v["admitted"])
+        self.assertTrue(any("NSPE" in r for r in v["reasons"]), v["reasons"])
+
+    def test_3_single_image_prover_refused_by_the_profile_pin(self):
+        """Same chip, same key, valid signature: only the pin tells the two firmwares apart."""
+        v = fleet.attest(self.ep(self.port_els), None, self.d, timeout=10)
+        self.assertEqual(v.get("pq_signature"), "ML-DSA-65 valid")
+        self.assertFalse(v["admitted"])
+        self.assertIn("profile aegis-rw612-els-v1, policy requires aegis-rw612-tfm-v1", v["reasons"])
+        unpinned = self.ep(self.port_els, profile=None,
+                           allowed=[{"type": "APP", "measurement_value": self.sha(self.spe)}])
+        v = fleet.attest(unpinned, None, self.d, timeout=10)
+        self.assertTrue(v["admitted"], v["reasons"])
+        self.assertEqual(v["trust"], "device-key")
+
+    def test_4_provision_and_heartbeat(self):
+        r = fleet.provision(self.ep(self.port_tfm), self.d, self.gw_sk, "gid", {}, timeout=20)
+        status, ctr = fleet.heartbeat(self.ep(self.port_tfm), r["session_key"], timeout=10)
+        self.assertEqual(ctr, 1)
+        self.assertEqual(status, b"requests=0;fw=rw612-tfm-0.2.0")
+
+
 if __name__ == "__main__":
     unittest.main()

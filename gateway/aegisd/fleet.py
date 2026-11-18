@@ -36,8 +36,10 @@ import kmac  # noqa: E402
 PQ_LABEL = b"aegis-endpoint-quote-v1"
 LINUX_PROFILE = "aegis-linux-software-v1"   # kind aegis-linux: key and measurements held by Linux, not by hardware
 DEVICE_PROFILE = "aegis-rw612-els-v1"       # kind aegis-device: key from the chip's ELS, measurement by the firmware
-# kinds whose quote is a plain CBOR claims map signed only with ML-DSA-65: (expected profile, trust label)
-PLAIN_KINDS = {"aegis-linux": (LINUX_PROFILE, "software"), "aegis-device": (DEVICE_PROFILE, "device-key")}
+DEVICE_TFM_PROFILE = "aegis-rw612-tfm-v1"   # the same chip with TF-M: key and measurements in the TrustZone secure side
+# kinds whose quote is a plain CBOR claims map signed only with ML-DSA-65: {accepted profile: trust label}
+PLAIN_KINDS = {"aegis-linux": {LINUX_PROFILE: "software"},
+               "aegis-device": {DEVICE_PROFILE: "device-key", DEVICE_TFM_PROFILE: "trustzone"}}
 PQ_KINDS = ("aegis-pq",) + tuple(PLAIN_KINDS)
 KEM_INIT_LABEL = b"aegis-kem-init-v1"
 CRED_LABEL = b"aegis-credential-v1"
@@ -227,9 +229,11 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
     kind "aegis-linux": a plain CBOR claims map (PSA claim numbers, profile aegis-linux-software-v1) signed only
     with the endpoint's ML-DSA-65 key. The key and the measurements are held by Linux, not by hardware: the verdict
     says so ("trust": "software").
-    kind "aegis-device": the same plain claims (profile aegis-rw612-els-v1) from a microcontroller whose ML-DSA-65 key
-    is derived inside the chip's key store (NXP ELS) and never stored; the measurement is computed by the firmware
-    itself, so the verdict says "trust": "device-key" (the key proves the chip, not the firmware)."""
+    kind "aegis-device": the same plain claims from a microcontroller whose ML-DSA-65 key is derived inside the chip's
+    key store (NXP ELS) and never stored. Profile aegis-rw612-els-v1: the firmware measures itself, "trust":
+    "device-key" (the key proves the chip, not the firmware). Profile aegis-rw612-tfm-v1: the key and the measurements
+    (SPE, NSPE) are in a TF-M secure partition that the non-secure image cannot reach, "trust": "trustzone". An
+    endpoint entry may pin the profile ("profile": ...)."""
     kind = ep.get("kind", "psa")
     verdict = {"endpoint": ep["name"], "kind": kind, "time": int(time.time()), "admitted": False, "reasons": []}
     challenge = secrets.token_bytes(32)
@@ -255,10 +259,17 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
                 return verdict
             verdict["pq_signature"] = "ML-DSA-65 valid"
         if kind in PLAIN_KINDS:
-            profile, verdict["trust"] = PLAIN_KINDS[kind]
             claims = psa_token.parse_plain(tok)
-            if claims.get("profile") != profile:
-                verdict["reasons"].append("profile is not %s" % profile)
+            profile = claims.get("profile")
+            accepted = PLAIN_KINDS[kind]
+            if profile not in accepted:
+                verdict["reasons"].append("profile is not %s" % " or ".join(sorted(accepted)))
+                return verdict
+            verdict["trust"] = accepted[profile]
+            # The RW612 derives the same key under either firmware, so a policy pins the profile it expects: without
+            # the pin, the single-image prover could pass as the TrustZone one.
+            if ep.get("profile") and profile != ep["profile"]:
+                verdict["reasons"].append("profile %s, policy requires %s" % (profile, ep["profile"]))
                 return verdict
         elif ep.get("iak_pub_pem"):
             with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
