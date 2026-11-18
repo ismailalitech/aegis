@@ -647,3 +647,48 @@
     - 10
     title: Good image back
     text: Flashed again, then admitted with a new session and heartbeats.
+- id: console-rw612-fuzz
+  type: terminal
+  title: fuzzing the partition's protocol code
+  alt: 'The fuzz runs on the PC. On the reviewed code, every worker stopped within seconds: a refused PQKEMINIT had left the older exchange pending
+    with the wrong key in it. After the fix, eight workers ran for 30 minutes each: about a million executions with the sanitizers on, and no
+    crash, sanitizer report or disagreement with the model.'
+  width: 980
+  step: 3.4
+  height: 424
+  lines:
+  - '$ tests/fuzz/run.sh 60 4        # aegis_proto.c as reviewed (0.2.0)'
+  - 'ORACLE: PQKEMFIN without an exchange: ERR cred other-key'
+  - '$ tests/fuzz/run.sh 1800 8      # 0.2.1, the fix'
+  - '#126326 DONE   cov: 317 ft: 1351 corp: 332/34Kb'
+  - '#153781 DONE   cov: 317 ft: 1351 corp: 331/34Kb'
+  - '#101385 DONE   cov: 317 ft: 1350 corp: 334/36Kb'
+  - '#138015 DONE   cov: 317 ft: 1351 corp: 332/34Kb'
+  - '#104632 DONE   cov: 317 ft: 1350 corp: 333/35Kb'
+  - '#148827 DONE   cov: 317 ft: 1351 corp: 336/34Kb'
+  - '#149758 DONE   cov: 317 ft: 1350 corp: 333/34Kb'
+  - '#126791 DONE   cov: 317 ft: 1350 corp: 335/35Kb'
+  - 'total executions: 1049515; crashes, sanitizer reports, oracle failures, timeouts, out-of-memory: 0'
+  - $ tests/fuzz/coverage.sh <corpus>
+  - 'aegis_proto.c: functions 100.00 %, lines 94.68 %, branches 89.76 %'
+  callouts:
+  - lines:
+    - 1
+    - 1
+    title: Before the fix
+    text: The model expected no pending exchange; the device still had one.
+  - lines:
+    - 3
+    - 10
+    title: 8 workers, 30 min
+    text: Executions per worker, coverage and corpus size.
+  - lines:
+    - 11
+    - 11
+    title: Result
+    text: About a million executions, nothing found.
+  - lines:
+    - 13
+    - 13
+    title: Reached
+    text: The 20 missed lines are listed in the evidence, each with its reason.

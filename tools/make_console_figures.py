@@ -30,6 +30,7 @@ two = rec('two-boards.txt')
 duo = rec('two-endpoints-demo.txt')
 rw = rec('rw612-endpoint.txt')
 tz = [clean(l) for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'trustzone-prover.txt')) if l.strip()]
+fz = [clean(l) for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'fuzzing.txt')) if l.strip()]
 prb = [clean(l) for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'hardening-probes.txt')) if l.strip()]
 
 
@@ -194,6 +195,21 @@ figs = [
      [{'lines': [1, 3], 'title': 'TrustZone admitted', 'text': 'A credential through the secure partition, then heartbeats.'},
       {'lines': [4, 6], 'title': 'Modified non-secure image', 'text': 'Unreachable while it is flashed, then NSPE not allowed: credential revoked.'},
       {'lines': [7, 10], 'title': 'Good image back', 'text': 'Flashed again, then admitted with a new session and heartbeats.'}], width=1100),
+ fig('console-rw612-fuzz', 'fuzzing the partition\'s protocol code',
+     'The fuzz runs on the PC. On the reviewed code, every worker stopped within seconds: a refused PQKEMINIT had left '
+     'the older exchange pending with the wrong key in it. After the fix, eight workers ran for 30 minutes each: about '
+     'a million executions with the sanitizers on, and no crash, sanitizer report or disagreement with the model.',
+     '$ tests/fuzz/run.sh 60 4        # aegis_proto.c as reviewed (0.2.0)',
+     [l.strip() for l in fz if l.strip().startswith('ORACLE: PQKEMFIN')][:1] +
+     ['$ tests/fuzz/run.sh 1800 8      # 0.2.1, the fix'] +
+     [l.split(': ', 1)[1].split(' lim:')[0] for l in fz if ' DONE ' in l] +
+     [l for l in fz if l.startswith('total executions')] +
+     ['$ tests/fuzz/coverage.sh <corpus>'] +
+     ['aegis_proto.c: functions 100.00 %, lines 94.68 %, branches 89.76 %' for l in fz if 'aegis_proto.c' in l and '94.68%' in l][:1],
+     [{'lines': [1, 1], 'title': 'Before the fix', 'text': 'The model expected no pending exchange; the device still had one.'},
+      {'lines': [3, 10], 'title': '8 workers, 30 min', 'text': 'Executions per worker, coverage and corpus size.'},
+      {'lines': [11, 11], 'title': 'Result', 'text': 'About a million executions, nothing found.'},
+      {'lines': [13, 13], 'title': 'Reached', 'text': 'The 20 missed lines are listed in the evidence, each with its reason.'}], width=980),
 ]
 yaml.safe_dump(figs, open(os.path.join(ROOT, 'docs', 'diagrams', 'console.yaml'), 'w'), sort_keys=False, width=140, allow_unicode=True)
 print(len(figs), 'console figures')
