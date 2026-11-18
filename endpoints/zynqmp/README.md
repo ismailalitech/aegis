@@ -10,7 +10,12 @@ it `zynqmp-te0808`, from before the module was identified; it is a TE0807.) File
 - `setup_rootfs.sh`: configures a Debian 12 arm64 root file system (after debootstrap) with the prover, the gateway's
   key and liboqs 0.16.0 built for aarch64.
 - `make_sd.sh`: writes the card: BOOT.BIN and image.ub on a FAT partition, the root file system on the second.
-- `aegis-linux-prover.service`: the prover on TCP 7444, measuring BOOT.BIN, image.ub with boot.scr, and itself.
+- `aegis-linux-prover.service`: the prover on TCP 7444, measuring BOOT.BIN, the kernel (Image, the dtb, boot.scr)
+  and itself.
+- Kernel: linux-xlnx xilinx-v2025.2 (6.12), `make ARCH=arm64 xilinx_defconfig`, plus `CONFIG_TEE`/`CONFIG_OPTEE`, and
+  `xilinx/zynqmp-te0807-aegis.dtb` from `dts/`. Image and the dtb go on the FAT partition. The modules go in with
+  `tar xzf modules.tgz --keep-directory-symlink --no-same-owner -C /`, because without `--keep-directory-symlink` tar
+  replaces Debian's `/lib -> usr/lib` link and nothing can start any more.
 - `windows/`: the Vivado/Vitis 2025.2 build (XSA, bitstream, FSBL with Trenz's TE0807 hooks, PMU firmware) and the
   JTAG boot test, run on the bench's Windows PC; its README gives the order and the Trenz download it expects.
 - `boot.bif`, `boot.cmd`, `dts/zynqmp-te0807-aegis.dts`, `u-boot-aegis.config`: BOOT.BIN (bootgen), the U-Boot
@@ -50,7 +55,8 @@ no card the carrier falls back to the QSPI flash.
    present), read with xsdb over the TE0790.
 2. **Boot Linux and join the network.** Done: Debian 12 from `setup_rootfs.sh`, DHCP on `end0`. First on the boot
    files the card came with; then on our own boot chain: FSBL and PMU firmware from Vitis 2025.2, TF-A and U-Boot
-   xilinx-v2025.2 (`evidence/zynqmp/boot-chain.txt`). The kernel is still the card's Linux 4.19.
+   xilinx-v2025.2, and our kernel, linux-xlnx 6.12 (`evidence/zynqmp/boot-chain.txt`). Nothing from the card the
+   board came with is used any more except as a fallback (`boot-2019.bin`, `image.ub`).
 3. **Software trust.** Done: `../zybo/aegis_linux_prover.py`, enrolled as `zynqmp-te0808` (kind `aegis-linux`),
    admitted with "software trust", ML-KEM credential issued, KMAC heartbeats checked. This is the baseline the next
    steps improve on.

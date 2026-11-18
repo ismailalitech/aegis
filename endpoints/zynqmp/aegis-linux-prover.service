@@ -7,7 +7,7 @@ Wants=network-online.target
 ExecStart=/usr/bin/python3 /opt/aegis-prover/aegis_linux_prover.py --state /var/lib/aegis-prover \
     --gateway-pk /etc/aegis-prover/gateway.mldsa65.pub \
     --measure BOOT=/boot/firmware/BOOT.BIN \
-    --measure KERNEL=/boot/firmware/image.ub,/boot/firmware/boot.scr
+    --measure KERNEL=/boot/firmware/Image,/boot/firmware/zynqmp-te0807-aegis.dtb,/boot/firmware/boot.scr
 Restart=always
 RestartSec=5
 
