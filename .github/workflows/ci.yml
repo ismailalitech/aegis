@@ -37,6 +37,12 @@ jobs:
             -DOQS_MINIMAL_BUILD="KEM_ml_kem_512;KEM_ml_kem_768;KEM_ml_kem_1024;SIG_ml_dsa_44;SIG_ml_dsa_65;SIG_ml_dsa_87"
           ninja -C ~/aegis-tools/liboqs-src/build install
 
+      - name: mldsa-native and mlkem-native v2.0.0 (the endpoints' C code, built by tests/host/test_rw612_proto.py)
+        run: |
+          for r in mldsa-native mlkem-native; do
+            [ -d ~/aegis-tools/$r ] || git clone -q --depth 1 --branch v2.0.0 https://github.com/pq-code-package/$r.git ~/aegis-tools/$r
+          done
+
       - name: NIST ACVP vectors (checked against SHA256SUMS)
         run: |
           tools/fetch_acvp.sh
