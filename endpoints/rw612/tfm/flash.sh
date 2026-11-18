@@ -23,7 +23,15 @@ r
 g
 exit
 EOS
-"$J" -NoGui 1 -device RW612 -if SWD -speed 4000 -autoconnect 1 -CommandFile "$T" > "$T.log" 2>&1 || { tail -20 "$T.log"; exit 1; }
-if grep -qiE "verification failed|error" "$T.log"; then tail -20 "$T.log"; rm -f "$T.log"; exit 1; fi
+# J-Link's flash loader sometimes times out right after a running TF-M is reset ("RAMCode did not respond in
+# time"); a second attempt has always worked.
+for attempt in 1 2; do
+	"$J" -NoGui 1 -device RW612 -if SWD -speed 4000 -autoconnect 1 -CommandFile "$T" > "$T.log" 2>&1 || true
+	if [ "$(grep -c 'Verify successful' "$T.log")" -eq 2 ] && ! grep -qE "RAMCode|Unspecified error|Verification failed" "$T.log"; then
+		break
+	fi
+	[ $attempt -eq 2 ] && { tail -20 "$T.log"; rm -f "$T.log"; exit 1; }
+	echo "flash attempt $attempt failed, retrying"
+done
 grep -c "Verifying flash.*Done" "$T.log" | xargs -I{} echo "flashed and verified ({} write passes)"
 rm -f "$T.log"
