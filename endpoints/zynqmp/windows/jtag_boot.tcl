@@ -1,5 +1,5 @@
 # JTAG RAM boot (no flash, no eFUSE, no card writes). argv: fsbl pmufw uboot bl31
-lassign $argv FSBL PMUFW UBOOT BL31
+lassign $argv FSBL PMUFW UBOOT BL31 BIT
 proc step {msg body} { puts "STEP: $msg"; if {[catch {uplevel 1 $body} e]} { puts "STEP_ERR: $msg :: $e" } }
 connect
 puts [targets]
@@ -20,6 +20,15 @@ step "fsbl" { targets -set -nocase -filter {name =~ "*A53*#0"}; catch {stop}; rs
 after 6000
 step "stop fsbl" { targets -set -nocase -filter {name =~ "*A53*#0"}; stop }
 puts [targets]
+if {$BIT ne ""} {
+  step "fpga $BIT" { targets -set -nocase -filter {name =~ "*PSU*"}; fpga -file $BIT }
+  # what the FSBL does after a bitstream on SD boot: remove PS-PL isolation, release pl_resetn (psu_init.tcl from the XSA)
+  step "PS-PL isolation removal + PL reset release" { targets -set -nocase -filter {name =~ "*PSU*"}; source [file join [file dirname $BIT] psu_init.tcl]; psu_ps_pl_isolation_removal; psu_ps_pl_reset_config }
+  after 100
+  step "PL status" { targets -set -nocase -filter {name =~ "*PSU*"}; puts [format "PCAP_STATUS = 0x%08X" [mrd -force -value 0xFFCA3010]] }
+  step "accel ID" { targets -set -nocase -filter {name =~ "*PSU*"}; puts [format "ACCEL_ID 0x80000000 = 0x%08X" [mrd -force -value 0x80000000]] }
+  targets -set -nocase -filter {name =~ "*A53*#0"}
+}
 step "u-boot" { dow $UBOOT }
 step "bl31" { dow $BL31 }
 step "con" { con }
