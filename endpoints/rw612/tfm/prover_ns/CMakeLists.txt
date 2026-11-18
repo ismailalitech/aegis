@@ -15,7 +15,7 @@ if(DEFINED ENV{AEGIS_NS_EXTRA_DEFINES})
     mcux_add_macro(CC "$ENV{AEGIS_NS_EXTRA_DEFINES}")
 endif()
 mcux_add_include(BASE_PATH ${CMAKE_CURRENT_LIST_DIR} INCLUDES src ../aegis_pq)
-mcux_add_macro(CC "-DFSL_FEATURE_PHYKSZ8081_USE_RMII50M_MODE -DLWIP_RAND=aegis_rand32")
+mcux_add_macro(CC "-DFSL_FEATURE_PHYKSZ8081_USE_RMII50M_MODE -DLWIP_RAND=aegis_rand32 -DFSL_SDK_DISABLE_DRIVER_CLOCK_CONTROL=1")
 mcux_add_armgcc_configuration(CC "-Wno-unused-variable -Wno-unused-but-set-variable -Wno-return-type -Wno-maybe-uninitialized")
 
 set(NS_LD ${APPLICATION_BINARY_DIR}/tfm_common_ns_pre.ld)

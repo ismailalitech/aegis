@@ -26,6 +26,8 @@
 #include "psa/service.h"
 #include "psa_manifest/aegis_pq.h"
 #include "fsl_device_registers.h"
+#include "fsl_clock.h"
+#include "fsl_reset.h"
 #include <mcuxClEls.h>
 #include <mcuxClCore_FunctionIdentifiers.h>
 #include <mcuxCsslFlowProtection.h>
@@ -147,9 +149,21 @@ static int make_key(void)
 	return rc;
 }
 
+/* RSTCTL0 and CLKCTL0 are secure-only in the Aegis target_cfg.c (they hold the ELS reset and clock), so the
+ * non-secure prover cannot switch on its own Ethernet controller: do it here, once, before it runs. */
+static void ns_ethernet_clocks(void)
+{
+	CLOCK_EnableClock(kCLOCK_TddrMciEnetClk); /* 50 MHz RMII reference clock for the PHY */
+	CLOCK_EnableClock(kCLOCK_EnetIpg);
+	CLOCK_EnableClock(kCLOCK_EnetIpgS);
+	RESET_PeripheralReset(kENET_IPG_RST_SHIFT_RSTn);
+	RESET_PeripheralReset(kENET_IPG_S_RST_SHIFT_RSTn);
+}
+
 /* The measurements are taken here, before the non-secure image runs. */
 psa_status_t aegis_pq_init(void)
 {
+	ns_ethernet_clocks();
 	flash_cache_invalidate();
 	measure_region(&meas[0], "SPE", S_PART_BASE, S_PART_SIZE, "secure");
 	measure_region(&meas[1], "NSPE", NS_PART_BASE, NS_PART_SIZE, "non-secure");

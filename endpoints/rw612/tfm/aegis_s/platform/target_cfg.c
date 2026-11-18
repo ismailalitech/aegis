@@ -372,9 +372,12 @@ int32_t ppc_init_cfg(void)
     /* Security access rules for APB Bridge 0 peripherals. */
     AHB_SECURE_CTRL->APB_GRP0_MEM_RULE0 =
         (0x00300000U) |                                                                       /* Bits have to be set to '1' according to UM.*/
-        AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_RSTCTL0_RULE0(TFM_SEC_ACCESS_LVL_USER_NS) |        /* RSTCTL0*/
-        AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_CLKCTL0_RULE1(TFM_SEC_ACCESS_LVL_USER_NS) |        /* CLKCTL0 */
-        AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_SYSCTL0_RULE2(TFM_SEC_ACCESS_LVL_USER_NS) |        /* SYSCTL0 */
+        /* Aegis: RSTCTL0 (holds the ELS reset) secure only; the secure partition switches on the Ethernet clocks */
+        AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_RSTCTL0_RULE0(TFM_SEC_ACCESS_LVL_PRIV_S) |        /* RSTCTL0*/
+        /* Aegis: CLKCTL0 (holds the ELS clock) secure only; the secure partition switches on the Ethernet clocks */
+        AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_CLKCTL0_RULE1(TFM_SEC_ACCESS_LVL_PRIV_S) |        /* CLKCTL0 */
+        /* Aegis: SYSCTL0 secure only; the secure partition switches on the Ethernet clocks */
+        AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_SYSCTL0_RULE2(TFM_SEC_ACCESS_LVL_PRIV_S) |        /* SYSCTL0 */
         AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_SYSCTL2_RULE3(TFM_SEC_ACCESS_LVL_USER_NS) |        /* SYSCTL2 */
         AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_IOCON_RULE4(TFM_SEC_ACCESS_LVL_USER_NS)   |        /* IOCON */
         AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_PUFCTRL_RULE6(TFM_SEC_ACCESS_LVL_PRIV_S)  |        /* PUF */

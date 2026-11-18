@@ -64,13 +64,14 @@ one register of a peripheral at start-up. With NXP's rules, OCOTP and FlexSPI re
 FlexSPI, the flash cache and the TRNG each fault (TF-M resets the chip, the read never returns), while the ENET register
 the prover needs still reads. The hardened images are admitted by the gateway with trustzone trust.
 
-Still open (stage B): RSTCTL0, CLKCTL0 and SYSCTL0 stay non-secure, because the Ethernet set-up and the clock queries of
-the non-secure side use them. Through them the non-secure side can reset or stop ELS: a denial of service (the key
-derivation then fails closed, because it checks the die key's full properties), not a way to forge a quote.
+Stage B (done): RSTCTL0, CLKCTL0 and SYSCTL0 are secure-privileged too; they hold the ELS reset and clock. The secure
+partition switches the Ethernet controller's clocks on and releases its reset before the non-secure image runs, and the
+non-secure image no longer touches those blocks: its drivers are built without clock control, its console starts at the
+20 MHz the secure side set (measured on this board), its clock frequencies are constants. The same probe test: RSTCTL0,
+CLKCTL0 and SYSCTL0 fault from the non-secure side, the ENET register still reads, and the gateway admits the image.
 
 ## Next
 
-1. Stage B of the hardening: move the ENET clock and reset into the secure side and close RSTCTL0, CLKCTL0, SYSCTL0.
-2. An adversarial review of the secure code (the partition, aegis_proto.c as it runs in the secure world, the probe
+1. An adversarial review of the secure code (the partition, aegis_proto.c as it runs in the secure world, the probe
    and flash tooling).
-3. The site.
+2. The site.

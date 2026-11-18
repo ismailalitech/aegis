@@ -20,3 +20,15 @@ ENET_EIR       boots=1 probe-attempts=1 read-ok=1
 06:57:23 frdm-rw612 QUARANTINED (trustzone trust) component SPE not allowed (measurement 5fdbdba0e231...); component NSPE not allowed (measurement 0cb177f9a8bf...) [credential: revoked]
 06:57:57 frdm-rw612 ADMITTED (trustzone trust)  [credential: issued session 727e078c186c...]
 06:58:31 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=7;fw=rw612-tfm-0.2.0)]
+
+## Stage B: RSTCTL0, CLKCTL0 and SYSCTL0 secure-only too (the secure partition switches on the Ethernet clocks)
+RSTCTL0        boots=3 probe-attempts=2 read-ok=0
+CLKCTL0        boots=7 probe-attempts=6 read-ok=0
+SYSCTL0        boots=7 probe-attempts=6 read-ok=0
+ENET_EIR       boots=1 probe-attempts=1 read-ok=1
+
+## Gateway after the stage B images were flashed
+07:07:11 frdm-rw612 QUARANTINED no attestation: timed out [credential: revoked]
+07:07:45 frdm-rw612 ADMITTED (trustzone trust)  [credential: issued session 4a2465691851...]
+07:08:18 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=6;fw=rw612-tfm-0.2.0)]
+07:08:52 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 2 (requests=8;fw=rw612-tfm-0.2.0)]
