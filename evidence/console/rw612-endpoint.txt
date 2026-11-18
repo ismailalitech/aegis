@@ -18,7 +18,7 @@ aegis: mac 02:ae:dd:dd:6b:a1
 aegis: address <lan address>, listening on 7444
 
 # From the PC, gateway verifier code (fleet.attest) over the network
-PQKEY 1952 bytes, sha256 219414c54e7bbf34 (the same on every boot and with every image: derived in ELS from the die key)
+PQKEY 1952 bytes, sha256 219414c54e7bbf34 (the same on every boot and image: derived in ELS)
 20 attestations back to back: 20 admitted; quote time min 0.073 max 0.302 s
 APP measured == sha256(zephyr.bin): True 146308 bytes
 wrong reference -> QUARANTINED ['component APP not allowed (measurement 864ac72280f7...)']

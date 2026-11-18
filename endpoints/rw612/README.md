@@ -59,6 +59,14 @@ ROM would also verify that stage. Neither is done here: no fuse of this board is
   (attestation, key derivation determinism, provisioning, heartbeats, forged and misbound credentials, malformed
   requests): 7 of 7.
 
+## Figures and the recording
+
+The diagrams are in `docs/diagrams/rw612.yaml` (key derivation, the endpoint, the three trust levels, the ELS slots)
+and the console figures come from `evidence/console/rw612-endpoint.txt` (`tools/make_console_figures.py`, then
+`tools/gen_diagrams.py`). `tools/rw612/record_demo.sh` records the tamper demo on screen: an xterm with three tmux
+panes (the gateway journal, the board console with LAN addresses masked, the steps), grabbed by ffmpeg, then encoded at
+4x speed. The site's lab 57 shows the result.
+
 ## Build and flash
 
     endpoints/rw612/build.sh          # build only
