@@ -40,6 +40,7 @@ hook() { ip netns exec $GW "$ROOT/gateway/enforce/aegis-enforce.sh" "$@"; }
 # two services: a normal one on the network, and the gateway's quote port
 ip netns exec $LAN python3 -m http.server 8080 --bind 10.77.2.2 >/dev/null 2>&1 &
 ip netns exec $GW  python3 -m http.server 7443 --bind 10.77.1.1 >/dev/null 2>&1 &
+ip netns exec $EP  python3 -m http.server 7444 --bind 10.77.1.2 >/dev/null 2>&1 &   # the endpoint's prover port
 sleep 1
 
 tcp() { ip netns exec $EP python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1.5); s.connect((sys.argv[1], int(sys.argv[2])))" "$1" "$2" 2>/dev/null; }
@@ -48,6 +49,7 @@ check() {  # check <expected: allow|block> <description> <command...>
     if "$@"; then got=allow; else got=block; fi
     if [ "$got" = "$want" ]; then echo "PASS $what ($got)"; pass=$((pass+1)); else echo "FAIL $what (wanted $want, got $got)"; fail=$((fail+1)); fi
 }
+attest() { ip netns exec $GW python3 -c "import socket; s=socket.create_connection(('10.77.1.2', 7444), timeout=1.5); s.sendall(b'GET / HTTP/1.0\\r\\n\\r\\n'); assert s.recv(1)" 2>/dev/null; }
 ping_lan() { ip netns exec $EP ping -c1 -W1 10.77.2.2 >/dev/null 2>&1; }
 
 hook init ge0
@@ -55,6 +57,7 @@ echo "-- an endpoint that has not attested"
 check block "ping the network"            ping_lan
 check block "TCP to the network"          tcp 10.77.2.2 8080
 check allow "TCP to the gateway quote port" tcp 10.77.1.1 7443
+check allow "the gateway reaches the endpoint's prover (attestation)" attest
 
 echo "-- admitted"
 hook ep1 admit
@@ -97,6 +100,8 @@ echo "-- quarantined again"
 check block "new TCP to the network"      tcp 10.77.2.2 8080
 check block "ping the network"            ping_lan
 check allow "TCP to the gateway quote port" tcp 10.77.1.1 7443
+check allow "the gateway still attests the quarantined endpoint" attest
+check block "the endpoint reaches another gateway port (SSH)" tcp 10.77.1.1 22
 
 echo "-- re-admitted"
 hook ep1 admit

@@ -71,7 +71,7 @@ Not considered, being out of scope or not achievable on this bench:
 | T13 | Gateway software or FPGA changed | gateway quote carries code hash, design info and digests | board: PC verifier refused after fabric reprogram and after code update until re-enrolled | tested |
 | T14 | Cloning the endpoint key to another chip | STM32: key from the per-chip DHUK in SAES; RW612: key from the die key in ELS | STM32: a second chip with identical firmware has a different key, and its quote under the first chip's name is refused ([second-board.md](second-board.md)); the PSA identity, by contrast, is the same on both (TF-M dummy provisioning) | shown on two STM32 chips |
 | T15 | Wrong cryptography | NIST ACVP vectors: PC, PolarFire with fabric Keccak, STM32 code | 265/265 each (phase 2 and 3 notes) | tested |
-| T16 | Unattested node keeps network access | rules tested in network namespaces (10 of 10, including cutting open connections); kernel with netfilter installed on the gateway | the gateway is not in the traffic path: needs a managed 802.1Q switch | **partly closed: rules proven, placement not** |
+| T16 | Unattested node keeps network access | rules tested in network namespaces (13 of 13, including cutting open connections and attesting a quarantined endpoint); the one-port VLAN design tested with a VLAN-filtering bridge (16 of 16, including the ways around a VLAN); kernel with netfilter and 802.1Q on the gateway | `tests/host/test_enforcement*.sh`, `docs/vlan-enforcement.md`; on the bench the gateway is not yet in the traffic path: needs a switch with 802.1Q VLANs | **partly closed: rules and design proven, placement not** |
 | T17 | Compromised RW612 non-secure code rewrites the secure image or reaches ELS | the peripheral rules of section 3, including the pin mux (otherwise the QSPI flash pins could be remuxed to GPIO and the flash driven by hand) | `probe.sh` on the board, before and after each rule; `docs/rw612-security-review.md` | tested |
 | T18 | One chip, two firmwares: the RW612's single-image prover (same chip key) passes as the TrustZone one | the gateway pins the claims profile per endpoint | `test_rw612_proto.py`: a valid signature refused by the pin | tested |
 | T19 | Re-enrolment silently replaces a pinned key | `enroll-pq` keeps existing pins unless `--force` | `test_5_enroll_keeps_an_existing_pin` | tested |
@@ -97,8 +97,10 @@ Not considered, being out of scope or not achievable on this bench:
      SDK does not set up level 3 for this board.
 5. **Side channels and fault injection are not evaluated.** ML-DSA signing is hedged on both endpoint types: fresh
    randomness in every signature, refused if randomness fails.
-6. **No network enforcement on the real gateway** (T16): the ruleset is tested, but one Ethernet port cannot
-   separate networks. A switch with 802.1Q VLANs would let the one port do it.
+6. **No network enforcement on the real gateway yet** (T16): the ruleset and the one-port VLAN design are tested in
+   network namespaces (`docs/vlan-enforcement.md`), but the bench has no VLAN switch in place. With one, endpoints on
+   the same VLAN still see each other unless the switch isolates its ports. A device that takes an absent admitted
+   endpoint's address passes until the next cycle quarantines it.
 7. **Credential expiry** (one hour, renewed five minutes before) is checked by the gateway only; the endpoints have
    no trusted time.
 8. **The PolarFire fabric accelerator is a performance block, not a security mechanism.** Version 2 (the SHA-3 sponge
