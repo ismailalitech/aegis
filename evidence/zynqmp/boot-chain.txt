@@ -118,3 +118,15 @@ The QUARANTINED line at 19:45:56 is a tamper test: boot.scr with one added "echo
 
 Still software trust: Linux takes these measurements. Steps 4-6 move the key to the PUF and the measurements
 into the boot chain and the A53 secure world.
+
+Later the same evening: our kernel.
+  linux-xlnx xilinx-v2025.2 (6.12.0), xilinx_defconfig plus OP-TEE, with dts/zynqmp-te0807-aegis.dts; Image and
+  the dtb on the FAT partition, boot.cmd boots them (and falls back to the card's image.ub if either is missing).
+  Root /dev/mmcblk0p2 (only the SD card is enabled in our tree). The prover measures Image, the dtb and boot.scr:
+    KERNEL  4677fafbf23ad87c22d691882e33a58fe0add3c390fccd7470da2a9c092da994
+  sshd listens 8 s after boot; the accelerator self-test passes unchanged; the gateway admits the board on the new
+  value (the 4.19 one removed). OP-TEE is not loaded yet, so the kernel's optee driver reports "api uid mismatch".
+  A mistake on the way, repaired without a reboot: unpacking a modules tarball whose paths start with lib/ into /
+  replaced Debian's /lib -> usr/lib link with a directory, so no new program could start. Repaired from the serial
+  root shell by running mv and ln through /usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1. Modules now go in with
+  tar --keep-directory-symlink --no-same-owner (README).

@@ -69,6 +69,7 @@ temporary slot it deletes again.
 | On that card, after the first boot: `/etc/network/interfaces` for `end0`, autologin on `ttyPS0`, persistent journal (now in `setup_rootfs.sh`); haveged installed | write the card again |
 | Later that day: the card's BOOT.BIN replaced by ours (`evidence/zynqmp/boot-chain.txt`, sha256 `ddab49f0...`), the card's one kept as `boot-2019.bin`; `boot.scr` added; the prover also measures boot.scr. Gateway policy: the new BOOT and KERNEL values allowed, the 2019 ones removed (backups `fleet.json.bak-20261118-203634`, `-204528`). JTAG boots into RAM set BOOT_MODE_USER (volatile) | copy `boot-2019.bin` over BOOT.BIN, delete boot.scr; restore the policy backup |
 | Later: BOOT.BIN with the accelerator's bitstream (`0f999af3...`; the previous one kept as `boot-2025.2-nopl.bin`); policy BOOT value replaced; `/root/pqc_selftest` on the board | copy `boot-2025.2-nopl.bin` over BOOT.BIN; restore the policy backup |
+| Later: our kernel (Image, `zynqmp-te0807-aegis.dtb`; modules in `/usr/lib/modules/6.12.0-...`) and a boot.scr that boots it (the previous one kept as `boot-k419.scr`); policy KERNEL value replaced | copy `boot-k419.scr` over boot.scr; restore the policy backup |
 
 Nothing written to eFUSEs, BBRAM, the QSPI flash or the U-Boot environment (U-Boot `setenv` only in RAM, never
 `saveenv`; our U-Boot has no environment at all). The TE0790 adapters' EEPROMs were never touched.
