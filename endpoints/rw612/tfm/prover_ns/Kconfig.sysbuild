@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+# The secure image is built with the same board, toolchain and configuration (NXP tfm_examples sysbuild options).
+source "${SdkRootDirPath}/examples/tfm_examples/Kconfig.sysbuild"

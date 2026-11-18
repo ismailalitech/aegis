@@ -12,8 +12,12 @@
  * to the firmware (see endpoints/rw612/README.md).
  */
 #include <string.h>
+#if defined(__ZEPHYR__)
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
+#else
+#define printk(...) ((void)0) /* TF-M secure partition: no console output from here */
+#endif
 
 #include <mcuxClEls.h>
 #include <mcuxClCore_FunctionIdentifiers.h>
@@ -100,8 +104,13 @@ int aegis_els_derive(const char *label, uint8_t out[32])
 	size_t n = strlen(label);
 	int slot, ok, rc = -1;
 
-	if (n > sizeof(in) || key_props(DIE_MASTER_KEY_SLOT, &master) != 0 ||
-	    !(master & MCUXCLELS_KEYPROPERTY_VALUE_ACTIVE) || !(master & MCUXCLELS_KEYPROPERTY_VALUE_CKDF)) {
+	/* Slot 0 must hold the ROM's die master key: active, a base slot, device-unique, usable for CKDF (on this
+	 * chip 0x60010161). After an ELS reset another key could sit in slot 0; deriving from it would give a
+	 * different, non-device-bound seed, so refuse. */
+	const uint32_t want = MCUXCLELS_KEYPROPERTY_VALUE_ACTIVE | MCUXCLELS_KEYPROPERTY_VALUE_BASE_SLOT |
+			      MCUXCLELS_KEYPROPERTY_VALUE_DUK | MCUXCLELS_KEYPROPERTY_VALUE_CKDF;
+
+	if (n > sizeof(in) || key_props(DIE_MASTER_KEY_SLOT, &master) != 0 || (master & want) != want) {
 		return -2; /* no die master key for derivation */
 	}
 	slot = free_slot();

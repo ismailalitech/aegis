@@ -3,6 +3,7 @@
 # too) with three tmux panes (the gateway's aegis-fleet journal, the board console, the operator's steps), then a
 # 4x-speed WebM and MP4 and a poster frame for the site.
 #   GATEWAY=<address> tools/rw612/record_demo.sh <out dir>
+#   GATEWAY=<address> STEPS=tfm TFM_BUILD=<dir with aegis_s/ and prover_ns/> tools/rw612/record_demo.sh <out dir>
 # Needs xterm, tmux, xdotool, ffmpeg; the board on its MCU-Link; builds in ~/aegis-tools/nxp-build/prover and
 # prover-tampered (endpoints/rw612/README.md). The board ends on the good image.
 set -eu
@@ -34,7 +35,11 @@ ffmpeg -loglevel error -y -f x11grab -draw_mouse 0 -window_id "$W" -framerate 10
 	"$OUT/raw.mkv" &
 FF=$!
 sleep 2
-tmux respawn-pane -k -t $S:0.2 "sh $HERE/demo_steps.sh $T/nxp-build/prover $T/nxp-build/prover-tampered; sleep 3600"
+if [ "${STEPS:-zephyr}" = tfm ]; then
+	tmux respawn-pane -k -t $S:0.2 "sh $HERE/demo_steps_tfm.sh ${TFM_BUILD:?set TFM_BUILD}; sleep 3600"
+else
+	tmux respawn-pane -k -t $S:0.2 "sh $HERE/demo_steps.sh $T/nxp-build/prover $T/nxp-build/prover-tampered; sleep 3600"
+fi
 while ! tmux capture-pane -p -t $S:0.2 | grep -q "Same key all along"; do sleep 2; done
 sleep 4
 kill -INT $FF; wait $FF || true

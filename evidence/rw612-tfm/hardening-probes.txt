@@ -1,0 +1,54 @@
+# FRDM-RW612 with TF-M: non-secure reads of peripheral registers (endpoints/rw612/tfm/probe.sh), 2026-11-18
+# Each line: one test build of the non-secure prover that reads one register right after start-up.
+# 'boots' counts TF-M boot banners in 40 s: a protected read is a security fault, TF-M resets, the read never returns.
+
+## NXP's original target_cfg.c
+OCOTP          read-ok=1  aegis-probe: read ok, value 0x    2000
+FLEXSPI        read-ok=1  aegis-probe: read ok, value 0xffff8010
+
+## Aegis target_cfg.c (endpoints/rw612/tfm/aegis_s/platform/target_cfg.c)
+OCOTP          boots=7 probe-attempts=6 read-ok=0
+FLEXSPI        boots=7 probe-attempts=6 read-ok=0
+CACHE64_CTRL0  boots=8 probe-attempts=7 read-ok=0
+TRNG           boots=8 probe-attempts=7 read-ok=0
+ENET_EIR       boots=1 probe-attempts=1 read-ok=1
+(ENET_EIR is the control: a peripheral the non-secure prover needs, still readable)
+
+## Gateway after the hardened images were flashed
+06:56:02 frdm-rw612 QUARANTINED (trustzone trust) component SPE not allowed (measurement bad3f8ba31b8...); component NSPE not allowed (measurement abf80fdad089...) [credential: revoked]
+06:56:36 frdm-rw612 QUARANTINED (trustzone trust) component SPE not allowed (measurement bad3f8ba31b8...); component NSPE not allowed (measurement abf80fdad089...) [credential: revoked]
+06:57:23 frdm-rw612 QUARANTINED (trustzone trust) component SPE not allowed (measurement 5fdbdba0e231...); component NSPE not allowed (measurement 0cb177f9a8bf...) [credential: revoked]
+06:57:57 frdm-rw612 ADMITTED (trustzone trust)  [credential: issued session 727e078c186c...]
+06:58:31 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=7;fw=rw612-tfm-0.2.0)]
+
+## Stage B: RSTCTL0, CLKCTL0 and SYSCTL0 secure-only too (the secure partition switches on the Ethernet clocks)
+RSTCTL0        boots=3 probe-attempts=2 read-ok=0
+CLKCTL0        boots=7 probe-attempts=6 read-ok=0
+SYSCTL0        boots=7 probe-attempts=6 read-ok=0
+ENET_EIR       boots=1 probe-attempts=1 read-ok=1
+
+## Gateway after the stage B images were flashed
+07:07:11 frdm-rw612 QUARANTINED no attestation: timed out [credential: revoked]
+07:07:45 frdm-rw612 ADMITTED (trustzone trust)  [credential: issued session 4a2465691851...]
+07:08:18 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=6;fw=rw612-tfm-0.2.0)]
+07:08:52 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 2 (requests=8;fw=rw612-tfm-0.2.0)]
+
+## After the security review: the pin mux (MCI_IO_MUX), SOC_TOP (SOCCTRL, SoC OTP controller), PMU and SYSCTL2 secure-only too
+MCI_IO_MUX     boots=3 probe-attempts=2 read-ok=0
+SOCCTRL        boots=7 probe-attempts=6 read-ok=0
+SOC_OTP_CTRL   boots=7 probe-attempts=6 read-ok=0
+PMU            boots=7 probe-attempts=6 read-ok=0
+SYSCTL2        boots=7 probe-attempts=6 read-ok=0
+ENET_EIR       boots=1 probe-attempts=1 read-ok=1
+
+## Gateway with the reviewed firmware and the credential naming the KEM key (STM32 board 2 re-provisioned in the new format)
+07:36:40 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1025 (uptime_s=35183;link=1;fw=0.5.0)]
+07:36:40 frdm-rw612 QUARANTINED (trustzone trust) component SPE not allowed (measurement 112243afe2c4...); component NSPE not allowed (measurement 15d242f84d6b...) [credential: revoked]
+07:37:30 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1027 (uptime_s=35230;link=1;fw=0.5.0)]
+07:37:30 frdm-rw612 ADMITTED (trustzone trust)  [credential: issued session 645e8f22ffc7...]
+07:38:03 stm32h573-dk-2 ADMITTED  [credential: issued session f55c664d1c49...]
+07:38:03 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=6;fw=rw612-tfm-0.2.0)]
+07:38:37 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1028 (uptime_s=35299;link=1;fw=0.5.0)]
+07:38:37 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 2 (requests=8;fw=rw612-tfm-0.2.0)]
+07:39:11 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1029 (uptime_s=35333;link=1;fw=0.5.0)]
+07:39:11 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 3 (requests=10;fw=rw612-tfm-0.2.0)]

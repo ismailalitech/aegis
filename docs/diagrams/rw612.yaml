@@ -129,3 +129,60 @@
     - {x: 712, y: 32, text: "free", size: 12}
     - {x: 20, y: 150, text: "A 256-bit key takes a base slot and the next one.", size: 12}
   steps: [a0, a1, a2, a3, a6, a7, a19, e0, f1, b18, b19, e1, f2]
+
+- id: rw612-tz-architecture
+  alt: "The FRDM-RW612 with TrustZone. In the secure world, TF-M runs its own services and the Aegis partition: the partition hashes the secure and non-secure flash partitions, derives the ML-DSA-65 key in ELS (which only secure privileged code can reach, and which TF-M's crypto sets up), and runs the Aegis protocol. In the non-secure world, the network prover runs Ethernet, lwIP and a TCP server on port 7444; it passes each request line to the partition with psa_call and sends the reply back. It holds no key and cannot change a measurement. The gateway talks to the non-secure side over Ethernet."
+  width: 900
+  height: 420
+  nodes:
+    gw:    {x: 20,  y: 40,  w: 170, h: 76, kind: hart,  title: "Gateway", sub: "aegis-fleet, pins key\nprofile, SPE, NSPE"}
+    ns:    {x: 240, y: 40,  w: 220, h: 76, kind: plain, title: "Non-secure: prover_ns", sub: "ENET, lwIP, TCP 7444\nno key, no proof"}
+    psa:   {x: 520, y: 40,  w: 360, h: 76, kind: sw,    title: "Aegis partition (TF-M, PSA-RoT)", sub: "aegis_proto.c: quote, ML-KEM, credential,\nKMAC heartbeat"}
+    els:   {x: 520, y: 165, w: 170, h: 70, kind: mem,   title: "ELS (secure only)", sub: "die key, CKDF,\nHMAC, DRBG"}
+    meas:  {x: 710, y: 165, w: 170, h: 70, kind: good,  title: "SPE, NSPE", sub: "SHA-256 of both flash\npartitions, at start-up"}
+    tfm:   {x: 520, y: 290, w: 170, h: 70, kind: plain, title: "TF-M core", sub: "SPM, crypto (sets ELS\nup), ITS, PS"}
+    flash: {x: 710, y: 290, w: 170, h: 70, kind: mem,   title: "Flash", sub: "secure partition\nnon-secure partition"}
+  edges:
+    - {from: gw.right, to: ns.left, label: "Ethernet"}
+    - {from: ns.right, to: psa.left, label: "psa_call"}
+    - {from: els.top, to: psa.bottom@0.24}
+    - {from: meas.top, to: psa.bottom@0.76}
+    - {from: tfm.top, to: els.bottom}
+    - {from: flash.top, to: meas.bottom}
+  notes:
+    - {x: 240, y: 145, text: "non-secure world", size: 13, bold: true}
+    - {x: 520, y: 395, text: "secure world", size: 13, bold: true, kind: good}
+  steps: [gw, e0, ns, e1, psa, els, e2, meas, e3, tfm, e4, flash, e5]
+
+- id: rw612-tz-hardening
+  alt: "Which peripherals the non-secure world may reach on the RW612, under NXP's TF-M defaults and under the Aegis rules. NXP's defaults leave the fuse controller, FlexSPI, the flash caches, the TRNG, ROM control, the debug mailbox, the reset, clock and system controllers, the pin mux, the PMU and SOC_TOP open to non-secure code. The Aegis rules make all of them secure-only; the secure partition sets up the Ethernet clocks, reset and pins itself. Only what the network prover needs stays non-secure: ENET, the GPIOs, the console UART, its clock and reset controllers for those, and timers."
+  width: 900
+  height: 380
+  nodes:
+    a: {x: 20,  y: 30,  w: 270, h: 150, kind: bad,   title: "NXP defaults: non-secure", sub: "OCOTP (fuses), FlexSPI + OTFAD,\nflash caches, TRNG, ROM ctrl,\ndebug mailbox, RSTCTL0, CLKCTL0,\nSYSCTL0, SYSCTL2, pin mux,\nPMU, SOC_TOP"}
+    b: {x: 330, y: 30,  w: 270, h: 150, kind: good,  title: "Aegis rules: secure only", sub: "the same blocks;\nthe secure partition sets up\nthe Ethernet clocks, reset\nand pins before the\nnon-secure image runs"}
+    c: {x: 640, y: 30,  w: 240, h: 150, kind: plain, title: "Still non-secure", sub: "ENET, GPIO, the console\nUART (FLEXCOMM3),\nCLKCTL1, RSTCTL1, timers:\nwhat the network\nprover needs"}
+    p: {x: 330, y: 230, w: 270, h: 110, kind: hart,  title: "Measured on the board", sub: "probe.sh: a non-secure read of\neach secure-only block faults;\nthe ENET register still reads"}
+  edges:
+    - {from: a.right, to: b.left}
+    - {from: b.bottom, to: p.top}
+  steps: [a, e0, b, c, e1, p]
+
+- id: rw612-tz-boot
+  alt: "The order of events from reset on the RW612 with TF-M. The boot ROM loads the die key into ELS and starts TF-M. TF-M sets the TrustZone and peripheral rules and the clocks. The Aegis partition then sets up the Ethernet clocks, reset and pins, and hashes the secure and non-secure partitions: SPE and NSPE are fixed before any non-secure code runs. The non-secure prover then starts its network. At the first request, the partition derives the ML-DSA-65 key in ELS, after TF-M's crypto partition has set ELS up."
+  width: 900
+  height: 300
+  nodes:
+    r:  {x: 20,  y: 40,  w: 150, h: 76, kind: mem,   title: "Boot ROM", sub: "die key into ELS\nstarts TF-M"}
+    t:  {x: 200, y: 40,  w: 170, h: 76, kind: hart,  title: "TF-M", sub: "SAU, peripheral rules,\nclocks"}
+    m:  {x: 400, y: 40,  w: 200, h: 76, kind: good,  title: "Aegis init", sub: "Ethernet clocks and pins;\nSPE and NSPE hashed"}
+    n:  {x: 630, y: 40,  w: 250, h: 76, kind: plain, title: "Non-secure prover", sub: "Ethernet, DHCP, TCP 7444"}
+    k:  {x: 400, y: 180, w: 200, h: 76, kind: good,  title: "First request", sub: "ML-DSA-65 key from ELS\n(after TF-M crypto set it up)"}
+  edges:
+    - {from: r.right, to: t.left}
+    - {from: t.right, to: m.left}
+    - {from: m.right, to: n.left}
+    - {from: n.bottom, to: k.right, label: "psa_call"}
+  notes:
+    - {x: 20, y: 225, text: "measured before any\nnon-secure code runs", size: 12, kind: good}
+  steps: [r, e0, t, e1, m, e2, n, e3, k]

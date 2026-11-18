@@ -12,9 +12,11 @@
  *
  * The constructions are the STM32 partition's (endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c):
  *   quote signature  ML-DSA-65 (pure, empty context, hedged) over "aegis-endpoint-quote-v1\0" || claims
- *   KEM key          ML-KEM-768.KeyGen(SHA3(prov_root || nonce || counter || 0) || SHA3(... || 1))
+ *   KEM key          ML-KEM-768.KeyGen(SHA3(prov_root || fresh || nonce || counter || 0) || SHA3(... || 1)),
+ *                    fresh = 32 bytes from the platform RNG
  *   credential       "<canonical JSON>\n<ML-DSA-65 signature by the pinned gateway key over
- *                    "aegis-credential-v1\0" || JSON>"; the JSON must name SHA3-256(ct) and SHA-256(this pk)
+ *                    "aegis-credential-v1\0" || JSON>"; the JSON must name SHA3-256(ct), SHA3-256(ek) of the pending
+ *                    exchange and SHA-256(this pk)
  *   session          SHA3-256("aegis-session-v1" || K || nonce || SHA3-256(ct))
  *   confirm tag      SHA3-256("aegis-confirm-v1" || K || nonce || SHA3-256(ct) || SHA3-256(credential))
  *   heartbeat        KMAC256(session, nonce || counter || status, 256, "aegis-hb-v2")
@@ -29,7 +31,7 @@
 
 #include "aegis_kmac.h"
 #include "aegis_proto.h"
-#include "sha256.h"
+#include "aegis_sha256.h"
 
 #define KEM_EK_LEN  MLKEM_PUBLICKEYBYTES(768)
 #define KEM_DK_LEN  MLKEM_SECRETKEYBYTES(768)
@@ -37,7 +39,7 @@
 #define PK_LEN      MLDSA_PUBLICKEYBYTES(65)
 #define SIG_LEN     MLDSA_BYTES(65)
 #define CRED_MAX    6144u
-#define CLAIMS_MAX  512u
+#define CLAIMS_MAX  1024u
 
 /* PSA claim numbers (common/psa_token.py), so the gateway's measurement check applies unchanged */
 #define C_PROFILE   (-75000)
@@ -278,32 +280,51 @@ static int verify_framed(const uint8_t *s, const char *label, const uint8_t *m, 
 	return aegis_mldsa_verify_internal(s, msgbuf, l + n, pre, sizeof(pre), gw_pk, 0);
 }
 
+static uint8_t *put_component(uint8_t *p, const char *label, const uint8_t value[32], const char *desc)
+{
+	static const uint8_t zero[32];
+
+	p = cbor_head(p, 5, 5);
+	p = cbor_int(p, 1); p = cbor_text(p, label);
+	p = cbor_int(p, 2); p = cbor_bytes(p, value, 32);
+	p = cbor_int(p, 4); p = cbor_text(p, AEGIS_DEVICE_VERSION);
+	p = cbor_int(p, 5); p = cbor_bytes(p, zero, 32);
+	p = cbor_int(p, 6); p = cbor_text(p, desc);
+	return p;
+}
+
 static size_t make_claims(const uint8_t challenge[32])
 {
-	char desc[64];
-	uint8_t meas[32], zero[32] = {0}, inst[33];
-	size_t img_len;
+	static struct aegis_measurement m[AEGIS_MAX_MEASUREMENTS];
+	uint8_t inst[33];
+	size_t n = 0;
 	uint8_t *p = claims;
 
-	plat->measure(meas, &img_len);
-	snprintf(desc, sizeof(desc), "SHA256 of the firmware image (%u bytes)", (unsigned)img_len);
+	if (plat->measure_all) {
+		n = plat->measure_all(m, AEGIS_MAX_MEASUREMENTS);
+		if (n > AEGIS_MAX_MEASUREMENTS) n = AEGIS_MAX_MEASUREMENTS;
+	} else {
+		size_t img_len;
+
+		plat->measure(m[0].value, &img_len);
+		m[0].label = "APP";
+		snprintf(m[0].desc, sizeof(m[0].desc), "SHA256 of the firmware image (%u bytes)", (unsigned)img_len);
+		n = 1;
+	}
 	inst[0] = 0x02; /* not a PSA IAK-based instance ID: SHA-256 of the ML-DSA key */
 	memcpy(inst + 1, pk_sha256, 32);
 	p = cbor_head(p, 5, 4);
 	p = cbor_int(p, C_PROFILE);
-	p = cbor_text(p, AEGIS_DEVICE_PROFILE);
+	p = cbor_text(p, plat->profile ? plat->profile : AEGIS_DEVICE_PROFILE);
 	p = cbor_int(p, C_CHALLENGE);
 	p = cbor_bytes(p, challenge, 32);
 	p = cbor_int(p, C_INSTANCE);
 	p = cbor_bytes(p, inst, sizeof(inst));
 	p = cbor_int(p, C_SWC);
-	p = cbor_head(p, 4, 1);
-	p = cbor_head(p, 5, 5);
-	p = cbor_int(p, 1); p = cbor_text(p, "APP");
-	p = cbor_int(p, 2); p = cbor_bytes(p, meas, 32);
-	p = cbor_int(p, 4); p = cbor_text(p, AEGIS_DEVICE_VERSION);
-	p = cbor_int(p, 5); p = cbor_bytes(p, zero, 32);
-	p = cbor_int(p, 6); p = cbor_text(p, desc);
+	p = cbor_head(p, 4, n);
+	for (size_t i = 0; i < n; i++) {
+		p = put_component(p, m[i].label, m[i].value, m[i].desc);
+	}
 	return (size_t)(p - claims);
 }
 
@@ -356,6 +377,17 @@ static int kem_finish(const char *ct_hex, const char *cred_hex, char *out, size_
 	if (!names(cred, body_len, "endpoint_pq_pk_sha256", pk_sha256)) {
 		wipe(kem_dk, sizeof(kem_dk));
 		return snprintf(out, cap, "ERR cred other-endpoint");
+	}
+	/* the credential must also name this exchange's encapsulation key: an old PQKEMFIN replayed after a new
+	 * PQKEMINIT would otherwise pass and replace a working session (review 2026-11-18) */
+	{
+		uint8_t h_ek[32];
+
+		sha3_256(kem_ek, sizeof(kem_ek), h_ek);
+		if (!names(cred, body_len, "kem_ek_sha3_256", h_ek)) {
+			wipe(kem_dk, sizeof(kem_dk));
+			return snprintf(out, cap, "ERR cred other-key");
+		}
 	}
 	if (aegis_mlkem_dec(k, kem_ct, kem_dk) != 0) {
 		wipe(kem_dk, sizeof(kem_dk));
@@ -420,10 +452,17 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		return (int)(put_str(o, " END") - out);
 	}
 	if (!strcmp(tok[0], "PQKEMINIT") && n == 2) {
-		uint8_t coins[64], c[4], nonce[32];
+		uint8_t coins[64], c[4], nonce[32], fresh[32];
 		struct sha3 h;
 
 		if (get_hex(tok[1], nonce, 32) != 32) return snprintf(out, cap, "ERR bad-request");
+		/* A new exchange replaces a pending one whether or not it completes. Without this, a PQKEMINIT refused
+		 * after the key was made (ERR sign, ERR kem) left the older exchange pending with this key and nonce in
+		 * it: unusable, and its decapsulation key kept in memory (found by tests/fuzz, 2026-11-18). */
+		kem_pending = 0;
+		wipe(kem_dk, sizeof(kem_dk));
+		/* fresh randomness too, so an exchange's key cannot be regenerated after a reboot */
+		if (plat->random(fresh, sizeof(fresh)) != 0) return snprintf(out, cap, "ERR rng");
 		memcpy(kem_nonce, nonce, 32);
 		kem_counter++;
 		c[0] = (uint8_t)kem_counter; c[1] = (uint8_t)(kem_counter >> 8);
@@ -431,6 +470,7 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		for (uint8_t half = 0; half < 2; half++) {
 			sha3_init(&h);
 			sha3_update(&h, prov_root, 32);
+			sha3_update(&h, fresh, 32);
 			sha3_update(&h, kem_nonce, 32);
 			sha3_update(&h, c, 4);
 			sha3_update(&h, &half, 1);
@@ -441,9 +481,11 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 			return snprintf(out, cap, "ERR kem");
 		}
 		wipe(coins, sizeof(coins));
+		wipe(fresh, sizeof(fresh));
 		memcpy(msgbuf, kem_nonce, 32);
 		memcpy(msgbuf + 32, kem_ek, KEM_EK_LEN);
 		if (sign_framed(KEM_LABEL, sizeof(KEM_LABEL) - 1, 32 + KEM_EK_LEN) != 0) {
+			wipe(kem_dk, sizeof(kem_dk));
 			return snprintf(out, cap, "ERR sign");
 		}
 		kem_pending = 1; /* the established session stays until a new exchange completes */
@@ -466,8 +508,13 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		if (get_hex(tok[1], nonce, 32) != 32) return snprintf(out, cap, "ERR bad-request");
 		hb_counter++;
 		for (int i = 0; i < 8; i++) ctr[i] = (uint8_t)(hb_counter >> (8 * i));
-		sl = snprintf(status, sizeof(status), "uptime_s=%u;link=1;fw=%s-%s", (unsigned)plat->uptime_s(),
-			      AEGIS_DEVICE_FW, AEGIS_DEVICE_VERSION);
+		if (plat->status) {
+			sl = plat->status(status, sizeof(status));
+		} else {
+			sl = snprintf(status, sizeof(status), "uptime_s=%u;link=1;fw=%s-%s", (unsigned)plat->uptime_s(),
+				      AEGIS_DEVICE_FW, AEGIS_DEVICE_VERSION);
+		}
+		if (sl < 0 || (size_t)sl >= sizeof(status)) return snprintf(out, cap, "ERR status");
 		aegis_kmac256_init(&km, session_key, 32, (const uint8_t *)"aegis-hb-v2", 11);
 		aegis_kmac256_update(&km, nonce, 32);
 		aegis_kmac256_update(&km, ctr, 8);

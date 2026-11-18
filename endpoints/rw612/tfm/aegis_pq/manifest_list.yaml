@@ -1,0 +1,17 @@
+{
+  "description": "Aegis out-of-tree partitions",
+  "type": "manifest_list",
+  "version_major": 0,
+  "version_minor": 1,
+  "manifest_list": [
+    {
+      "description": "Aegis post-quantum attestation partition",
+      "manifest": "aegis_pq/aegis_pq.yaml",
+      "output_path": "aegis_pq",
+      "version_major": 0,
+      "version_minor": 1,
+      "pid": 450,
+      "linker_pattern": { "library_list": [ "*tfm_*partition_aegis_pq*" ] }
+    }
+  ]
+}

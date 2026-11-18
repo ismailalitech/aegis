@@ -108,7 +108,8 @@ class LinuxProver(unittest.TestCase):
         ct, _ = mlkem.encaps(ek)
         body = {"v": 1, "type": "credential", "endpoint": "zybo",
                 "endpoint_pq_pk_sha256": hashlib.sha256(self.prover.pk).hexdigest(),
-                "kem_ct_sha3_256": fleet._sha3(ct if bind_ct else b"other").hex(), "expires": 4102444800}
+                "kem_ct_sha3_256": fleet._sha3(ct if bind_ct else b"other").hex(),
+                "kem_ek_sha3_256": fleet._sha3(ek).hex(), "expires": 4102444800}
         cred = wire.canonical(body) + b"\n" + mldsa.sign(sign_key, fleet.CRED_LABEL, wire.canonical(body))
         return fleet._exchange("127.0.0.1", self.port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), 10)
 

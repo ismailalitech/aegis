@@ -36,8 +36,10 @@ import kmac  # noqa: E402
 PQ_LABEL = b"aegis-endpoint-quote-v1"
 LINUX_PROFILE = "aegis-linux-software-v1"   # kind aegis-linux: key and measurements held by Linux, not by hardware
 DEVICE_PROFILE = "aegis-rw612-els-v1"       # kind aegis-device: key from the chip's ELS, measurement by the firmware
-# kinds whose quote is a plain CBOR claims map signed only with ML-DSA-65: (expected profile, trust label)
-PLAIN_KINDS = {"aegis-linux": (LINUX_PROFILE, "software"), "aegis-device": (DEVICE_PROFILE, "device-key")}
+DEVICE_TFM_PROFILE = "aegis-rw612-tfm-v1"   # the same chip with TF-M: key and measurements in the TrustZone secure side
+# kinds whose quote is a plain CBOR claims map signed only with ML-DSA-65: {accepted profile: trust label}
+PLAIN_KINDS = {"aegis-linux": {LINUX_PROFILE: "software"},
+               "aegis-device": {DEVICE_PROFILE: "device-key", DEVICE_TFM_PROFILE: "trustzone"}}
 PQ_KINDS = ("aegis-pq",) + tuple(PLAIN_KINDS)
 KEM_INIT_LABEL = b"aegis-kem-init-v1"
 CRED_LABEL = b"aegis-credential-v1"
@@ -146,7 +148,7 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
     now = int(time.time())
     body = {"v": 1, "type": "credential", "endpoint": ep["name"],
             "endpoint_pq_pk_sha256": __import__("hashlib").sha256(pk).hexdigest(),
-            "measurements": measurements, "kem": "ML-KEM-768", "kem_ct_sha3_256": _sha3(ct).hex(),
+            "measurements": measurements, "kem": "ML-KEM-768", "kem_ct_sha3_256": _sha3(ct).hex(), "kem_ek_sha3_256": _sha3(ek).hex(),
             "issued": now, "expires": now + CRED_LIFETIME_S, "gateway_identity_sha256": gw_identity_sha256}
     cred = wire.canonical(body) + b"\n" + mldsa.sign(gw_sk, CRED_LABEL, wire.canonical(body))
     p = _exchange(host, port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), timeout).split()
@@ -227,9 +229,11 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
     kind "aegis-linux": a plain CBOR claims map (PSA claim numbers, profile aegis-linux-software-v1) signed only
     with the endpoint's ML-DSA-65 key. The key and the measurements are held by Linux, not by hardware: the verdict
     says so ("trust": "software").
-    kind "aegis-device": the same plain claims (profile aegis-rw612-els-v1) from a microcontroller whose ML-DSA-65 key
-    is derived inside the chip's key store (NXP ELS) and never stored; the measurement is computed by the firmware
-    itself, so the verdict says "trust": "device-key" (the key proves the chip, not the firmware)."""
+    kind "aegis-device": the same plain claims from a microcontroller whose ML-DSA-65 key is derived inside the chip's
+    key store (NXP ELS) and never stored. Profile aegis-rw612-els-v1: the firmware measures itself, "trust":
+    "device-key" (the key proves the chip, not the firmware). Profile aegis-rw612-tfm-v1: the key and the measurements
+    (SPE, NSPE) are in a TF-M secure partition that the non-secure image cannot reach, "trust": "trustzone". An
+    endpoint entry may pin the profile ("profile": ...)."""
     kind = ep.get("kind", "psa")
     verdict = {"endpoint": ep["name"], "kind": kind, "time": int(time.time()), "admitted": False, "reasons": []}
     challenge = secrets.token_bytes(32)
@@ -255,10 +259,17 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
                 return verdict
             verdict["pq_signature"] = "ML-DSA-65 valid"
         if kind in PLAIN_KINDS:
-            profile, verdict["trust"] = PLAIN_KINDS[kind]
             claims = psa_token.parse_plain(tok)
-            if claims.get("profile") != profile:
-                verdict["reasons"].append("profile is not %s" % profile)
+            profile = claims.get("profile")
+            accepted = PLAIN_KINDS[kind]
+            if profile not in accepted:
+                verdict["reasons"].append("profile is not %s" % " or ".join(sorted(accepted)))
+                return verdict
+            verdict["trust"] = accepted[profile]
+            # The RW612 derives the same key under either firmware, so a policy pins the profile it expects: without
+            # the pin, the single-image prover could pass as the TrustZone one.
+            if ep.get("profile") and profile != ep["profile"]:
+                verdict["reasons"].append("profile %s, policy requires %s" % (profile, ep["profile"]))
                 return verdict
         elif ep.get("iak_pub_pem"):
             with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
@@ -358,6 +369,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Aegis fleet verifier")
     ap.add_argument("cmd", choices=["once", "watch", "enroll-pq", "session"])
+    ap.add_argument("--force", action="store_true", help="enroll-pq: replace keys that are already pinned")
     ap.add_argument("policy")
     ap.add_argument("--interval", type=float, default=30)
     ap.add_argument("--state", default="/var/lib/aegis/fleet-state.json")
@@ -370,12 +382,16 @@ def main(argv=None):
     base = os.path.dirname(os.path.abspath(a.policy))
     ev = psa_token.verify_with_openssl_cli if a.verifier == "openssl" else psa_token.verify_with_cryptography
     if a.cmd == "enroll-pq":
-        # Trust on first use: fetch each aegis-pq endpoint's ML-DSA-65 key and store it.
+        # Trust on first use: fetch the ML-DSA-65 key of each PQ endpoint that has none pinned yet. An existing pin is
+        # never replaced from the network (the reply comes through the endpoint's untrusted side); --force re-enrols.
         for ep in policy["endpoints"]:
             if ep.get("kind") not in PQ_KINDS:
                 continue
-            pk = request_pq_key(ep["host"], int(ep["port"]))
             path = _path(base, ep["pq_pub_file"])
+            if os.path.exists(path) and not a.force:
+                print("kept %s: a key is already pinned in %s (use --force to replace it)" % (ep["name"], path))
+                continue
+            pk = request_pq_key(ep["host"], int(ep["port"]))
             with open(path, "w") as f:
                 f.write(pk.hex() + "\n")
             print("enrolled %s: ML-DSA-65 key sha256 %s -> %s" % (ep["name"], __import__("hashlib").sha256(pk).hexdigest(), path))
