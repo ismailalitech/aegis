@@ -10,17 +10,38 @@ proc step {msg body} { puts "STEP: $msg"; if {[catch {uplevel 1 $body} e]} { put
 set ::EFUSE_STATUS_LIBRARY_ONLY 1
 source [file join [file dirname [info script]] efuse_status.tcl]
 
-connect
+# Started before power-on: the run must begin before the card's Linux 6.12 powers PM islands down (a JTAG
+# "rst -system" does not bring them back; seen in phase A).
+set t0 [clock seconds]
+while {[catch {connect} e]} { if {[clock seconds] - $t0 > 300} { puts "NO_JTAG: $e"; exit 1 }; after 500 }
+while {[llength [targets -filter {name =~ "*PSU*"}]] == 0} { if {[clock seconds] - $t0 > 300} { puts "NO_PSU"; exit 1 }; after 200 }
+puts "PSU_SEEN after [expr {[clock seconds] - $t0}] s"
 puts [targets]
 targets -set -nocase -filter {name =~ "*PSU*"}
+# Read the snapshot 3 s after the PSU appears (still before Linux: the card's FSBL and U-Boot take longer), twice,
+# and require the two reads to match. IPDISABLE's VCU bit is only valid once the PL is configured (UG1087), so it
+# is left out of the comparison and of the decision.
+after 3000
+proc puf_rows {} {
+    set r {}
+    foreach a {0xFFCC0008 0xFFCC1050 0xFFCC1054 0xFFCC1058 0xFFCC105C} { lappend r [mrd -force -value $a] }
+    return $r
+}
+set rows1 [puf_rows]
 puts "SNAPSHOT_BEFORE_BEGIN"
 efuse_dump
 boot_status
 puts "SNAPSHOT_BEFORE_END"
-# refuse if the PUF eFUSEs are not blank (registration would be refused by xilskey anyway) or RSA_EN is set
-set chash [mrd -force -value 0xFFCC1050]
-set pufmisc [mrd -force -value 0xFFCC1054]
-if {$chash != 0 || ($pufmisc & 0xF0FFFFFF) != 0} { puts [format "PUF_EFUSE_NOT_BLANK chash=0x%08X misc=0x%08X: stop" $chash $pufmisc]; disconnect; exit 1 }
+after 500
+set rows2 [puf_rows]
+if {$rows1 ne $rows2} { puts "EFUSE_SNAPSHOT_UNSTABLE $rows1 / $rows2: stop"; disconnect; exit 1 }
+lassign $rows1 sts chash pufmisc secctrl spkid
+if {($sts & 0x20) == 0} { puts [format "EFUSE_CACHE_NOT_DONE sts=0x%08X: stop" $sts]; disconnect; exit 1 }
+# Refuse unless the PUF eFUSEs hold nothing: CHASH = 0, AUX (PUF_MISC 23:0) = 0, REG_DIS (31), SYN_WRLK (30) and
+# SYN_INVLD (29) clear. Bit 28 is PUF_MISC_RESERVED (xilskey_eps_zynqmp_hw.h): set on this chip from the factory,
+# it does not affect registration (xilskey's XilSkey_Puf_Validate_Access_Rules ignores it), so it is logged only.
+if {$chash != 0 || ($pufmisc & 0xE0FFFFFF) != 0} { puts [format "PUF_EFUSE_NOT_BLANK chash=0x%08X misc=0x%08X: stop" $chash $pufmisc]; disconnect; exit 1 }
+if {($pufmisc & 0x10000000) != 0} { puts "NOTE: PUF_MISC_RESERVED (bit 28) set; not used by the registration" }
 
 step "boot mode JTAG (volatile)" { mwr 0xff5e0200 0x0100 }
 step "rst -system" { rst -system }

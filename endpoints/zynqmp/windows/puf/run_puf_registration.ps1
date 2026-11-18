@@ -16,7 +16,9 @@ param(
 . "$PSScriptRoot\puf_common.ps1"
 
 function Get-EfuseLines([string]$text) {
-  ($text -split "`r?`n") | Where-Object { $_ -match '^EFUSE ' } | ForEach-Object { $_.Trim() }
+  # IPDISABLE is left out: its VCU bit is only valid once the PL is configured (UG1087), so it reads 0 at power-on
+  # and 0x100 later on this chip, without any eFUSE change.
+  ($text -split "`r?`n") | Where-Object { $_ -match '^EFUSE ' -and $_ -notmatch 'IPDISABLE' } | ForEach-Object { $_.Trim() }
 }
 
 if ($PostCheck) {
@@ -26,7 +28,7 @@ if ($PostCheck) {
   & $XsdbBat "$PSScriptRoot\efuse_status.tcl" *> $after
   Get-Process hw_server -ErrorAction SilentlyContinue | Stop-Process -Force
   $a = @(Get-EfuseLines (Get-Content -Raw $after)); $b = @(Get-EfuseLines (Get-Content -Raw $before))
-  if ($a.Count -lt 40 -or ($a | Where-Object { $_ -match 'ERROR' })) { Fail "eFUSE read incomplete, see $after (is the board on its plain SD boot?)" }
+  if ($a.Count -lt 39 -or ($a | Where-Object { $_ -match 'ERROR' })) { Fail "eFUSE read incomplete, see $after (is the board on its plain SD boot?)" }
   $d = Compare-Object $b $a
   if ($d) { $d | Format-Table -AutoSize | Out-Host; Fail 'eFUSE cache DIFFERS from the snapshot before the run: stop and report' }
   "EFUSE_UNCHANGED: $($a.Count) registers identical before the run and after the power cycle"
