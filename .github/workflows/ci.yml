@@ -48,6 +48,9 @@ jobs:
           sudo apt-get install -y clang libclang-rt-18-dev
           FUZZ_OUT=$RUNNER_TEMP/fuzz tests/fuzz/run.sh 120 2 || { tail -n 60 $RUNNER_TEMP/fuzz/fuzz-*.log; exit 1; }
 
+      - name: Fuzz the STM32H573 partition on PC stand-ins for TF-M (libFuzzer, ASan, UBSan; seeds first, 2 minutes)
+        run: STM32=1 FUZZ_OUT=$RUNNER_TEMP/fuzz-stm32 tests/fuzz/run.sh 120 2 || { tail -n 60 $RUNNER_TEMP/fuzz-stm32/fuzz-*.log; exit 1; }
+
       - name: NIST ACVP vectors (checked against SHA256SUMS)
         run: |
           tools/fetch_acvp.sh

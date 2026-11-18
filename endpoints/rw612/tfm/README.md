@@ -94,8 +94,8 @@ It found one defect within seconds: a `PQKEMINIT` refused after the ML-KEM key w
 fails, `ERR kem`) left the older exchange pending with the new key and nonce in it, unusable, with the new
 decapsulation key kept in memory. Not exploitable from the non-secure side (it can always disrupt its own exchanges,
 and no credential can name a key the gateway never saw), but the state was wrong. Fixed in 0.2.1: a valid
-`PQKEMINIT` cancels the pending exchange and wipes its decapsulation key first. The STM32 partition
-(`endpoints/stm32h573/tfm-aegis-partition`) has the same pattern and needs the same change.
+`PQKEMINIT` cancels the pending exchange and wipes its decapsulation key first. The STM32 partition had the same
+pattern; it is fixed and deployed on board 2 (`evidence/stm32-kemfix/`), and `STM32=1 tests/fuzz/run.sh` fuzzes it.
 
 ## Stack of the secure partition (0.2.1)
 

@@ -1,0 +1,79 @@
+# Fuzzing the STM32H573 Aegis partition on the PC (STM32=1 tests/fuzz/run.sh, STM32=1 tests/fuzz/coverage.sh), 2026-11-18
+# Harness: tests/fuzz/stm32/fuzz_stm32_partition.c; stand-ins for TF-M's PSA service API, the attestation service and
+# SAES in tests/fuzz/stm32/stub (psa_write beyond the caller's output size aborts: TF-M panics on it). The partition
+# pins a test gateway key (AEGIS_GATEWAY_PK_HEADER) so the harness can sign credentials. libFuzzer, ASan, UBSan, clang 18.
+
+## The seeds against the committed (unfixed) source
+rng-fails-at-sign       ORACLE: KEM_FINISH without an exchange: 0
+replay-after-new-init   ORACLE: credential accepted, but the model says invalid (0)
+(0 is PSA_SUCCESS: a credential was accepted into a half-replaced exchange, and an old KEM_FINISH replayed after a new
+KEM_INIT was accepted.) The other three seeds passed.
+
+## The fixed source: 60 s on 4 workers
+No finding.
+
+## 30 min on 6 workers
+Stopped at once on "ORACLE: heartbeat counter": the model's error, not the partition's. This partition's heartbeat
+counter runs from boot across sessions (the RW612's restarts at 1 with each session); the gateway needs it only to
+rise within a session (fleet.py), and each heartbeat is fresh through the gateway's nonce. The model now follows the
+partition; the six stop inputs pass.
+
+## 30 min on 8 workers (1800 s each), corpus from the run before, including its stop inputs
+fuzz-0.log: #87278 DONE   cov: 269 ft: 1175 corp: 259/61Kb lim: 1764 exec/s: 48 rss: 409Mb
+fuzz-1.log: #95701 DONE   cov: 269 ft: 1175 corp: 259/61Kb lim: 1724 exec/s: 53 rss: 416Mb
+fuzz-2.log: #126087 DONE   cov: 269 ft: 1176 corp: 258/60Kb lim: 1844 exec/s: 70 rss: 413Mb
+fuzz-3.log: #114727 DONE   cov: 269 ft: 1175 corp: 258/59Kb lim: 1734 exec/s: 63 rss: 413Mb
+fuzz-4.log: #109799 DONE   cov: 269 ft: 1175 corp: 257/60Kb lim: 1794 exec/s: 60 rss: 418Mb
+fuzz-5.log: #121209 DONE   cov: 269 ft: 1176 corp: 259/60Kb lim: 1904 exec/s: 67 rss: 420Mb
+fuzz-6.log: #114435 DONE   cov: 269 ft: 1176 corp: 257/60Kb lim: 1764 exec/s: 63 rss: 416Mb
+fuzz-7.log: #123538 DONE   cov: 269 ft: 1175 corp: 258/60Kb lim: 1834 exec/s: 68 rss: 423Mb
+total executions: 892774; crashes, sanitizer reports, oracle failures, timeouts, out-of-memory: 0
+
+## Coverage of endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c by the final corpus (3066 inputs)
+Filename                                                                      Regions    Missed Regions     Cover   Functions  Missed Functions  Executed       Lines      Missed Lines     Cover    Branches   Missed Branches     Cover
+endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c         317                24    92.43%          18                 0   100.00%         338                32    90.53%         144                18    87.50%
+
+## The lines never executed, and why
+  226|      0|		wipe(seed, sizeof(seed));
+  227|      0|		return PSA_SUCCESS; /* service stays up and answers PSA_ERROR_BAD_STATE */
+  228|      0|	}
+  261|      0|		return PSA_ERROR_INVALID_ARGUMENT;
+  262|      0|	}
+  269|      0|		return st;
+  270|      0|	}
+  280|      0|		wipe(rnd, sizeof(rnd));
+  281|      0|		return PSA_ERROR_GENERIC_ERROR;
+  282|      0|	}
+  308|      0|		return PSA_ERROR_INVALID_ARGUMENT;
+  309|      0|	}
+  322|      0|		wipe(coins, sizeof(coins));
+  323|      0|		return PSA_ERROR_GENERIC_ERROR;
+  324|      0|	}
+  330|      0|		return PSA_ERROR_GENERIC_ERROR;
+  331|      0|	}
+  340|      0|		wipe(rnd, sizeof(rnd));
+  341|      0|		wipe(kem_dk, sizeof(kem_dk));
+  342|      0|		return PSA_ERROR_GENERIC_ERROR;
+  343|      0|	}
+  361|      0|		return 0;
+  362|      0|	}
+  424|      0|		return PSA_ERROR_INVALID_ARGUMENT;
+  425|      0|	}
+  433|      0|		wipe(kem_dk, sizeof(kem_dk));
+  434|      0|		return PSA_ERROR_GENERIC_ERROR;
+  435|      0|	}
+  478|      0|		return PSA_ERROR_INVALID_ARGUMENT;
+  479|      0|	}
+  526|      0|		return PSA_ERROR_BAD_STATE;
+  527|      0|	}
+  226-228    the DHUK derivation in SAES failing: the stand-in does not fail
+  261-262, 308-309, 424-425, 478-479
+             a psa_read returning less than the input size the partition has just checked: TF-M does not
+  269-270    the attestation service failing: the stand-in does not fail
+  280-282, 340-343
+             ML-DSA signing failing: it does not
+  322-324    ML-KEM key generation failing: it does not
+  330-331    signed_msg smaller than a KEM key message: false at compile time
+  361-362    a credential field name too long for the buffer: the names are fixed
+  433-435    ML-KEM decapsulation failing: implicit rejection, it does not
+  526-527    no device key (the DHUK derivation failed at start-up): see 226-228
