@@ -88,3 +88,17 @@ mcux_add_library(
 )
 mcux_convert_binary(BINARY ${APPLICATION_BINARY_DIR}/${MCUX_SDK_PROJECT_NAME}.bin)
 file(MAKE_DIRECTORY ${APPLICATION_BINARY_DIR}/${CONFIG_TOOLCHAIN})
+
+# Hardening (no SDK file is changed): build the Aegis copy of target_cfg.c (tighter peripheral access rules, see
+# platform/target_cfg.c) instead of NXP's, and leave out the load data of NXP's loader service, so that partition is
+# never registered: it lets a non-secure caller make secure code process an SB3 file and write memory, and this image
+# loads no Wi-Fi firmware.
+get_target_property(AEGIS_SRCS ${MCUX_SDK_PROJECT_NAME} SOURCES)
+if(DEFINED ENV{AEGIS_NXP_TARGET_CFG})
+    # comparison builds only (probe.sh "before"): NXP's original rules
+    list(FILTER AEGIS_SRCS EXCLUDE REGEX "load_info_tfm_loader_service\\.c$")
+else()
+    list(FILTER AEGIS_SRCS EXCLUDE REGEX "target/nxp/frdmrw612/target_cfg\\.c$|load_info_tfm_loader_service\\.c$")
+    list(APPEND AEGIS_SRCS ${CMAKE_CURRENT_LIST_DIR}/platform/target_cfg.c)
+endif()
+set_property(TARGET ${MCUX_SDK_PROJECT_NAME} PROPERTY SOURCES ${AEGIS_SRCS})

@@ -10,6 +10,10 @@ include(${SdkRootDirPath}/CMakeLists.txt)
 include(${SdkRootDirPath}/${board_root}/${board}/tfm_examples/tfm_demo/tfm_demo_ns/reconfig.cmake OPTIONAL)
 
 mcux_add_source(BASE_PATH ${CMAKE_CURRENT_LIST_DIR} SOURCES src/main.c src/hardware_init.c)
+# test builds only (probe.sh): AEGIS_NS_EXTRA_DEFINES="-DAEGIS_NS_PROBE_ADDR=0x... -DAEGIS_NS_PROBE_NAME=..."
+if(DEFINED ENV{AEGIS_NS_EXTRA_DEFINES})
+    mcux_add_macro(CC "$ENV{AEGIS_NS_EXTRA_DEFINES}")
+endif()
 mcux_add_include(BASE_PATH ${CMAKE_CURRENT_LIST_DIR} INCLUDES src ../aegis_pq)
 mcux_add_macro(CC "-DFSL_FEATURE_PHYKSZ8081_USE_RMII50M_MODE -DLWIP_RAND=aegis_rand32")
 mcux_add_armgcc_configuration(CC "-Wno-unused-variable -Wno-unused-but-set-variable -Wno-return-type -Wno-maybe-uninitialized")

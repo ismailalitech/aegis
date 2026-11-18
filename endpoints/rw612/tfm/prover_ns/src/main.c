@@ -43,6 +43,16 @@ unsigned int aegis_rand32(void)
 	return r;
 }
 
+/* Replaces the device's weak SystemInit for the non-secure image. TF-M has already set clocks, the flash cache and
+ * the FPU access rights; the device version would also read the flash-cache registers, which the Aegis target_cfg.c
+ * makes secure-only (a non-secure access there is a SecureFault). Only the FPU access needs setting here. */
+void SystemInit(void)
+{
+#if ((__FPU_PRESENT == 1) && (__FPU_USED == 1))
+	SCB->CPACR |= ((3UL << 10 * 2) | (3UL << 11 * 2));
+#endif
+}
+
 void SysTick_Handler(void)
 {
 	time_isr();
@@ -232,6 +242,16 @@ int main(void)
 
 	BOARD_InitHardware();
 	time_init();
+#if defined(AEGIS_NS_PROBE_ADDR)
+	/* TEST BUILD ONLY (tools: endpoints/rw612/tfm/probe.sh): read one peripheral register from the non-secure side.
+	 * For a peripheral the Aegis target_cfg.c makes secure-only, the read must fault and never print "read ok". */
+	PRINTF("aegis-probe: non-secure read of %s at 0x%08x ...\r\n", AEGIS_NS_PROBE_NAME, (unsigned)AEGIS_NS_PROBE_ADDR);
+	{
+		volatile uint32_t v = *(volatile uint32_t *)(uintptr_t)AEGIS_NS_PROBE_ADDR;
+
+		PRINTF("aegis-probe: read ok, value 0x%08x\r\n", (unsigned)v);
+	}
+#endif
 	PRINTF("AEGIS-RW612-TFM-PROVER %s (non-secure network side; the key and the proofs are in the secure partition)\r\n",
 	       "0.2.0");
 	if (mac_from_key(cfg.macAddress) != 0) {

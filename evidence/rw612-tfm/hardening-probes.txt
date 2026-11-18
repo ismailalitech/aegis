@@ -1,0 +1,22 @@
+# FRDM-RW612 with TF-M: non-secure reads of peripheral registers (endpoints/rw612/tfm/probe.sh), 2026-11-18
+# Each line: one test build of the non-secure prover that reads one register right after start-up.
+# 'boots' counts TF-M boot banners in 40 s: a protected read is a security fault, TF-M resets, the read never returns.
+
+## NXP's original target_cfg.c
+OCOTP          read-ok=1  aegis-probe: read ok, value 0x    2000
+FLEXSPI        read-ok=1  aegis-probe: read ok, value 0xffff8010
+
+## Aegis target_cfg.c (endpoints/rw612/tfm/aegis_s/platform/target_cfg.c)
+OCOTP          boots=7 probe-attempts=6 read-ok=0
+FLEXSPI        boots=7 probe-attempts=6 read-ok=0
+CACHE64_CTRL0  boots=8 probe-attempts=7 read-ok=0
+TRNG           boots=8 probe-attempts=7 read-ok=0
+ENET_EIR       boots=1 probe-attempts=1 read-ok=1
+(ENET_EIR is the control: a peripheral the non-secure prover needs, still readable)
+
+## Gateway after the hardened images were flashed
+06:56:02 frdm-rw612 QUARANTINED (trustzone trust) component SPE not allowed (measurement bad3f8ba31b8...); component NSPE not allowed (measurement abf80fdad089...) [credential: revoked]
+06:56:36 frdm-rw612 QUARANTINED (trustzone trust) component SPE not allowed (measurement bad3f8ba31b8...); component NSPE not allowed (measurement abf80fdad089...) [credential: revoked]
+06:57:23 frdm-rw612 QUARANTINED (trustzone trust) component SPE not allowed (measurement 5fdbdba0e231...); component NSPE not allowed (measurement 0cb177f9a8bf...) [credential: revoked]
+06:57:57 frdm-rw612 ADMITTED (trustzone trust)  [credential: issued session 727e078c186c...]
+06:58:31 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=7;fw=rw612-tfm-0.2.0)]

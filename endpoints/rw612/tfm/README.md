@@ -50,12 +50,27 @@ then). Never run the SDK's `tfm_secureboot/scripts`: they burn the secure-boot k
 - The Aegis partition with the test client: the key from ELS (`rc=0`), a `PQKEY` reply, a 378-byte claims token with
   profile `aegis-rw612-tfm-v1` and its ML-DSA-65 signature, and the expected errors for the other requests.
 
+## Hardening TF-M's defaults (stage A, done)
+
+NXP's `target_cfg.c` gives the non-secure world user access to peripherals that let it change what the secure side
+measures, or harm the chip for good. `aegis_s/platform/target_cfg.c` is NXP's file with eight access rules changed to
+secure-privileged: OCOTP and its adapter (fuse programming), FlexSPI and OTFAD (they could rewrite the secure image and
+TF-M's storage), both flash caches, the TRNG (the non-secure side gets randomness through PSA), ROM control and the
+debug mailbox. The CMake builds it instead of NXP's, and leaves out the load data of NXP's loader service, which lets a
+non-secure caller make secure code process an SB3 file and write memory. No SDK file changes.
+
+Tested on the board (`probe.sh`, evidence/rw612-tfm/hardening-probes.txt): a test build of the non-secure prover reads
+one register of a peripheral at start-up. With NXP's rules, OCOTP and FlexSPI read fine; with the Aegis rules, OCOTP,
+FlexSPI, the flash cache and the TRNG each fault (TF-M resets the chip, the read never returns), while the ENET register
+the prover needs still reads. The hardened images are admitted by the gateway with trustzone trust.
+
+Still open (stage B): RSTCTL0, CLKCTL0 and SYSCTL0 stay non-secure, because the Ethernet set-up and the clock queries of
+the non-secure side use them. Through them the non-secure side can reset or stop ELS: a denial of service (the key
+derivation then fails closed, because it checks the die key's full properties), not a way to forge a quote.
+
 ## Next
 
-1. The non-secure network prover: ENET, lwIP and a TCP server on port 7444 that pipes lines to the partition.
-2. Hardening TF-M's defaults for this use: today the non-secure side can reach the OTP controller, the FlexSPI
-   controller and the flash caches, and the ELS reset and clock (`target_cfg.c`), and an always-built loader service
-   lets a non-secure caller make secure code write memory. Each has to be closed, or the measurements mean less than
-   they claim.
-3. Gateway profile `aegis-rw612-tfm-v1`, the reference values (`tools`), PC tests, the tamper test, an adversarial
-   review of the secure code, the site.
+1. Stage B of the hardening: move the ENET clock and reset into the secure side and close RSTCTL0, CLKCTL0, SYSCTL0.
+2. An adversarial review of the secure code (the partition, aegis_proto.c as it runs in the secure world, the probe
+   and flash tooling).
+3. The site.
