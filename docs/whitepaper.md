@@ -1,6 +1,6 @@
 # Aegis: a post-quantum attestation gateway on PolarFire SoC
 
-Status: bench prototype, measured on real boards, 2026-11-16. Read `threat-model.md` for everything
+Status: bench prototype, measured on real boards, 2026-11-18. Read `threat-model.md` for everything
 this paper does not claim.
 
 ## 1. Problem
@@ -19,11 +19,16 @@ hardware produces**, signed and exchanged with the NIST post-quantum algorithms 
 
 - **Gateway**: a PolarFire SoC Discovery Kit (MPFS095T). Linux on three U54 cores runs `aegisd`
   (its own signed quote) and `aegis-fleet` (attest, admit or quarantine, credentials, session
-  heartbeats). A fabric block accelerates Keccak and the NTT; a FreeRTOS supervisor runs on the
+  heartbeats). A fabric block runs the SHA-3 sponge and the NTT; a FreeRTOS supervisor runs on the
   fourth core.
-- **Endpoint**: an STM32H573I-DK running TF-M v2.3.0 with an added post-quantum partition. An
-  ML-DSA-65 identity key is derived inside the secure world from the chip's hardware-unique key and
-  signs the TF-M attestation token together with the gateway's challenge.
+- **Endpoints from two vendors**:
+  - **Two STM32H573I-DK** run TF-M v2.3.0 with an added post-quantum partition. An ML-DSA-65 identity key is derived
+    inside the secure world from the chip's hardware-unique key and signs the TF-M attestation token together with
+    the gateway's challenge.
+  - **An NXP FRDM-RW612** runs NXP's TF-M with the Aegis prover as a TrustZone secure partition. The key comes from
+    the chip's die key in its EdgeLock Secure Subsystem. Both flash partitions are measured before any non-secure
+    code runs, and the non-secure side only carries the network. The peripherals NXP's defaults leave open to
+    non-secure code are closed, and each closure was tested on the chip.
 - **Legacy node**: an Arduino Uno with no keys and no measured boot, to show a device that cannot
   attest.
 - **Verifier on a PC** that checks the gateway's own quote, a red-team harness, and a regression
@@ -55,16 +60,20 @@ hardware produces**, signed and exchanged with the NIST post-quantum algorithms 
 | Claim | Evidence |
 |---|---|
 | Correct ML-KEM-768 / ML-DSA-65 | NIST ACVP vectors pass on the PC, on the PolarFire with the fabric doing every Keccak permutation, and on the STM32 Cortex-M33 code (265 of 265) |
+| Two vendors, one protocol | the STM32s and the RW612 are attested, provisioned and held in KMAC256 sessions by the same gateway code; the RW612's verdict names where its trust comes from: trustzone |
+| A compromised non-secure side cannot undo it (RW612) | a one-byte change to the non-secure image is quarantined on its measurement; non-secure reads of 12 protected peripheral blocks fault on the chip |
+| Hostile input to the secure partitions | both partitions fuzzed with ASan and UBSan against a model of the protocol: one state bug found and fixed on both; then 1.05 million and 0.89 million executions with nothing found |
+| Replay against a real board | the gateway's own key-exchange message, captured and replayed at an STM32, is refused and the session kept |
 | Tampered but correctly signed firmware is caught | a Non-Secure image signed with the trusted key boots normally and is QUARANTINED on its measurement; its credential is revoked |
 | Devices that cannot attest are refused | the Uno is QUARANTINED on every cycle |
 | Attacks on the protocol | 3000 token mutations accepted: 0; 800 hostile endpoint replies admitted: 0; classic-token downgrade and KEM key replay refused; malformed frames do not stop the services |
-| Whole system | the regression passes 12 of 12 stages (host and boards) |
+| Whole system | the regression passes 13 of 13 stages on host and boards, including ACVP with the second accelerator and heartbeats from the STM32 and the RW612 (`evidence/console/regression-13of13.txt`) |
 
-**The fabric accelerator is not faster.** Keccak runs in 24 cycles at 50 MHz, but moving 100
-uncached words over the APB bus per permutation costs 16.7 us. ML-KEM-768 keygen goes from 1.22 to
-1.32 ms and ML-DSA-65 sign from 14.3 to 15.5 ms with the fabric. The accelerator is correct and is a
-base for keeping data in the fabric, not a speed-up as built. The core adds about 11,800 4-LUTs
-(36,373 LE, 38.9 %, for the whole design) and meets timing with 2.06 ns worst slack.
+**The fabric accelerator, second version.** The first core computed a Keccak permutation in 24 cycles, but moving
+the whole state over the APB bus for every permutation made liboqs 6-12 % slower than software. The second version
+keeps the sponge state in the fabric and writes squeezed blocks to DDR by DMA. Measured on the board, ML-KEM-768 is
+1.26-1.29 times faster and ML-DSA-65 1.19-1.54 times faster, with the NIST ACVP cases passing
+(`accelerator-v2.md`). Signing gains least, because most of its time is polynomial arithmetic rather than hashing.
 
 ## 5. Honest limits
 
@@ -75,14 +84,16 @@ base for keeping data in the fabric, not a speed-up as built. The core adds abou
 - **The gateway's own key lives in software.** The board's chip is the non-"S" part: it has no
   hardware crypto block and does not hand a PUF-protected key to software. Linux file permissions
   protect it, and enrolment is trust on first use.
-- **Development keys** sign the endpoint images and TF-M's published attestation key is used;
-  only the ML-DSA signature is security-relevant. The endpoint is left in its open (not closed)
-  product state.
+- **Development keys** sign the STM32 images and TF-M's published attestation key is used;
+  only the ML-DSA signature is security-relevant. The STM32s are left in their open (not closed)
+  product state, and the RW612 has no secure boot fused, so a debugger can still replace its
+  secure image. Closing either is irreversible and was not done on this bench.
 - **Not evaluated**: side channels, fault injection, power loss during provisioning.
 - Not certified. Do not use it to protect anything real.
 
 ## 6. Where it goes next
 
-A managed switch to turn decisions into blocked traffic; a gateway key held by hardware (an "S"
-device or an external secure element); closing the endpoint and using production keys; moving
-whole sponge and polynomial steps into the fabric to make the accelerator pay off.
+A switch with 802.1Q VLANs to turn decisions into blocked traffic; a gateway key held by hardware (an "S" device or
+an external secure element); closing the endpoints and using production keys; a Zynq UltraScale+ endpoint, whose boot
+chain can measure the firmware before it runs; the polynomial (NTT) steps in the fabric, where signing spends most of
+its time.

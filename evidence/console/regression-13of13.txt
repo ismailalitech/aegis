@@ -1,0 +1,21 @@
+# tools/regression.sh --board, 2026-11-18, with REDTEAM_STM32 set to STM32 board 2 (board 1 not connected)
+# Endpoints with a session on the gateway: STM32 board 2 and the FRDM-RW612 (TF-M 0.2.1).
+
+PASS host-unit-tests
+PASS host-redteam
+PASS rtl-simulation
+PASS acvp-pc-software
+PASS acvp-vectors-intact
+PASS gateway-phase1
+PASS fabric-selftest
+PASS fabric-acvp
+PASS fabric-sponge-acvp
+PASS fleet-once
+PASS fleet-session
+PASS fleet-heartbeat
+PASS device-redteam
+passed 13, failed 0 -> logs/regression/<run>
+
+## fleet-heartbeat
+stm32h573-dk-2 (b'uptime_s=12375;link=1;fw=0.5.0', 363)
+frdm-rw612 (b'requests=937;stack=19368/32768;fw=rw612-tfm-0.2.1', 73)

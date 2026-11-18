@@ -25,8 +25,21 @@ Rule from now on: load the module once and leave it loaded; to remove it, reboot
 
 ## Open
 
-- Status 255 of PUF emulation and signature services.
-- Device certificate chain: the Microchip issuing CA certificate is not on this PC.
+Both closed (2026-11-18):
+
+- **Status 255 of the PUF emulation and signature services:** explained below ("Correction: the chip is not an S
+  device"). The MPFS095T (non-S) offers only the plaintext sNVM and nonce services, so 255 means "not available on
+  this part", not a wrong request.
+- **Device certificate chain:** it cannot be checked off the chip.
+  - The certificate's issuer is `C=US, OU=PRO, O=MCHP, CN=8baa5410305e6bea1df7` (the CN looks like a key
+    identifier). It is signed with ECDSA-SHA384 on P-384, and has no extension pointing to an issuing certificate.
+  - Microchip documents the signing key as the MCPK, a P-384 key stored in the device's pNVM, and publishes no copy
+    of it ([MCPK](https://onlinedocs.microchip.com/oxy/GUID-DF33D7C4-5604-4C6B-92AF-8C864323C016-en-US-14/GUID-FFF02CC1-AE6B-47F2-A6B5-1C125EFD5A9F.html),
+    [supply chain assurance certificate](https://onlinedocs.microchip.com/oxy/GUID-DF33D7C4-5604-4C6B-92AF-8C864323C016-en-US-14/GUID-7DDE4E2B-FE88-4DD6-96AD-7A29E1CCA57C.html)).
+  - What exists is the on-chip check: the system controller verifies the signature with the MCPK, and the serial
+    number and key against the device, every time it exports the certificate. The gateway's quote carries the
+    certificate and its hash, so a verifier sees the same certificate on every quote.
+  - Proving it is a genuine Microchip certificate needs the MCPK from Microchip.
 
 ## 2026-11-16, PC-side work while the board waits
 

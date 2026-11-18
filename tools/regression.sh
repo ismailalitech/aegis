@@ -2,6 +2,8 @@
 # Aegis regression run. Host stages need no hardware; --board adds the checks on the real boards
 # (gateway at $GATEWAY, STM32 line protocol at $STM32, the STM32 on its own Ethernet).
 #   tools/regression.sh [--board]
+# REDTEAM_STM32=host:port picks the STM32 the device red-team attacks (default $STM32), e.g. REDTEAM_STM32=$STM32_2
+# while board 1 is not connected. The heartbeat stage checks every endpoint that holds a session on the gateway.
 # Writes logs/regression/<time>/ and exits non-zero on the first failing stage.
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -33,8 +35,19 @@ if [ "${1:-}" = --board ]; then
     stage fabric-sponge-acvp   ssh -o BatchMode=yes $B 'cd /root/aegis/oqs-sponge && LD_LIBRARY_PATH=$PWD AEGIS_PQC_SPONGE=hw python3 run_acvp_commands.py commands.jsonl $PWD'
     stage fleet-once           ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 fleet.py once ../policy/fleet.json --no-credentials | grep -q "\"admitted\": true"'
     stage fleet-session        ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 fleet.py session ../policy/fleet.json | grep -q "\"same_session\": true"'
-    stage fleet-heartbeat      ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 -c "import sys,json; sys.path.insert(0,\"../../common\"); import fleet; ep=json.load(open(\"../policy/fleet.json\"))[\"endpoints\"][0]; print(fleet.heartbeat(ep, open(\"/var/lib/aegis/credentials/\"+ep[\"name\"]+\".session\",\"rb\").read()))"'
-    stage device-redteam       $PY tests/redteam/fuzz_devices.py --stm32 "$STM32" --gateway "$GATEWAY" --n 40
+    stage fleet-heartbeat      ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 -c "
+import sys, json, os
+sys.path.insert(0, \"../../common\")
+import fleet
+n = 0
+for ep in json.load(open(\"../policy/fleet.json\"))[\"endpoints\"]:
+    f = \"/var/lib/aegis/credentials/\" + ep[\"name\"] + \".session\"
+    if os.path.exists(f):
+        print(ep[\"name\"], fleet.heartbeat(ep, open(f, \"rb\").read()))
+        n += 1
+sys.exit(0 if n else \"no endpoint holds a session\")
+"'
+    stage device-redteam       $PY tests/redteam/fuzz_devices.py --stm32 "${REDTEAM_STM32:-$STM32}" --gateway "$GATEWAY" --n 40
 fi
 echo "passed $pass, failed $fail -> $OUT"
 [ "$fail" -eq 0 ]
