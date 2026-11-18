@@ -383,3 +383,137 @@
     - 12
     title: Steady again
     text: Board 1 heartbeat 1, board 2 heartbeat 10, the Arduino quarantined.
+- id: console-rw612-boot
+  type: terminal
+  title: the FRDM-RW612 starting the Aegis prover
+  alt: 'The FRDM-RW612 console after a reset: Zephyr starts the prover, which lists the keys the boot ROM left in ELS (the die master key in slots
+    0 and 1, other ROM keys in 2, 3, 6 and 7), derives its ML-DSA-65 key from the die key, hashes its own image, sets a MAC address from the key,
+    brings the Ethernet link up, gets an address and listens on port 7444.'
+  width: 900
+  step: 3.4
+  height: 464
+  lines:
+  - $ board console (USB serial), after a reset
+  - '*** Booting Zephyr OS build v4.5.0 ***'
+  - AEGIS-RW612-PROVER 0.1.0
+  - 'els slot  0: props 0x60010161'
+  - 'els slot  1: props 0x60010121'
+  - 'els slot  2: props 0x88000320'
+  - 'els slot  3: props 0x001000a0'
+  - 'els slot  6: props 0x800100e1'
+  - 'els slot  7: props 0x800100a1'
+  - 'aegis: key sha256 219414c54e7bbf34..., image 146308 bytes, sha256 864ac72280f7200b...'
+  - 'aegis: mac 02:ae:dd:dd:6b:a1'
+  - 'phy_mc_ksz8081: PHY (2) is entering autonegotiation sequence'
+  - 'phy_mc_ksz8081: PHY 2 is up'
+  - 'phy_mc_ksz8081: PHY (2) Link speed 100 Mb, full duplex'
+  - 'net_dhcpv4: Received: <lan address>'
+  - 'aegis: address <lan address>, listening on 7444'
+  callouts:
+  - lines:
+    - 1
+    - 2
+    title: Zephyr and the prover
+    text: Zephyr v4.5.0 starts the Aegis prover 0.1.0.
+  - lines:
+    - 3
+    - 8
+    title: ELS key slots
+    text: 'Slots 0-1: the die master key (CKDF only). 2, 3, 6, 7: other ROM keys.'
+  - lines:
+    - 9
+    - 9
+    title: Key and image
+    text: The key is the same on every boot; the image hash is the APP measurement.
+  - lines:
+    - 10
+    - 10
+    title: MAC
+    text: 02:ae and the first four bytes of the public key.
+  - lines:
+    - 11
+    - 15
+    title: On the network
+    text: 100 Mb/s link, an address by DHCP, port 7444 open.
+- id: console-rw612-pc
+  type: terminal
+  title: the gateway's checks run from the PC
+  alt: 'Run from the PC with the gateway''s own verifier code: the board''s key fingerprint, twenty attestations in a row all admitted in 73 to
+    302 ms, the reported image hash equal to the hash of the built image, and a wrong reference refused.'
+  width: 900
+  step: 3.4
+  height: 244
+  lines:
+  - $ python3 fleet.attest() against the board, from the PC
+  - 'PQKEY 1952 bytes, sha256 219414c54e7bbf34 (the same on every boot and image: derived in ELS)'
+  - '20 attestations back to back: 20 admitted; quote time min 0.073 max 0.302 s'
+  - 'APP measured == sha256(zephyr.bin): True 146308 bytes'
+  - wrong reference -> QUARANTINED ['component APP not allowed (measurement 864ac72280f7...)']
+  callouts:
+  - lines:
+    - 1
+    - 1
+    title: The key
+    text: Fetched with PQKEY; the same across resets and images.
+  - lines:
+    - 2
+    - 2
+    title: Twenty quotes
+    text: Each a fresh ML-DSA-65 signature on the Cortex-M33, plus the network.
+  - lines:
+    - 3
+    - 3
+    title: The measurement
+    text: Equal to sha256sum of the zephyr.bin that was flashed.
+  - lines:
+    - 4
+    - 4
+    title: Wrong reference
+    text: A policy that allows another hash quarantines the board.
+- id: console-rw612-gateway
+  type: terminal
+  title: 'the gateway journal: good image, modified image, good image'
+  alt: 'The gateway journal for the FRDM-RW612: admitted with device-key trust, a credential issued over ML-KEM-768 and KMAC heartbeats; then,
+    with a modified image (one configuration value changed), quarantined with the credential revoked because the APP measurement is not allowed;
+    then, with the good image back, admitted with a new session.'
+  width: 1100
+  step: 3.4
+  height: 364
+  lines:
+  - $ ssh <gateway> journalctl -u aegis-fleet -o cat | grep frdm-rw612
+  - '00:47:58 frdm-rw612 ADMITTED (device-key trust)  [credential: issued session 62eea2ec5d6e...]'
+  - '00:48:32 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 1 (uptime_s=110;link=1;fw=rw612-0.1.0)]'
+  - '00:49:06 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 2 (uptime_s=143;link=1;fw=rw612-0.1.0)]'
+  - '00:49:40 frdm-rw612 QUARANTINED (device-key trust) component APP not allowed (measurement 06da0d22095c...) [credential: revoked]'
+  - '00:50:14 frdm-rw612 QUARANTINED (device-key trust) component APP not allowed (measurement 06da0d22095c...) [credential: revoked]'
+  - '00:50:48 frdm-rw612 QUARANTINED (device-key trust) component APP not allowed (measurement 06da0d22095c...) [credential: revoked]'
+  - '00:51:22 frdm-rw612 ADMITTED (device-key trust)  [credential: issued session 43e7064f4227...]'
+  - '00:51:56 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 1 (uptime_s=63;link=1;fw=rw612-0.1.0)]'
+  - '00:52:30 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 2 (uptime_s=97;link=1;fw=rw612-0.1.0)]'
+  - '00:53:03 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 3 (uptime_s=130;link=1;fw=rw612-0.1.0)]'
+  callouts:
+  - lines:
+    - 1
+    - 1
+    title: Admitted
+    text: Device-key trust; a credential and an ML-KEM-768 session are issued.
+  - lines:
+    - 2
+    - 3
+    title: Heartbeats
+    text: KMAC256 over the session, one per cycle.
+  - lines:
+    - 4
+    - 6
+    title: Modified image
+    text: 'The key still signs, but APP is not allowed: quarantined, credential revoked.'
+  - lines:
+    - 7
+    - 7
+    title: Good image back
+    text: Admitted again with a new session.
+  - lines:
+    - 8
+    - 10
+    title: Steady
+    text: Heartbeats 1, 2, 3 of the new session.

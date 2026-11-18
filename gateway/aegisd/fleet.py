@@ -34,6 +34,11 @@ import psa_token  # noqa: E402
 import kmac  # noqa: E402
 
 PQ_LABEL = b"aegis-endpoint-quote-v1"
+LINUX_PROFILE = "aegis-linux-software-v1"   # kind aegis-linux: key and measurements held by Linux, not by hardware
+DEVICE_PROFILE = "aegis-rw612-els-v1"       # kind aegis-device: key from the chip's ELS, measurement by the firmware
+# kinds whose quote is a plain CBOR claims map signed only with ML-DSA-65: (expected profile, trust label)
+PLAIN_KINDS = {"aegis-linux": (LINUX_PROFILE, "software"), "aegis-device": (DEVICE_PROFILE, "device-key")}
+PQ_KINDS = ("aegis-pq",) + tuple(PLAIN_KINDS)
 KEM_INIT_LABEL = b"aegis-kem-init-v1"
 CRED_LABEL = b"aegis-credential-v1"
 CRED_LIFETIME_S = 3600
@@ -218,14 +223,20 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
     """kind "psa": PSA token signed by the endpoint's IAK (ES256).
     kind "aegis-pq": the same token plus an ML-DSA-65 signature by the endpoint's enrolled
     post-quantum key; the ML-DSA check is mandatory, the ES256 check runs only if an
-    iak_pub_pem is configured."""
+    iak_pub_pem is configured.
+    kind "aegis-linux": a plain CBOR claims map (PSA claim numbers, profile aegis-linux-software-v1) signed only
+    with the endpoint's ML-DSA-65 key. The key and the measurements are held by Linux, not by hardware: the verdict
+    says so ("trust": "software").
+    kind "aegis-device": the same plain claims (profile aegis-rw612-els-v1) from a microcontroller whose ML-DSA-65 key
+    is derived inside the chip's key store (NXP ELS) and never stored; the measurement is computed by the firmware
+    itself, so the verdict says "trust": "device-key" (the key proves the chip, not the firmware)."""
     kind = ep.get("kind", "psa")
     verdict = {"endpoint": ep["name"], "kind": kind, "time": int(time.time()), "admitted": False, "reasons": []}
     challenge = secrets.token_bytes(32)
     t0 = time.monotonic()
     sig = None
     try:
-        if kind == "aegis-pq":
+        if kind in PQ_KINDS:
             tok, sig = request_pq(ep["host"], int(ep["port"]), challenge, timeout)
         else:
             tok = request_token(ep["host"], int(ep["port"]), challenge, timeout)
@@ -235,7 +246,7 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
         return verdict
     verdict["elapsed_s"] = round(time.monotonic() - t0, 3)
     try:
-        if kind == "aegis-pq":
+        if kind in PQ_KINDS:
             import mldsa
             with open(_path(base_dir, ep["pq_pub_file"])) as f:
                 pk = bytes.fromhex(f.read().strip())
@@ -243,7 +254,13 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
                 verdict["reasons"].append("ML-DSA-65 quote signature invalid")
                 return verdict
             verdict["pq_signature"] = "ML-DSA-65 valid"
-        if ep.get("iak_pub_pem"):
+        if kind in PLAIN_KINDS:
+            profile, verdict["trust"] = PLAIN_KINDS[kind]
+            claims = psa_token.parse_plain(tok)
+            if claims.get("profile") != profile:
+                verdict["reasons"].append("profile is not %s" % profile)
+                return verdict
+        elif ep.get("iak_pub_pem"):
             with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
                 claims = psa_token.verify(tok, f.read(), ecdsa_verify)
         else:
@@ -355,7 +372,7 @@ def main(argv=None):
     if a.cmd == "enroll-pq":
         # Trust on first use: fetch each aegis-pq endpoint's ML-DSA-65 key and store it.
         for ep in policy["endpoints"]:
-            if ep.get("kind") != "aegis-pq":
+            if ep.get("kind") not in PQ_KINDS:
                 continue
             pk = request_pq_key(ep["host"], int(ep["port"]))
             path = _path(base, ep["pq_pub_file"])
@@ -394,7 +411,9 @@ def main(argv=None):
         os.replace(tmp, a.state)
         for v in res:
             print("%s %s %s %s%s" % (time.strftime("%H:%M:%S"), v["endpoint"],
-                                     "ADMITTED" if v["admitted"] else "QUARANTINED", "; ".join(v["reasons"]),
+                                     ("ADMITTED" if v["admitted"] else "QUARANTINED") +
+                                     (" (%s trust)" % v["trust"] if v.get("trust") else ""),
+                                     "; ".join(v["reasons"]),
                                      (" [credential: %s]" % v["credential"]) if v.get("credential") else ""),
                   flush=True)
         time.sleep(a.interval)

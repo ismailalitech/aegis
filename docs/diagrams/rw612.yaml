@@ -1,0 +1,131 @@
+# The NXP FRDM-RW612 endpoint (endpoints/rw612/README.md; site lab 57 and the ELS-slot problem page).
+
+- id: rw612-key-derivation
+  alt: "How the RW612 endpoint's keys are made, inside the chip's EdgeLock Secure Subsystem (ELS). The die master key, loaded by the boot ROM from the PUF into ELS slots 0 and 1 and never readable by software, derives a temporary HMAC key with CKDF (NIST SP 800-108) into slots 18 and 19. ELS computes two HMAC-SHA256 values with it, one per label, and the temporary key is deleted. The first value seeds the ML-DSA-65 key that signs quotes (and gives the MAC address), the second is the provisioning root from which each ML-KEM-768 exchange draws a fresh key pair and the session key."
+  width: 900
+  height: 360
+  nodes:
+    die:  {x: 20,  y: 140, w: 160, h: 76, kind: mem,   title: "Die master key", sub: "ELS slots 0-1, from the\nPUF; never readable"}
+    ckdf: {x: 210, y: 140, w: 150, h: 76, kind: hart,  title: "CKDF in ELS", sub: "SP 800-108, data\nAEGIS-RW612 1"}
+    tmp:  {x: 390, y: 140, w: 150, h: 76, kind: hart,  title: "Temporary key", sub: "slots 18-19, HMAC\nonly; then deleted"}
+    seed: {x: 572, y: 30,  w: 156, h: 66, kind: plain, title: "Seed", sub: "HMAC, label 1\nwiped after keygen"}
+    dsa:  {x: 750, y: 30,  w: 130, h: 66, kind: good,  title: "ML-DSA-65", sub: "signs quotes;\nMAC 02:ae + pk"}
+    root: {x: 572, y: 250, w: 156, h: 66, kind: plain, title: "Provisioning root", sub: "HMAC, label 2"}
+    kem:  {x: 750, y: 250, w: 130, h: 66, kind: good,  title: "ML-KEM-768", sub: "per exchange,\nthen the session"}
+  edges:
+    - {from: die.right, to: ckdf.left}
+    - {from: ckdf.right, to: tmp.left}
+    - {from: tmp.right@0.3, to: seed.left}
+    - {from: tmp.right@0.7, to: root.left}
+    - {from: seed.right, to: dsa.left}
+    - {from: root.right, to: kem.left}
+  notes:
+    - {x: 20, y: 262, text: "inside ELS: software sees only\nthe two 32-byte HMAC outputs", kind: mem, size: 12}
+  steps: [die, e0, ckdf, e1, tmp, e2, seed, e4, dsa, e3, root, e5, kem]
+
+- id: rw612-endpoint
+  alt: "The RW612 endpoint and the gateway. The gateway's fleet service pins the board's ML-DSA-65 key and allows one image hash; it reaches the board over Ethernet on TCP port 7444. On the board, Zephyr runs the Ethernet driver with DHCP and a small TCP server; the protocol code (aegis_proto.c, with no RTOS code, so the PC tests build the same file) builds the claims, signs them, runs the ML-KEM exchange and the KMAC heartbeat with mldsa-native, mlkem-native and the KMAC code shared with the STM32 endpoint. Under it: ELS derives the keys from the die key, the TRNG gives 32 fresh bytes to every signature, and the image in flash is hashed for the APP measurement."
+  width: 900
+  height: 430
+  nodes:
+    gw:   {x: 20,  y: 40,  w: 200, h: 92, kind: hart,  title: "Gateway: aegis-fleet", sub: "kind aegis-device\npinned ML-DSA-65 key\nallowed APP hash"}
+    cred: {x: 20,  y: 250, w: 200, h: 76, kind: hart,  title: "Gateway identity", sub: "signs the credential\n(ML-DSA-65)"}
+    net:  {x: 290, y: 40,  w: 170, h: 92, kind: plain, title: "Zephyr networking", sub: "ENET, KSZ8081 PHY\nDHCP, TCP port 7444"}
+    proto: {x: 520, y: 40, w: 360, h: 92, kind: sw,    title: "aegis_proto.c (no RTOS code)", sub: "claims, hedged quote, ML-KEM exchange,\ncredential check, KMAC256 heartbeat;\nthe PC tests build the same file"}
+    lib:  {x: 520, y: 170, w: 360, h: 60, kind: plain, title: "mldsa-native, mlkem-native v2.0.0, KMAC256", sub: "the same code and configuration as the STM32 partition"}
+    els:  {x: 290, y: 270, w: 170, h: 76, kind: mem,   title: "ELS", sub: "die key, CKDF, HMAC\n(aegis_els.c)"}
+    trng: {x: 520, y: 270, w: 160, h: 76, kind: mem,   title: "TRNG", sub: "32 fresh bytes in\nevery signature"}
+    flash: {x: 720, y: 270, w: 160, h: 76, kind: mem,  title: "Flash (XIP)", sub: "the running image:\nAPP = SHA-256"}
+  edges:
+    - {from: gw.right, to: net.left, label: "Ethernet"}
+    - {from: net.right, to: proto.left}
+    - {from: proto.bottom, to: lib.top}
+    - {from: els.right@0.3, to: proto.left@0.85, label: "seed, root", dx: -78}
+    - {from: trng.top, to: lib.bottom@0.35}
+    - {from: flash.top, to: lib.bottom@0.8}
+    - {from: cred.top, to: gw.bottom, label: "credential"}
+  notes:
+    - {x: 290, y: 395, text: "FRDM-RW612: Cortex-M33 at 260 MHz, Zephyr v4.5.0, prover 0.1.0 (146 kB)", size: 12}
+  steps: [gw, e0, net, e1, proto, e2, lib, els, e3, trng, e4, flash, e5, cred, e6]
+
+- id: endpoint-trust-levels
+  alt: "Three kinds of endpoint and what their evidence proves. The STM32H573 with TF-M keeps its ML-DSA-65 key in the secure side, derived from the hardware-unique key, and its measurements come from the secure boot loader: the verdict carries no label. The FRDM-RW612 derives its key from the die key inside ELS, so the key proves the chip, but the firmware measures itself: the verdict says device-key trust. A Linux board keeps its key in a file and Linux measures its own files: the verdict says software trust."
+  width: 900
+  height: 380
+  nodes:
+    h1: {x: 140, y: 20,  w: 240, h: 44, kind: start, title: "STM32H573 + TF-M (aegis-pq)"}
+    h2: {x: 400, y: 20,  w: 230, h: 44, kind: start, title: "FRDM-RW612 (aegis-device)"}
+    h3: {x: 650, y: 20,  w: 230, h: 44, kind: start, title: "Linux board (aegis-linux)"}
+    k1: {x: 140, y: 90,  w: 240, h: 66, kind: good,  title: "Secure side", sub: "derived from the DHUK"}
+    k2: {x: 400, y: 90,  w: 230, h: 66, kind: good,  title: "Inside ELS", sub: "derived from the die key"}
+    k3: {x: 650, y: 90,  w: 230, h: 66, kind: bad,   title: "A file", sub: "readable by root"}
+    m1: {x: 140, y: 180, w: 240, h: 66, kind: good,  title: "The boot loader (BL2)", sub: "in the PSA token"}
+    m2: {x: 400, y: 180, w: 230, h: 66, kind: mem,   title: "The firmware itself", sub: "a liar could report the good hash"}
+    m3: {x: 650, y: 180, w: 230, h: 66, kind: bad,   title: "The running Linux", sub: "hashes its own files"}
+    v1: {x: 140, y: 270, w: 240, h: 66, kind: good,  title: "ADMITTED", sub: "no label"}
+    v2: {x: 400, y: 270, w: 230, h: 66, kind: mem,   title: "ADMITTED (device-key trust)", sub: "the key proves the chip"}
+    v3: {x: 650, y: 270, w: 230, h: 66, kind: bad,   title: "ADMITTED (software trust)", sub: "PC-tested; board pending"}
+  notes:
+    - {x: 20, y: 128, text: "Key held by", size: 13, bold: true}
+    - {x: 20, y: 218, text: "Measured by", size: 13, bold: true}
+    - {x: 20, y: 308, text: "Verdict", size: 13, bold: true}
+  steps: [h1, k1, m1, v1, h2, k2, m2, v2, h3, k3, m3, v3]
+
+- id: els-slots
+  alt: "The twenty ELS key slots of the RW612 and why the first version reset the chip. A 256-bit key takes two consecutive slots: a base slot and the next one. The boot ROM leaves the die master key in slots 0 and 1 and other keys in slots 2, 3, 6 and 7. The first version asked ELS for a 256-bit key with base slot 19, the last one: there is no slot 20, ELS raised a fault, and the chip reset every time. The fix looks for an even base slot whose pair is free, from the top: slots 18 and 19."
+  width: 900
+  height: 340
+  nodes:
+    a0:  {x: 20,  y: 50, w: 38, h: 40, kind: mem,   title: "0"}
+    a1:  {x: 62,  y: 50, w: 38, h: 40, kind: mem,   title: "1"}
+    a2:  {x: 104, y: 50, w: 38, h: 40, kind: hart,  title: "2"}
+    a3:  {x: 146, y: 50, w: 38, h: 40, kind: hart,  title: "3"}
+    a4:  {x: 188, y: 50, w: 38, h: 40, kind: plain, title: "4"}
+    a5:  {x: 230, y: 50, w: 38, h: 40, kind: plain, title: "5"}
+    a6:  {x: 272, y: 50, w: 38, h: 40, kind: hart,  title: "6"}
+    a7:  {x: 314, y: 50, w: 38, h: 40, kind: hart,  title: "7"}
+    a8:  {x: 356, y: 50, w: 38, h: 40, kind: plain, title: "8"}
+    a9:  {x: 398, y: 50, w: 38, h: 40, kind: plain, title: "9"}
+    a10: {x: 440, y: 50, w: 38, h: 40, kind: plain, title: "10"}
+    a11: {x: 482, y: 50, w: 38, h: 40, kind: plain, title: "11"}
+    a12: {x: 524, y: 50, w: 38, h: 40, kind: plain, title: "12"}
+    a13: {x: 566, y: 50, w: 38, h: 40, kind: plain, title: "13"}
+    a14: {x: 608, y: 50, w: 38, h: 40, kind: plain, title: "14"}
+    a15: {x: 650, y: 50, w: 38, h: 40, kind: plain, title: "15"}
+    a16: {x: 692, y: 50, w: 38, h: 40, kind: plain, title: "16"}
+    a17: {x: 734, y: 50, w: 38, h: 40, kind: plain, title: "17"}
+    a18: {x: 776, y: 50, w: 38, h: 40, kind: plain, title: "18"}
+    a19: {x: 818, y: 50, w: 38, h: 40, kind: bad,   title: "19"}
+    f1:  {x: 560, y: 120, w: 320, h: 50, kind: bad,  title: "First version: base slot 19", sub: "no slot 20: ELS fault, the chip resets"}
+    b0:  {x: 20,  y: 210, w: 38, h: 40, kind: mem,   title: "0"}
+    b1:  {x: 62,  y: 210, w: 38, h: 40, kind: mem,   title: "1"}
+    b2:  {x: 104, y: 210, w: 38, h: 40, kind: hart,  title: "2"}
+    b3:  {x: 146, y: 210, w: 38, h: 40, kind: hart,  title: "3"}
+    b4:  {x: 188, y: 210, w: 38, h: 40, kind: plain, title: "4"}
+    b5:  {x: 230, y: 210, w: 38, h: 40, kind: plain, title: "5"}
+    b6:  {x: 272, y: 210, w: 38, h: 40, kind: hart,  title: "6"}
+    b7:  {x: 314, y: 210, w: 38, h: 40, kind: hart,  title: "7"}
+    b8:  {x: 356, y: 210, w: 38, h: 40, kind: plain, title: "8"}
+    b9:  {x: 398, y: 210, w: 38, h: 40, kind: plain, title: "9"}
+    b10: {x: 440, y: 210, w: 38, h: 40, kind: plain, title: "10"}
+    b11: {x: 482, y: 210, w: 38, h: 40, kind: plain, title: "11"}
+    b12: {x: 524, y: 210, w: 38, h: 40, kind: plain, title: "12"}
+    b13: {x: 566, y: 210, w: 38, h: 40, kind: plain, title: "13"}
+    b14: {x: 608, y: 210, w: 38, h: 40, kind: plain, title: "14"}
+    b15: {x: 650, y: 210, w: 38, h: 40, kind: plain, title: "15"}
+    b16: {x: 692, y: 210, w: 38, h: 40, kind: plain, title: "16"}
+    b17: {x: 734, y: 210, w: 38, h: 40, kind: plain, title: "17"}
+    b18: {x: 776, y: 210, w: 38, h: 40, kind: good,  title: "18"}
+    b19: {x: 818, y: 210, w: 38, h: 40, kind: good,  title: "19"}
+    f2:  {x: 560, y: 280, w: 320, h: 50, kind: good, title: "Fix: an even base with a free pair", sub: "slots 18-19; deleted after the two HMACs"}
+  edges:
+    - {from: a19.bottom, to: f1.top@0.81}
+    - {from: b18.bottom, to: f2.top@0.75}
+  notes:
+    - {x: 20, y: 32, text: "first version", size: 12, kind: bad, bold: true}
+    - {x: 20, y: 192, text: "after the fix", size: 12, kind: good, bold: true}
+    - {x: 560, y: 32, text: "die key", size: 12, kind: mem}
+    - {x: 630, y: 32, text: "ROM keys", size: 12, kind: hart}
+    - {x: 712, y: 32, text: "free", size: 12}
+    - {x: 20, y: 150, text: "A 256-bit key takes a base slot and the next one.", size: 12}
+  steps: [a0, a1, a2, a3, a6, a7, a19, e0, f1, b18, b19, e1, f2]

@@ -15,6 +15,7 @@
 | Journal kept on the SD card (17 November 2026): `aegis-journal-link.service` links `/var/volatile/log/journal` to `/var/lib/journal` before the flush, `/etc/systemd/journald.conf.d/aegis.conf` (persistent, 50 MB). Checked: after a reboot the previous boot's fleet lines are readable. Note: `logger` on this image writes to busybox `syslogd`, not to the journal; use `systemd-cat` | `systemctl disable aegis-journal-link`; remove the unit, the drop-in and `/var/lib/journal`; reboot |
 | Fabric design 102 (accelerator v2), `build/libero/AEGIS_dv102.job`; gateway re-enrolled on the PC (old record kept) | program `AEGIS_dv101.job`; restore the enrolment record |
 | Policy: two STM32 entries (prover 0.5.0, KMAC heartbeats), backups `/root/aegis-backup-fleet-*.json` | copy a backup back to `gateway/policy/fleet.json`; restart `aegis-fleet` |
+| 18 November 2026: `fleet.py` and `common/psa_token.py` with the plain-claims kinds (aegis-linux, aegis-device); policy entry `frdm-rw612` and its key `keys/frdm-rw612.mldsa65.pub`. Backup `/root/aegis-backup-20261118-004725/` (gateway clock) | copy the three files back from the backup; restart `aegis-fleet` |
 
 Nothing written to eNVM, keys, locks or the SD card's boot and payload partitions.
 
@@ -38,3 +39,12 @@ then the Aegis images were written again.
 | Change | Undo |
 |---|---|
 | Flash: legacy-sensor sketch (`endpoints/arduino-uno/legacy_sensor`) | `avrdude -p atmega328p -c arduino -P <port> -b 115200 -U flash:w:backups/arduino-uno/<time>/flash-before-aegis.hex:i` (avrdude from ~/.arduino15) |
+
+## NXP FRDM-RW612
+
+| Change | Undo |
+|---|---|
+| Flash (external, 64 MB): Aegis prover 0.1.0 (`endpoints/rw612/artifacts/aegis-rw612-prover-0.1.0.bin` at 0x08000000) in place of the factory Wi-Fi demo. The first 16 MB were saved before (`~/aegis-tools/nxp-backup/frdm-rw612-flash-16M.bin`, sha256 103769ad...; data only in 0x08000000-0x08070000, 0x08400000-0x08490000 and 0x085e0000-0x08630000) | write the backup back with J-Link: `loadbin frdm-rw612-flash-16M.bin 0x08000000` |
+
+No fuse, OTP word or key was written: the prover only reads ELS key properties and uses slot 0 for CKDF into a
+temporary slot it deletes again.

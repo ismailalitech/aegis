@@ -4,7 +4,7 @@
 Every line drawn comes from a file a real run wrote; this script only adds the command line and the callouts.
 Run it, then tools/gen_diagrams.py.
 """
-import os, yaml
+import os, re, yaml
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def rec(name): return [l.rstrip('\n') for l in open(os.path.join(ROOT, 'evidence', 'console', name)) if l.strip()]
 def fig(id, title, alt, cmd, lines, callouts, step=3.4, width=900):
@@ -23,6 +23,23 @@ hard = rec('hardening-journal.txt')
 qvar = rec('quote-variation.txt')
 two = rec('two-boards.txt')
 duo = rec('two-endpoints-demo.txt')
+rw = rec('rw612-endpoint.txt')
+
+
+def section(lines, head):
+    """The lines under one '# ...' heading of a record."""
+    out, on = [], False
+    for l in lines:
+        if l.startswith('# '):
+            on = l.startswith(head)
+        elif on:
+            out.append(l)
+    return out
+
+
+rw_boot = [re.sub(r'^\[\d\d:\d\d:\d\d\.\d{3},\d{3}\] <inf> ', '', l) for l in section(rw, '# Board console')]  # Zephyr's timestamps
+rw_pc = section(rw, '# From the PC')
+rw_gw = section(rw, '# Gateway')
 
 figs = [
  fig('console-demo-journal', 'gateway journal during the demo',
@@ -105,6 +122,34 @@ figs = [
       {'lines': [5, 5], 'title': 'Board 2 unaffected', 'text': 'Same cycle: still admitted, heartbeat 8. Each device is judged on its own evidence.'},
       {'lines': [7, 7], 'title': 'Board 1 back', 'text': 'The good image: admitted with a new session.'},
       {'lines': [10, 12], 'title': 'Steady again', 'text': 'Board 1 heartbeat 1, board 2 heartbeat 10, the Arduino quarantined.'}], width=940),
+ fig('console-rw612-boot', 'the FRDM-RW612 starting the Aegis prover',
+     'The FRDM-RW612 console after a reset: Zephyr starts the prover, which lists the keys the boot ROM left in ELS (the die '
+     'master key in slots 0 and 1, other ROM keys in 2, 3, 6 and 7), derives its ML-DSA-65 key from the die key, hashes '
+     'its own image, sets a MAC address from the key, brings the Ethernet link up, gets an address and listens on port 7444.',
+     '$ board console (USB serial), after a reset', rw_boot,
+     [{'lines': [1, 2], 'title': 'Zephyr and the prover', 'text': 'Zephyr v4.5.0 starts the Aegis prover 0.1.0.'},
+      {'lines': [3, 8], 'title': 'ELS key slots', 'text': 'Slots 0-1: the die master key (CKDF only). 2, 3, 6, 7: other ROM keys.'},
+      {'lines': [9, 9], 'title': 'Key and image', 'text': 'The key is the same on every boot; the image hash is the APP measurement.'},
+      {'lines': [10, 10], 'title': 'MAC', 'text': '02:ae and the first four bytes of the public key.'},
+      {'lines': [11, 15], 'title': 'On the network', 'text': '100 Mb/s link, an address by DHCP, port 7444 open.'}]),
+ fig('console-rw612-pc', 'the gateway\'s checks run from the PC',
+     'Run from the PC with the gateway\'s own verifier code: the board\'s key fingerprint, twenty attestations in a row all '
+     'admitted in 73 to 302 ms, the reported image hash equal to the hash of the built image, and a wrong reference refused.',
+     '$ python3 fleet.attest() against the board, from the PC', rw_pc,
+     [{'lines': [1, 1], 'title': 'The key', 'text': 'Fetched with PQKEY; the same across resets and images.'},
+      {'lines': [2, 2], 'title': 'Twenty quotes', 'text': 'Each a fresh ML-DSA-65 signature on the Cortex-M33, plus the network.'},
+      {'lines': [3, 3], 'title': 'The measurement', 'text': 'Equal to sha256sum of the zephyr.bin that was flashed.'},
+      {'lines': [4, 4], 'title': 'Wrong reference', 'text': 'A policy that allows another hash quarantines the board.'}]),
+ fig('console-rw612-gateway', 'the gateway journal: good image, modified image, good image',
+     'The gateway journal for the FRDM-RW612: admitted with device-key trust, a credential issued over ML-KEM-768 and '
+     'KMAC heartbeats; then, with a modified image (one configuration value changed), quarantined with the credential '
+     'revoked because the APP measurement is not allowed; then, with the good image back, admitted with a new session.',
+     '$ ssh <gateway> journalctl -u aegis-fleet -o cat | grep frdm-rw612', rw_gw,
+     [{'lines': [1, 1], 'title': 'Admitted', 'text': 'Device-key trust; a credential and an ML-KEM-768 session are issued.'},
+      {'lines': [2, 3], 'title': 'Heartbeats', 'text': 'KMAC256 over the session, one per cycle.'},
+      {'lines': [4, 6], 'title': 'Modified image', 'text': 'The key still signs, but APP is not allowed: quarantined, credential revoked.'},
+      {'lines': [7, 7], 'title': 'Good image back', 'text': 'Admitted again with a new session.'},
+      {'lines': [8, 10], 'title': 'Steady', 'text': 'Heartbeats 1, 2, 3 of the new session.'}], width=1100),
 ]
 yaml.safe_dump(figs, open(os.path.join(ROOT, 'docs', 'diagrams', 'console.yaml'), 'w'), sort_keys=False, width=140, allow_unicode=True)
 print(len(figs), 'console figures')

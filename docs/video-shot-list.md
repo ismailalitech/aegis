@@ -27,6 +27,7 @@ field; put the video ID there when it is uploaded.
 | 54 | The accelerator that is faster | 3 min | `tools/accel/board_sponge_test.sh` running: `sponge_bench` timings, then 11 of 11 checks; then the speed table, read aloud: ML-KEM 1.26 to 1.29 times, ML-DSA verify 1.47 times faster than software. Finish on the Libero canvas with `aegis_pqc2_0` and its DMA port. |
 | 55 | Harden it without losing it | 3 min | The rollout in four steps, each with the gateway journal in view: new gateway code (still ADMITTED), new image (QUARANTINED on its measurement), policy (ADMITTED, KMAC heartbeats). Say plainly that two quotes always differ and why that does not show hedging. |
 | 56 | Two chips, two keys | 2 min | Both boards side by side. `PQKEY` on each: different keys. A PSA token from each: the same identity. Board 2 under board 1's name: refused. Show the two MAC addresses on the consoles. |
+| 57 | A key from the chip, on the NXP RW612 | 3 min | Already recorded on screen: `tools/rw612/record_demo.sh` (gateway journal, board console, steps; the site shows it at 4x). What only a camera can add: the FRDM-RW612 with its MCU-Link USB-C and Ethernet cables, its LEDs at reset, and the board next to the gateway while the modified image is flashed. Say why its verdict reads "device-key trust". |
 
 ## Photos worth taking at the same time
 
@@ -34,6 +35,7 @@ field; put the video ID there when it is uploaded.
 - The PolarFire and the STM32 with their Ethernet cables and the ST-LINK USB cable.
 - The Arduino with its USB cable.
 - The two STM32 boards together, with their network and ST-LINK cables.
+- The FRDM-RW612 from above, with the RW612 chip, the MCU-Link USB-C port and the Ethernet port in view.
 - A screenshot of the Libero project canvas with the Aegis block.
 
 ## After
