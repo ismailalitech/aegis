@@ -33,6 +33,7 @@ security views, merged image, all option bytes). The board held a TF-M v2.3.0 BL
 | Secure slot 0x0C038000 replaced by TF-M v2.3.0 + the Aegis PQ partition (`artifacts/tfm-s-v2.3.0-aegis-pq.hex`, security counter 1, same as before) | `endpoints/stm32h573/restore_from_backup.sh` |
 | Non-secure slot 0x08088000 replaced by the Aegis prover (`endpoints/stm32h573/artifacts/`) | same script |
 | Board 2, 18 November 2026: secure slot 0x0C038000 replaced by the build with the KEM_INIT fix and the encapsulation-key check (`~/aegis-tools/tfm-aegis-build-kemfix`, SPE `3cacd9d0...`, version 2.3.0, same signer and security counter, veneers unchanged); gateway policy for `stm32h573-dk-2` updated (backup `fleet.json.bak-stm32-kemfix` on the gateway); `evidence/stm32-kemfix/` | `STM32_SN=<board 2> endpoints/stm32h573/restore_from_backup.sh backups/stm32h573/20261118-100835-board2-before-kemfix` (its secure slot is the previous build), then the old SPE back in the policy |
+| Board 2, 18 November 2026: the non-secure slot temporarily held probe images (`probe.sh`: one word read each, and the SAES/DHUK test), then the normal prover again (`artifacts/prover-ns-0.5.0-mac.hex`, NSPE `34637a4e...`); secure slot, option bytes and counters untouched | nothing left to undo |
 
 To replace the secure image of a board, with backup, policy and checks: `endpoints/stm32h573/upgrade_secure.sh <endpoint>
 <ST-LINK serial> <signed .hex>` (tested on board 2 up to the write, and its gateway steps against the live gateway). For

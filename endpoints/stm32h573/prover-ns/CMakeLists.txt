@@ -44,6 +44,15 @@ target_sources(tfm_ns PRIVATE
 target_include_directories(tfm_ns PRIVATE net net/hal ${LWIP_DIR}/src/include)
 target_compile_definitions(tfm_ns PRIVATE HAL_ETH_MODULE_ENABLED ETH_RX_DESC_CNT=8U ETH_TX_DESC_CNT=4U)
 target_compile_definitions(tfm_ns PRIVATE AEGIS_PROVER_VERSION="${AEGIS_PROVER_VERSION}")
+if(AEGIS_NS_SAES_TEST)    # test image only (probe.sh --saes)
+    target_sources(tfm_ns PRIVATE ${CONFIG_SPE_PATH}/platform/hal/Src/stm32h5xx_hal_cryp.c
+                                  ${CONFIG_SPE_PATH}/platform/hal/Src/stm32h5xx_hal_cryp_ex.c)
+    target_compile_definitions(tfm_ns PRIVATE AEGIS_NS_SAES_TEST HAL_CRYP_MODULE_ENABLED)
+endif()
+if(AEGIS_NS_PROBE_ADDR)   # probe images only (probe.sh)
+    target_compile_definitions(tfm_ns PRIVATE AEGIS_NS_PROBE_ADDR=${AEGIS_NS_PROBE_ADDR}
+                               AEGIS_NS_PROBE_NAME="${AEGIS_NS_PROBE_NAME}")
+endif()
 target_link_libraries(tfm_ns PRIVATE tfm_api_ns tfm_api_ns_tz)
 
 set_target_properties(tfm_ns PROPERTIES SUFFIX ".axf" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")

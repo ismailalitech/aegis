@@ -493,6 +493,63 @@ int main(void)
 	SysTick_Config(SystemCoreClock / 1000u);
 
 	put("\r\nAEGIS-PROVER " AEGIS_PROVER_VERSION " ready\r\n");
+#ifdef AEGIS_NS_SAES_TEST
+	/* TrustZone negative test (probe.sh --saes): run the secure partition's key derivation, AES-256-ECB under the
+	 * DHUK in SAES (aegis_pq_attest.c, derive_from_dhuk), from the non-secure world. If SAES gave the same output
+	 * here, non-secure code could rebuild the device key. Test images only: the output goes to the console. */
+	{
+		static const uint8_t label[32] = "aegis-stm32h5-mldsa65-seed-v1...";
+		static uint32_t out[8];
+		CRYP_HandleTypeDef h;
+		HAL_StatusTypeDef st = HAL_ERROR, ist;
+
+		memset(&h, 0, sizeof(h));
+		__HAL_RCC_SAES_CLK_ENABLE();
+		h.Instance = SAES;
+		h.Init.DataType = CRYP_NO_SWAP;
+		h.Init.KeySize = CRYP_KEYSIZE_256B;
+		h.Init.pKey = NULL;
+		h.Init.Algorithm = CRYP_AES_ECB;
+		h.Init.DataWidthUnit = CRYP_DATAWIDTHUNIT_BYTE;
+		h.Init.KeyIVConfigSkip = CRYP_KEYIVCONFIG_ALWAYS;
+		h.Init.KeyMode = CRYP_KEYMODE_NORMAL;
+		h.Init.KeySelect = CRYP_KEYSEL_HW;
+		h.Init.KeyProtection = CRYP_KEYPROT_DISABLE;
+		put("aegis-saes: non-secure SAES with the DHUK\r\n");
+		ist = HAL_CRYP_Init(&h);
+		if (ist == HAL_OK) {
+			st = HAL_CRYP_Encrypt(&h, (uint32_t *)(uintptr_t)label, 32, out, 100);
+		}
+		snprintf(b, sizeof(b), "aegis-saes: init=%d encrypt=%d sr=0x%08lx\r\n", (int)ist, (int)st,
+			 (unsigned long)SAES->SR);
+		put(b);
+		if (st == HAL_OK) {
+			put("aegis-saes: output ");
+			for (int i = 0; i < 8; i++) {
+				snprintf(b, sizeof(b), "%02x%02x%02x%02x", (unsigned)(out[i] & 0xff), (unsigned)((out[i] >> 8) & 0xff),
+					 (unsigned)((out[i] >> 16) & 0xff), (unsigned)(out[i] >> 24));
+				put(b);
+			}
+			put("\r\n");
+		}
+		(void)HAL_CRYP_DeInit(&h);
+	}
+#endif
+#ifdef AEGIS_NS_PROBE_ADDR
+	/* TrustZone negative test (endpoints/stm32h573/probe.sh): read one word that the secure configuration should keep
+	 * from the non-secure world. Built only into probe images; the prover then runs as usual. */
+	{
+		volatile const uint32_t *pa = (volatile const uint32_t *)(uintptr_t)(AEGIS_NS_PROBE_ADDR);
+		uint32_t v;
+
+		snprintf(b, sizeof(b), "aegis-probe: non-secure read %s at 0x%08lx\r\n", AEGIS_NS_PROBE_NAME,
+			 (unsigned long)(uintptr_t)pa);
+		put(b);
+		v = *pa;
+		snprintf(b, sizeof(b), "aegis-probe: read ok, value 0x%08lx\r\n", (unsigned long)v);
+		put(b);
+	}
+#endif
 
 	lwip_init();
 	{
