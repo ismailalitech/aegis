@@ -43,6 +43,11 @@ jobs:
             [ -d ~/aegis-tools/$r ] || git clone -q --depth 1 --branch v2.0.0 https://github.com/pq-code-package/$r.git ~/aegis-tools/$r
           done
 
+      - name: Fuzz the protocol code the RW612 secure partition runs (libFuzzer, ASan, UBSan; seeds first, 2 minutes)
+        run: |
+          sudo apt-get install -y clang libclang-rt-18-dev
+          FUZZ_OUT=$RUNNER_TEMP/fuzz tests/fuzz/run.sh 120 2 || { tail -n 60 $RUNNER_TEMP/fuzz/fuzz-*.log; exit 1; }
+
       - name: NIST ACVP vectors (checked against SHA256SUMS)
         run: |
           tools/fetch_acvp.sh

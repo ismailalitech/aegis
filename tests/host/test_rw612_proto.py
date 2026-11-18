@@ -291,7 +291,7 @@ class Rw612TfmProfile(unittest.TestCase):
         r = fleet.provision(self.ep(self.port_tfm), self.d, self.gw_sk, "gid", {}, timeout=20)
         status, ctr = fleet.heartbeat(self.ep(self.port_tfm), r["session_key"], timeout=10)
         self.assertEqual(ctr, 1)
-        self.assertEqual(status, b"requests=0;fw=rw612-tfm-0.2.0")
+        self.assertEqual(status, b"requests=0;stack=na;fw=rw612-tfm-0.2.1")
 
 
 if __name__ == "__main__":

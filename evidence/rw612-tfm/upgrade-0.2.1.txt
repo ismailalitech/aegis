@@ -1,0 +1,17 @@
+# FRDM-RW612 with TF-M: upgrade from 0.2.0 to 0.2.1 (PQKEMINIT state fix from tests/fuzz, stack high-water in the status), 2026-11-18
+# Only the secure image changed (the non-secure image is byte-identical), so only SPE changed: the new SPE value was
+# added to the policy before flashing, the old one removed after the board was admitted. The one quarantine is the
+# cycle during which the board was being flashed and did not answer.
+# stack=19368/32768: the high-water mark of the partition's 32 KB stack (key derivation, quotes, ML-KEM, heartbeats).
+
+## Gateway journal (journalctl -u aegis-fleet -o cat | grep frdm-rw612)
+08:16:09 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 56 (requests=116;fw=rw612-tfm-0.2.0)]
+08:16:43 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 57 (requests=118;fw=rw612-tfm-0.2.0)]
+08:17:17 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 58 (requests=120;fw=rw612-tfm-0.2.0)]
+08:17:51 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 59 (requests=122;fw=rw612-tfm-0.2.0)]
+08:18:44 frdm-rw612 QUARANTINED no attestation: timed out [credential: revoked]
+08:19:18 frdm-rw612 ADMITTED (trustzone trust)  [credential: issued session ce1e766cc878...]
+08:19:52 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=6;stack=19368/32768;fw=rw612-tfm-0.2.1)]
+08:20:25 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 2 (requests=8;stack=19368/32768;fw=rw612-tfm-0.2.1)]
+08:20:59 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 3 (requests=10;stack=19368/32768;fw=rw612-tfm-0.2.1)]
+08:21:33 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 4 (requests=12;stack=19368/32768;fw=rw612-tfm-0.2.1)]

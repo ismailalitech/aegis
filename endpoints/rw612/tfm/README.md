@@ -1,4 +1,4 @@
-# FRDM-RW612 with TrustZone: the Aegis prover as a TF-M secure partition (work in progress)
+# FRDM-RW612 with TrustZone: the Aegis prover as a TF-M secure partition
 
 The Zephyr prover (`../prover`) is a single secure image: the firmware that derives the key also measures itself, so
 the gateway labels it "device-key trust". Here the key and the measurements move into the TrustZone secure side,
@@ -47,6 +47,9 @@ then). Never run the SDK's `tfm_secureboot/scripts`: they burn the secure-boot k
 ## Results so far (evidence/rw612-tfm/)
 
 - NXP's TF-M regression on this board: 164 of 164 tests, 16 of 16 suites.
+- 0.2.1 (the fix above, the stack report): flashed with the unchanged non-secure image (byte-identical), so only
+  `SPE` changed in the gateway policy; the new value was allowed before flashing and the old one removed after the
+  board was admitted.
 - The Aegis partition with the test client: the key from ELS (`rc=0`), a `PQKEY` reply, a 378-byte claims token with
   profile `aegis-rw612-tfm-v1` and its ML-DSA-65 signature, and the expected errors for the other requests.
 
@@ -77,6 +80,26 @@ Four reviewers and a skeptic per finding. Confirmed and fixed: the pin mux, SOC_
 FlexSPI), `enroll-pq` keeps existing pins, the credential names the pending ML-KEM key, `probe.sh` has three outcomes.
 All re-tested on the board.
 
-## Next
+## Fuzzing (tests/fuzz, after the review)
 
-1. The site.
+`tests/fuzz/run.sh` builds `aegis_proto.c` into a libFuzzer harness with AddressSanitizer and UndefinedBehaviorSanitizer
+and calls it exactly as `aegis_pq.c` does: raw request bytes up to `AEGIS_LINE_MAX`, a reply buffer of exactly
+`AEGIS_REPLY_MAX`. The harness also plays the gateway (it holds the pinned gateway key, encapsulates, signs
+credentials whose body the input changes), so the fuzzer reaches the paths behind the signature check, and it checks
+every answer against a model of the protocol: a credential is accepted if and only if it is valid for the pending
+exchange, a raw line is never accepted as one, and the confirmation tag, session id and every heartbeat tag are what
+the gateway computes. CI runs it for 2 minutes on every push, seeds first.
+
+It found one defect within seconds: a `PQKEMINIT` refused after the ML-KEM key was made (`ERR sign` when the RNG
+fails, `ERR kem`) left the older exchange pending with the new key and nonce in it, unusable, with the new
+decapsulation key kept in memory. Not exploitable from the non-secure side (it can always disrupt its own exchanges,
+and no credential can name a key the gateway never saw), but the state was wrong. Fixed in 0.2.1: a valid
+`PQKEMINIT` cancels the pending exchange and wipes its decapsulation key first. The STM32 partition
+(`endpoints/stm32h573/tfm-aegis-partition`) has the same pattern and needs the same change.
+
+## Stack of the secure partition (0.2.1)
+
+At initialisation the partition fills its own stack (`tfm_sp_aegis_pq_stack`, 32 KB) below the current frame with a
+pattern, and the heartbeat status reports the high-water mark: `stack=19368/32768` on the board after the key
+derivation in ELS, quotes, ML-KEM exchanges and heartbeats (59 %, 13 KB to spare). TF-M sets the stack limit register
+to the stack's base, so an overflow would fault rather than write into another partition.

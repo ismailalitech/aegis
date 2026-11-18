@@ -52,6 +52,47 @@ static uint32_t served;
 static char line[AEGIS_LINE_MAX + 1];
 static char reply[AEGIS_REPLY_MAX];
 
+/* The partition's stack (auto_generated/intermedia_aegis_pq.c; its size is stack_size in aegis_pq.yaml). At
+ * initialisation the part below the current frame is filled with a pattern; the status reports how much of the
+ * stack has ever been used, so every heartbeat carries the high-water mark to the gateway. TF-M sets the stack limit
+ * register to the stack's base, so an overflow faults rather than writing past it; this shows the margin. */
+extern uint8_t tfm_sp_aegis_pq_stack[];
+#define AEGIS_PQ_STACK_SIZE 0x8000u
+#define STACK_FILL 0xA5u
+static int stack_filled;
+
+static uintptr_t current_sp(void)
+{
+	uintptr_t sp;
+
+	__asm volatile("mov %0, sp" : "=r"(sp));
+	return sp;
+}
+
+static void stack_fill(void)
+{
+	uintptr_t lo = (uintptr_t)tfm_sp_aegis_pq_stack, sp = current_sp();
+	volatile uint8_t *p = tfm_sp_aegis_pq_stack;
+
+	if (sp < lo + 512u || sp > lo + AEGIS_PQ_STACK_SIZE) {
+		return; /* not running on the partition's stack: report nothing rather than a wrong number */
+	}
+	for (uintptr_t i = 0; i < sp - 256u - lo; i++) {
+		p[i] = STACK_FILL;
+	}
+	stack_filled = 1;
+}
+
+static unsigned stack_used(void)
+{
+	size_t untouched = 0;
+
+	while (untouched < AEGIS_PQ_STACK_SIZE && tfm_sp_aegis_pq_stack[untouched] == STACK_FILL) {
+		untouched++;
+	}
+	return (unsigned)(AEGIS_PQ_STACK_SIZE - untouched);
+}
+
 static void flash_cache_invalidate(void)
 {
 	CACHE64_CTRL0->CCR |= CACHE64_CTRL_CCR_INVW1_MASK | CACHE64_CTRL_CCR_INVW0_MASK;
@@ -98,7 +139,12 @@ static size_t s_measure_all(struct aegis_measurement *m, size_t max)
 
 static int s_status(char *buf, size_t cap)
 {
-	return snprintf(buf, cap, "requests=%u;fw=%s-%s", (unsigned)served, AEGIS_DEVICE_FW, AEGIS_DEVICE_VERSION);
+	if (!stack_filled) {
+		return snprintf(buf, cap, "requests=%u;stack=na;fw=%s-%s", (unsigned)served, AEGIS_DEVICE_FW,
+				AEGIS_DEVICE_VERSION);
+	}
+	return snprintf(buf, cap, "requests=%u;stack=%u/%u;fw=%s-%s", (unsigned)served, stack_used(),
+			(unsigned)AEGIS_PQ_STACK_SIZE, AEGIS_DEVICE_FW, AEGIS_DEVICE_VERSION);
 }
 
 static void s_measure_unused(uint8_t out[32], size_t *len)
@@ -166,6 +212,7 @@ static void ns_ethernet_clocks(void)
 /* The measurements are taken here, before the non-secure image runs. */
 psa_status_t aegis_pq_init(void)
 {
+	stack_fill();
 	ns_ethernet_clocks();
 	flash_cache_invalidate();
 	measure_region(&meas[0], "SPE", S_PART_BASE, S_PART_SIZE, "secure");

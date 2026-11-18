@@ -1,0 +1,63 @@
+# Fuzzing the protocol code of the RW612 TF-M partition (tests/fuzz/run.sh, tests/fuzz/coverage.sh), 2026-11-18
+# Harness: tests/fuzz/fuzz_rw612_proto.c. libFuzzer, AddressSanitizer, UndefinedBehaviorSanitizer, clang 18.1.3.
+# aegis_proto.c is called as endpoints/rw612/tfm/aegis_pq/aegis_pq.c calls it; the harness also plays the gateway and
+# checks every answer against a model of the protocol (see the header of the harness).
+
+## Run 1: aegis_proto.c 0.2.0 (as reviewed), 4 workers
+Every worker stopped within seconds on the seed rng-fails-at-sign (PQKEMINIT, then a PQKEMINIT whose signature
+fails for want of randomness, then the PQKEMFIN of the first exchange):
+  ORACLE: PQKEMFIN without an exchange: ERR cred other-key
+The refused PQKEMINIT had left the older exchange pending with its own key and nonce in it. Fixed in 0.2.1
+(a valid PQKEMINIT cancels the pending exchange and wipes its decapsulation key first).
+
+## Run 2: 0.2.1, 8 workers, 120 s
+No finding.
+
+## Run 3: 0.2.1, 8 workers, 30 min, corpus from runs 2 (and the inputs below)
+Stopped at once on "ORACLE: PQHB reply": a harness error, not a device error. Operation 7 with an empty payload set
+an empty status text, which the partition never produces (its status always starts "requests="); the heartbeat reply
+then had an empty field. The harness now keeps the status non-empty, as on the board.
+
+## Run 4: 0.2.1, 8 workers, 30 min (1800 s each), corpus from run 3 including its stop inputs
+fuzz-0.log: #126326 DONE   cov: 317 ft: 1351 corp: 332/34Kb lim: 697 exec/s: 70 rss: 396Mb
+fuzz-1.log: #153781 DONE   cov: 317 ft: 1351 corp: 331/34Kb lim: 877 exec/s: 85 rss: 398Mb
+fuzz-2.log: #101385 DONE   cov: 317 ft: 1350 corp: 334/36Kb lim: 607 exec/s: 56 rss: 385Mb
+fuzz-3.log: #138015 DONE   cov: 317 ft: 1351 corp: 332/34Kb lim: 643 exec/s: 76 rss: 397Mb
+fuzz-4.log: #104632 DONE   cov: 317 ft: 1350 corp: 333/35Kb lim: 562 exec/s: 58 rss: 396Mb
+fuzz-5.log: #148827 DONE   cov: 317 ft: 1351 corp: 336/34Kb lim: 724 exec/s: 82 rss: 391Mb
+fuzz-6.log: #149758 DONE   cov: 317 ft: 1350 corp: 333/34Kb lim: 787 exec/s: 83 rss: 397Mb
+fuzz-7.log: #126791 DONE   cov: 317 ft: 1350 corp: 335/35Kb lim: 634 exec/s: 70 rss: 397Mb
+total executions: 1049515; crashes, sanitizer reports, oracle failures, timeouts, out-of-memory: 0
+
+## Coverage of endpoints/rw612/prover/src/aegis_proto.c by the final corpus (4191 inputs; tests/fuzz/coverage.sh)
+Filename                                                     Regions    Missed Regions     Cover   Functions  Missed Functions  Executed       Lines      Missed Lines     Cover    Branches   Missed Branches     Cover
+endpoints/rw612/prover/src/aegis_proto.c         340                15    95.59%          24                 0   100.00%         376                20    94.68%         166                17    89.76%
+
+## The 20 lines never executed, and why
+  206|      0|		*p++ = (uint8_t)(major | 25); *p++ = (uint8_t)(v >> 8); *p++ = (uint8_t)v;
+  244|      0|		return -1;
+  245|      0|	}
+  307|      0|		size_t img_len;
+  309|      0|		plat->measure(m[0].value, &img_len);
+  310|      0|		m[0].label = "APP";
+  311|      0|		snprintf(m[0].desc, sizeof(m[0].desc), "SHA256 of the firmware image (%u bytes)", (unsigned)img_len);
+  312|      0|		n = 1;
+  313|      0|	}
+  393|      0|		wipe(kem_dk, sizeof(kem_dk));
+  394|      0|		return snprintf(out, cap, "ERR kem");
+  395|      0|	}
+  433|      0|		return snprintf(out, cap, "ERR internal");
+  434|      0|	}
+  480|      0|			wipe(coins, sizeof(coins));
+  481|      0|			return snprintf(out, cap, "ERR kem");
+  482|      0|		}
+  514|      0|			sl = snprintf(status, sizeof(status), "uptime_s=%u;link=1;fw=%s-%s", (unsigned)plat->uptime_s(),
+  515|      0|				      AEGIS_DEVICE_FW, AEGIS_DEVICE_VERSION);
+  516|      0|		}
+  206        a CBOR item of 256 bytes or more: no claim item is that long
+  244-245    ML-DSA key generation failing: it does not, for any seed
+  307-313    the single-image (Zephyr) measurement path: the TF-M platform reports SPE and NSPE instead
+  393-395    ML-KEM decapsulation failing: ML-KEM rejects implicitly, so it returns a key for any ciphertext
+  433-434    a reply buffer smaller than the largest reply: the partition always passes the full buffer
+  480-482    ML-KEM key generation failing: it does not, for any coins
+  514-516    the single-image status text: the TF-M platform supplies its own

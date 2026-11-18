@@ -46,6 +46,21 @@ The memory-safety reviewer found no defect in the partition's request handling o
 non-secure input: request and reply sizes, hex decoding, the CBOR encoder within `CLAIMS_MAX`, the signing buffer and
 the credential length arithmetic all hold for the worst case.
 
+## After the review: fuzzing and the stack (0.2.1)
+
+The "not found" above was a reading of the code. To test it, `tests/fuzz` runs `aegis_proto.c` under libFuzzer with
+AddressSanitizer and UndefinedBehaviorSanitizer, called exactly as the partition calls it, with a harness that also
+plays the gateway and checks every answer against a model of the protocol (details in `tests/fuzz/fuzz_rw612_proto.c`).
+
+- **Found and fixed (low):** a `PQKEMINIT` refused after the ML-KEM key was made (`ERR sign`, `ERR kem`) left the
+  older exchange pending with the new key and nonce in it, unusable, and the new decapsulation key stayed in memory.
+  The review had read past it. Fixed in 0.2.1: a valid `PQKEMINIT` cancels the pending exchange and wipes its
+  decapsulation key first. The STM32 partition has the same pattern.
+- **No memory error, no undefined behaviour, no other disagreement with the model** in the runs recorded in
+  `evidence/rw612-tfm/fuzzing.txt`.
+- **Stack:** the partition reports the high-water mark of its 32 KB stack in every heartbeat: 19,368 bytes on the
+  board (`evidence/rw612-tfm/upgrade-0.2.1.txt`).
+
 ## Still true after the review
 
 The key is bound to the chip, not to the firmware: someone who reflashes the secure image with a debugger can still

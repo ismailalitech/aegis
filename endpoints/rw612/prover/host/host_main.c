@@ -63,7 +63,7 @@ static size_t host_measure_all(struct aegis_measurement *m, size_t max)
 
 static int host_status(char *buf, size_t cap)
 {
-	return snprintf(buf, cap, "requests=0;fw=rw612-tfm-0.2.0");
+	return snprintf(buf, cap, "requests=0;stack=na;fw=rw612-tfm-0.2.1");
 }
 
 static uint32_t host_uptime(void)

@@ -456,6 +456,11 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		struct sha3 h;
 
 		if (get_hex(tok[1], nonce, 32) != 32) return snprintf(out, cap, "ERR bad-request");
+		/* A new exchange replaces a pending one whether or not it completes. Without this, a PQKEMINIT refused
+		 * after the key was made (ERR sign, ERR kem) left the older exchange pending with this key and nonce in
+		 * it: unusable, and its decapsulation key kept in memory (found by tests/fuzz, 2026-11-18). */
+		kem_pending = 0;
+		wipe(kem_dk, sizeof(kem_dk));
 		/* fresh randomness too, so an exchange's key cannot be regenerated after a reboot */
 		if (plat->random(fresh, sizeof(fresh)) != 0) return snprintf(out, cap, "ERR rng");
 		memcpy(kem_nonce, nonce, 32);
@@ -480,6 +485,7 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		memcpy(msgbuf, kem_nonce, 32);
 		memcpy(msgbuf + 32, kem_ek, KEM_EK_LEN);
 		if (sign_framed(KEM_LABEL, sizeof(KEM_LABEL) - 1, 32 + KEM_EK_LEN) != 0) {
+			wipe(kem_dk, sizeof(kem_dk));
 			return snprintf(out, cap, "ERR sign");
 		}
 		kem_pending = 1; /* the established session stays until a new exchange completes */
