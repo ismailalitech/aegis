@@ -152,7 +152,8 @@ class Rw612Proto(unittest.TestCase):
         ct, _ = mlkem.encaps(ek)
         body = {"v": 1, "type": "credential", "endpoint": "frdm-rw612",
                 "endpoint_pq_pk_sha256": hashlib.sha256(pk or self.pk).hexdigest(),
-                "kem_ct_sha3_256": fleet._sha3(ct if bind_ct else b"other").hex(), "expires": 4102444800}
+                "kem_ct_sha3_256": fleet._sha3(ct if bind_ct else b"other").hex(),
+                "kem_ek_sha3_256": fleet._sha3(ek).hex(), "expires": 4102444800}
         cred = wire.canonical(body) + b"\n" + mldsa.sign(sign_key, fleet.CRED_LABEL, wire.canonical(body))
         return fleet._exchange("127.0.0.1", self.port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), 10)
 
@@ -163,6 +164,21 @@ class Rw612Proto(unittest.TestCase):
         self.assertIn("ERR cred other-exchange", self.kem_raw(self.gw_sk, bind_ct=False))
         self.assertIn("ERR cred other-endpoint", self.kem_raw(self.gw_sk, pk=b"another device"))
         self.assertIn("ERR cred no-exchange", fleet._exchange("127.0.0.1", self.port, "PQKEMFIN 00 00", 10))
+        # replay: the gateway's own valid PQKEMFIN from an earlier exchange, sent after a new PQKEMINIT
+        rec = {}
+        orig = fleet._exchange
+
+        def spy(host, port, line, timeout):
+            if line.startswith("PQKEMFIN"):
+                rec["fin"] = line
+            return orig(host, port, line, timeout)
+        fleet._exchange = spy
+        try:
+            r = fleet.provision(self.ep(), self.d, self.gw_sk, "gid", {}, timeout=20)
+        finally:
+            fleet._exchange = orig
+        fleet._exchange("127.0.0.1", self.port, "PQKEMINIT " + os.urandom(32).hex(), 10)
+        self.assertIn("ERR cred other-key", fleet._exchange("127.0.0.1", self.port, rec["fin"], 10))
         sid, _ = fleet.query_session(self.ep())
         self.assertEqual(sid, r["session_id"], "a refused exchange must not replace the session")
 
@@ -257,6 +273,19 @@ class Rw612TfmProfile(unittest.TestCase):
         v = fleet.attest(unpinned, None, self.d, timeout=10)
         self.assertTrue(v["admitted"], v["reasons"])
         self.assertEqual(v["trust"], "device-key")
+
+    def test_5_enroll_keeps_an_existing_pin(self):
+        """enroll-pq must not replace a pinned key with whatever the network returns."""
+        import contextlib, io, json as _json
+        pol = os.path.join(self.d, "fleet.json")
+        with open(pol, "w") as f:
+            _json.dump({"endpoints": [self.ep(self.port_els)]}, f)
+        before = open(os.path.join(self.d, "ep.pub")).read()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            fleet.main(["enroll-pq", pol])
+        self.assertIn("kept frdm-rw612", out.getvalue())
+        self.assertEqual(open(os.path.join(self.d, "ep.pub")).read(), before)
 
     def test_4_provision_and_heartbeat(self):
         r = fleet.provision(self.ep(self.port_tfm), self.d, self.gw_sk, "gid", {}, timeout=20)

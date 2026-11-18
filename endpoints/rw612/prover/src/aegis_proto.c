@@ -12,9 +12,11 @@
  *
  * The constructions are the STM32 partition's (endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c):
  *   quote signature  ML-DSA-65 (pure, empty context, hedged) over "aegis-endpoint-quote-v1\0" || claims
- *   KEM key          ML-KEM-768.KeyGen(SHA3(prov_root || nonce || counter || 0) || SHA3(... || 1))
+ *   KEM key          ML-KEM-768.KeyGen(SHA3(prov_root || fresh || nonce || counter || 0) || SHA3(... || 1)),
+ *                    fresh = 32 bytes from the platform RNG
  *   credential       "<canonical JSON>\n<ML-DSA-65 signature by the pinned gateway key over
- *                    "aegis-credential-v1\0" || JSON>"; the JSON must name SHA3-256(ct) and SHA-256(this pk)
+ *                    "aegis-credential-v1\0" || JSON>"; the JSON must name SHA3-256(ct), SHA3-256(ek) of the pending
+ *                    exchange and SHA-256(this pk)
  *   session          SHA3-256("aegis-session-v1" || K || nonce || SHA3-256(ct))
  *   confirm tag      SHA3-256("aegis-confirm-v1" || K || nonce || SHA3-256(ct) || SHA3-256(credential))
  *   heartbeat        KMAC256(session, nonce || counter || status, 256, "aegis-hb-v2")
@@ -376,6 +378,17 @@ static int kem_finish(const char *ct_hex, const char *cred_hex, char *out, size_
 		wipe(kem_dk, sizeof(kem_dk));
 		return snprintf(out, cap, "ERR cred other-endpoint");
 	}
+	/* the credential must also name this exchange's encapsulation key: an old PQKEMFIN replayed after a new
+	 * PQKEMINIT would otherwise pass and replace a working session (review 2026-11-18) */
+	{
+		uint8_t h_ek[32];
+
+		sha3_256(kem_ek, sizeof(kem_ek), h_ek);
+		if (!names(cred, body_len, "kem_ek_sha3_256", h_ek)) {
+			wipe(kem_dk, sizeof(kem_dk));
+			return snprintf(out, cap, "ERR cred other-key");
+		}
+	}
 	if (aegis_mlkem_dec(k, kem_ct, kem_dk) != 0) {
 		wipe(kem_dk, sizeof(kem_dk));
 		return snprintf(out, cap, "ERR kem");
@@ -439,10 +452,12 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		return (int)(put_str(o, " END") - out);
 	}
 	if (!strcmp(tok[0], "PQKEMINIT") && n == 2) {
-		uint8_t coins[64], c[4], nonce[32];
+		uint8_t coins[64], c[4], nonce[32], fresh[32];
 		struct sha3 h;
 
 		if (get_hex(tok[1], nonce, 32) != 32) return snprintf(out, cap, "ERR bad-request");
+		/* fresh randomness too, so an exchange's key cannot be regenerated after a reboot */
+		if (plat->random(fresh, sizeof(fresh)) != 0) return snprintf(out, cap, "ERR rng");
 		memcpy(kem_nonce, nonce, 32);
 		kem_counter++;
 		c[0] = (uint8_t)kem_counter; c[1] = (uint8_t)(kem_counter >> 8);
@@ -450,6 +465,7 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		for (uint8_t half = 0; half < 2; half++) {
 			sha3_init(&h);
 			sha3_update(&h, prov_root, 32);
+			sha3_update(&h, fresh, 32);
 			sha3_update(&h, kem_nonce, 32);
 			sha3_update(&h, c, 4);
 			sha3_update(&h, &half, 1);
@@ -460,6 +476,7 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 			return snprintf(out, cap, "ERR kem");
 		}
 		wipe(coins, sizeof(coins));
+		wipe(fresh, sizeof(fresh));
 		memcpy(msgbuf, kem_nonce, 32);
 		memcpy(msgbuf + 32, kem_ek, KEM_EK_LEN);
 		if (sign_framed(KEM_LABEL, sizeof(KEM_LABEL) - 1, 32 + KEM_EK_LEN) != 0) {

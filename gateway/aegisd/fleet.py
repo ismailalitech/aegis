@@ -148,7 +148,7 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
     now = int(time.time())
     body = {"v": 1, "type": "credential", "endpoint": ep["name"],
             "endpoint_pq_pk_sha256": __import__("hashlib").sha256(pk).hexdigest(),
-            "measurements": measurements, "kem": "ML-KEM-768", "kem_ct_sha3_256": _sha3(ct).hex(),
+            "measurements": measurements, "kem": "ML-KEM-768", "kem_ct_sha3_256": _sha3(ct).hex(), "kem_ek_sha3_256": _sha3(ek).hex(),
             "issued": now, "expires": now + CRED_LIFETIME_S, "gateway_identity_sha256": gw_identity_sha256}
     cred = wire.canonical(body) + b"\n" + mldsa.sign(gw_sk, CRED_LABEL, wire.canonical(body))
     p = _exchange(host, port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), timeout).split()
@@ -369,6 +369,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Aegis fleet verifier")
     ap.add_argument("cmd", choices=["once", "watch", "enroll-pq", "session"])
+    ap.add_argument("--force", action="store_true", help="enroll-pq: replace keys that are already pinned")
     ap.add_argument("policy")
     ap.add_argument("--interval", type=float, default=30)
     ap.add_argument("--state", default="/var/lib/aegis/fleet-state.json")
@@ -381,12 +382,16 @@ def main(argv=None):
     base = os.path.dirname(os.path.abspath(a.policy))
     ev = psa_token.verify_with_openssl_cli if a.verifier == "openssl" else psa_token.verify_with_cryptography
     if a.cmd == "enroll-pq":
-        # Trust on first use: fetch each aegis-pq endpoint's ML-DSA-65 key and store it.
+        # Trust on first use: fetch the ML-DSA-65 key of each PQ endpoint that has none pinned yet. An existing pin is
+        # never replaced from the network (the reply comes through the endpoint's untrusted side); --force re-enrols.
         for ep in policy["endpoints"]:
             if ep.get("kind") not in PQ_KINDS:
                 continue
-            pk = request_pq_key(ep["host"], int(ep["port"]))
             path = _path(base, ep["pq_pub_file"])
+            if os.path.exists(path) and not a.force:
+                print("kept %s: a key is already pinned in %s (use --force to replace it)" % (ep["name"], path))
+                continue
+            pk = request_pq_key(ep["host"], int(ep["port"]))
             with open(path, "w") as f:
                 f.write(pk.hex() + "\n")
             print("enrolled %s: ML-DSA-65 key sha256 %s -> %s" % (ep["name"], __import__("hashlib").sha256(pk).hexdigest(), path))

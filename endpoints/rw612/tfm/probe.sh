@@ -8,7 +8,8 @@ set -eu
 OUT=${1:?out dir}; shift
 SDK=${MCUXSDK:-$HOME/aegis-tools/mcuxsdk/mcuxsdk}
 HERE=$(cd "$(dirname "$0")" && pwd)
-TTY=${RW612_TTY:-$(ls /dev/serial/by-id/usb-SEGGER_J-Link_*-if00 | head -1)}
+TTY=${RW612_TTY:-$(ls /dev/serial/by-id/usb-SEGGER_J-Link_*-if00 2>/dev/null | head -1)}
+[ -n "$TTY" ] || { echo "no MCU-Link serial port found" >&2; exit 1; }
 export ARMGCC_DIR=${ARMGCC_DIR:-$HOME/aegis-tools/arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi}
 export PATH=${WEST_VENV:-$HOME/aegis-tools/zephyr-venv}/bin:$PATH
 mkdir -p "$OUT"
@@ -30,6 +31,12 @@ PY
 	sleep 1
 	"$HERE/flash.sh" "$B/aegis_s/aegis_s.bin" "$B/prover_ns/prover_ns.bin" > /dev/null
 	wait
-	if grep -q "aegis-probe: read ok" "$OUT/console-$name.txt"; then r="READ ALLOWED"; else r="no read (fault)"; fi
+	# three outcomes: the read returned; the probe ran and the chip restarted before it returned (a fault); or
+	# nothing to judge (no console, the probe never ran, the image never booted)
+	tries=$(grep -c "aegis-probe: non-secure read" "$OUT/console-$name.txt" || true)
+	boots=$(grep -c "Booting TF-M" "$OUT/console-$name.txt" || true)
+	if grep -q "aegis-probe: read ok" "$OUT/console-$name.txt"; then r="READ ALLOWED"
+	elif [ "$tries" -ge 2 ] && [ "$boots" -gt "$tries" ] || { [ "$tries" -ge 2 ] && [ "$boots" -ge "$tries" ]; }; then r="no read (fault, $tries attempts, $boots boots)"
+	else r="INCONCLUSIVE ($tries attempts, $boots boots)"; fi
 	echo "$name $addr: $r"
 done

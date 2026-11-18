@@ -70,8 +70,13 @@ non-secure image no longer touches those blocks: its drivers are built without c
 20 MHz the secure side set (measured on this board), its clock frequencies are constants. The same probe test: RSTCTL0,
 CLKCTL0 and SYSCTL0 fault from the non-secure side, the ENET register still reads, and the gateway admits the image.
 
+## Security review (docs/rw612-security-review.md)
+
+Four reviewers and a skeptic per finding. Confirmed and fixed: the pin mux, SOC_TOP, PMU and SYSCTL2 made secure-only
+(the pin mux one was critical: the non-secure side could remux the QSPI flash pins to GPIO and rewrite the flash without
+FlexSPI), `enroll-pq` keeps existing pins, the credential names the pending ML-KEM key, `probe.sh` has three outcomes.
+All re-tested on the board.
+
 ## Next
 
-1. An adversarial review of the secure code (the partition, aegis_proto.c as it runs in the secure world, the probe
-   and flash tooling).
-2. The site.
+1. The site.

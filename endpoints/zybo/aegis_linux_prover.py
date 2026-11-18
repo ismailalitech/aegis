@@ -119,7 +119,7 @@ class Prover:
                 if len(nonce) != 32:
                     return "ERR bad-request"
                 ek, dk = mlkem.keypair()
-                self.kem = (nonce, dk)
+                self.kem = (nonce, dk, ek)
                 sig = mldsa.sign(self.sk, KEM_INIT_LABEL, nonce + ek)
                 return "PQKEMEK %d %s %d %s END" % (len(ek), ek.hex(), len(sig), sig.hex())
             if cmd == "PQKEMFIN" and len(p) == 3:
@@ -154,7 +154,7 @@ class Prover:
         leaves an established session alone)."""
         if not self.kem:
             return "ERR cred no-exchange"
-        nonce, dk = self.kem
+        nonce, dk, ek = self.kem
         self.kem = None
         body, sep, sig = cred.partition(b"\n")
         if not sep or not mldsa.verify(self.gw_pk, CRED_LABEL, body, sig):
@@ -167,6 +167,8 @@ class Prover:
             return "ERR cred other-exchange"
         if b.get("endpoint_pq_pk_sha256") != hashlib.sha256(self.pk).hexdigest():
             return "ERR cred other-endpoint"
+        if b.get("kem_ek_sha3_256") != sha3(ek).hex():      # this exchange's key, not an earlier one
+            return "ERR cred other-key"
         if time.time() > 1.7e9 and b.get("expires", 0) < time.time():    # only with a set clock (no RTC battery)
             return "ERR cred expired"
         k = mlkem.decaps(ct, dk)

@@ -378,8 +378,10 @@ int32_t ppc_init_cfg(void)
         AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_CLKCTL0_RULE1(TFM_SEC_ACCESS_LVL_PRIV_S) |        /* CLKCTL0 */
         /* Aegis: SYSCTL0 secure only; the secure partition switches on the Ethernet clocks */
         AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_SYSCTL0_RULE2(TFM_SEC_ACCESS_LVL_PRIV_S) |        /* SYSCTL0 */
-        AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_SYSCTL2_RULE3(TFM_SEC_ACCESS_LVL_USER_NS) |        /* SYSCTL2 */
-        AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_IOCON_RULE4(TFM_SEC_ACCESS_LVL_USER_NS)   |        /* IOCON */
+        /* Aegis: SYSCTL2 secure only (memory timing, clock gates; the secure partition sets the Ethernet clock) */
+        AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_SYSCTL2_RULE3(TFM_SEC_ACCESS_LVL_PRIV_S) |        /* SYSCTL2 */
+        /* Aegis: pin mux (MCI_IO_MUX) secure only: otherwise the non-secure side can mux the QSPI flash pins to GPIO and rewrite flash without FlexSPI (review 2026-11-18) */
+        AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_IOCON_RULE4(TFM_SEC_ACCESS_LVL_PRIV_S)   |        /* IOCON */
         AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_PUFCTRL_RULE6(TFM_SEC_ACCESS_LVL_PRIV_S)  |        /* PUF */
         AHB_SECURE_CTRL_APB_GRP0_MEM_RULE0_ELS_RULE7(TFM_SEC_ACCESS_LVL_PRIV_S);              /* ELS */
                                                                                               
@@ -426,7 +428,8 @@ int32_t ppc_init_cfg(void)
     AHB_SECURE_CTRL->APB_GRP1_MEM_RULE2 =
         (0x33300300U) |                                                                       /* Bits have to be set to '1' according to UM.*/
         AHB_SECURE_CTRL_APB_GRP1_MEM_RULE2_RTC_RULE0(TFM_SEC_ACCESS_LVL_USER_NS)          |   /* RTC */
-        AHB_SECURE_CTRL_APB_GRP1_MEM_RULE2_PMU_RULE1(TFM_SEC_ACCESS_LVL_USER_NS)          |   /* PMU */
+        /* Aegis: PMU secure only (core voltage, brown-out and reset settings: a glitch path) */
+        AHB_SECURE_CTRL_APB_GRP1_MEM_RULE2_PMU_RULE1(TFM_SEC_ACCESS_LVL_PRIV_S)          |   /* PMU */
         /* Aegis: flash cache 0 secure only */
         AHB_SECURE_CTRL_APB_GRP1_MEM_RULE2_FLASH_CACHE0_RULE3(TFM_SEC_ACCESS_LVL_PRIV_S) |   /* FLASH CACHE0 */
         /* Aegis: flash cache 1 secure only */
@@ -551,14 +554,22 @@ int32_t ppc_init_cfg(void)
     {                                                                                  
         AHB_SECURE_CTRL->SOC_TOP_MEM_RULE[i] =                                         
         (0x00000000U) |                                                                /* Bits have to be set to '1' according to UM.*/
-        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE0(TFM_SEC_ACCESS_LVL_USER_NS) |             /* SOC TOP MEM 0 */
-        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE1(TFM_SEC_ACCESS_LVL_USER_NS) |             /* SOC TOP MEM 1 */
-        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE2(TFM_SEC_ACCESS_LVL_USER_NS) |             /* SOC TOP MEM 2 */
-        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE3(TFM_SEC_ACCESS_LVL_USER_NS) |             /* SOC TOP MEM 3 */
-        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE4(TFM_SEC_ACCESS_LVL_USER_NS) |             /* SOC TOP MEM 4 */
-        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE5(TFM_SEC_ACCESS_LVL_USER_NS) |             /* SOC TOP MEM 5 */
-        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE6(TFM_SEC_ACCESS_LVL_USER_NS) |             /* SOC TOP MEM 6 */
-        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE7(TFM_SEC_ACCESS_LVL_USER_NS);              /* SOC TOP MEM 7 */
+        /* Aegis: SOC_TOP secure only (PLLs, trims, pad control, SoC OTP controller) */
+        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE0(TFM_SEC_ACCESS_LVL_PRIV_S) |             /* SOC TOP MEM 0 */
+        /* Aegis: SOC_TOP secure only (PLLs, trims, pad control, SoC OTP controller) */
+        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE1(TFM_SEC_ACCESS_LVL_PRIV_S) |             /* SOC TOP MEM 1 */
+        /* Aegis: SOC_TOP secure only (PLLs, trims, pad control, SoC OTP controller) */
+        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE2(TFM_SEC_ACCESS_LVL_PRIV_S) |             /* SOC TOP MEM 2 */
+        /* Aegis: SOC_TOP secure only (PLLs, trims, pad control, SoC OTP controller) */
+        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE3(TFM_SEC_ACCESS_LVL_PRIV_S) |             /* SOC TOP MEM 3 */
+        /* Aegis: SOC_TOP secure only (PLLs, trims, pad control, SoC OTP controller) */
+        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE4(TFM_SEC_ACCESS_LVL_PRIV_S) |             /* SOC TOP MEM 4 */
+        /* Aegis: SOC_TOP secure only (PLLs, trims, pad control, SoC OTP controller) */
+        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE5(TFM_SEC_ACCESS_LVL_PRIV_S) |             /* SOC TOP MEM 5 */
+        /* Aegis: SOC_TOP secure only (PLLs, trims, pad control, SoC OTP controller) */
+        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE6(TFM_SEC_ACCESS_LVL_PRIV_S) |             /* SOC TOP MEM 6 */
+        /* Aegis: SOC_TOP secure only (PLLs, trims, pad control, SoC OTP controller) */
+        AHB_SECURE_CTRL_SOC_TOP_MEM_RULE_RULE7(TFM_SEC_ACCESS_LVL_PRIV_S);              /* SOC TOP MEM 7 */
     }
 
     /* Secure GPIO mask for pins. 

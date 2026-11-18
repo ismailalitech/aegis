@@ -28,7 +28,7 @@ void BOARD_InitHardware(void)
 {
 	gpio_pin_config_t out = {kGPIO_DigitalOutput, 1U}, in = {kGPIO_DigitalInput, 0U};
 
-	BOARD_InitNETPins();
+	/* the pins are muxed by the secure partition (the pin mux is secure-only) */
 	/* the secure side set up FLEXCOMM3 and its FRG (20 MHz, measured on this board): only the driver state here */
 	DbgConsole_Init(3U, 115200U, kSerialPort_Uart, AEGIS_DEBUG_UART_CLK_HZ);
 	/* the ENET clocks and reset are done by the secure partition (RSTCTL0/CLKCTL0 are secure-only); GPIO is in

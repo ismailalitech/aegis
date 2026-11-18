@@ -28,6 +28,7 @@
 #include "fsl_device_registers.h"
 #include "fsl_clock.h"
 #include "fsl_reset.h"
+#include "pin_mux.h"
 #include <mcuxClEls.h>
 #include <mcuxClCore_FunctionIdentifiers.h>
 #include <mcuxCsslFlowProtection.h>
@@ -149,10 +150,12 @@ static int make_key(void)
 	return rc;
 }
 
-/* RSTCTL0 and CLKCTL0 are secure-only in the Aegis target_cfg.c (they hold the ELS reset and clock), so the
- * non-secure prover cannot switch on its own Ethernet controller: do it here, once, before it runs. */
+/* RSTCTL0, CLKCTL0, SYSCTL2 and the pin mux are secure-only in the Aegis target_cfg.c (they hold the ELS reset and
+ * clock, and the pin mux could take the flash pins away from FlexSPI), so the non-secure prover cannot set up its own
+ * Ethernet controller: do it here, once, before it runs. */
 static void ns_ethernet_clocks(void)
 {
+	BOARD_InitNETPins(); /* ENET RMII pins, the PHY reset and interrupt pins as GPIO */
 	CLOCK_EnableClock(kCLOCK_TddrMciEnetClk); /* 50 MHz RMII reference clock for the PHY */
 	CLOCK_EnableClock(kCLOCK_EnetIpg);
 	CLOCK_EnableClock(kCLOCK_EnetIpgS);

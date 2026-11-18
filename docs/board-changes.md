@@ -17,6 +17,7 @@
 | Policy: two STM32 entries (prover 0.5.0, KMAC heartbeats), backups `/root/aegis-backup-fleet-*.json` | copy a backup back to `gateway/policy/fleet.json`; restart `aegis-fleet` |
 | 18 November 2026: `fleet.py` and `common/psa_token.py` with the plain-claims kinds (aegis-linux, aegis-device); policy entry `frdm-rw612` and its key `keys/frdm-rw612.mldsa65.pub`. Backup `/root/aegis-backup-20261118-004725/` (gateway clock) | copy the three files back from the backup; restart `aegis-fleet` |
 | 18 November 2026, later: `fleet.py` with profile `aegis-rw612-tfm-v1` ("trustzone") and profile pinning; the `frdm-rw612` entry pins that profile and allows SPE and NSPE. Backup `/root/aegis-backup-20261118-063344/` (gateway clock) | copy `fleet.py` and `fleet.json` back from the backup; restart `aegis-fleet` |
+| 18 November 2026, after the security review: `fleet.py` names the ML-KEM key in credentials (`kem_ek_sha3_256`) and `enroll-pq` keeps existing pins; `frdm-rw612` references updated for the reviewed firmware; STM32 board 2's session moved to `/root/aegis-backup-session-20261118-073735/` to re-provision it in the new format. Backup `/root/aegis-backup-20261118-073649/` | copy the files back; restart `aegis-fleet` |
 
 Nothing written to eNVM, keys, locks or the SD card's boot and payload partitions.
 
