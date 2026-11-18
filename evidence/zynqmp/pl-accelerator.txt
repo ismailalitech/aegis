@@ -1,0 +1,39 @@
+Aegis accelerator (hw/rtl/aegis_pqc2, Keccak sponge with DMA squeeze and the FIPS 203/204 NTT) in the Zynq
+UltraScale+ PL, 18 November 2026. LAN addresses masked.
+
+Build: Vivado 2025.2 on the bench's Windows PC, endpoints/zynqmp/windows/build_hw_pqc.tcl
+(= build_hw.tcl + hw/vivado/aegis_pqc2_zynqmp_bd.tcl), XCZU4EG-1E.
+  pl_clk0 100 MHz: WNS +3.159 ns, TNS 0, WHS +0.033 ns, THS 0 (9360 endpoints); 0 errors, 0 critical warnings
+  utilisation: 8156 CLB LUTs (9.3%), 2970 FFs (1.7%), 1 RAMB36 + 1 RAMB18, 15 DSP; the core alone 7514 LUTs,
+  2183 FFs, the same RAMs and DSPs
+  addresses: registers at 0x8000_0000 (4 KiB, M_AXI_HPM0_LPD, AXI APB bridge); the DMA master (S_AXI_HP0_FPD,
+  64-bit) reaches DDR only (HP0_DDR_LOW, HP0_DDR_HIGH; OCM, QSPI and PCIe not assigned)
+The XSA changes the PS configuration (HP0, PL clock), so the FSBL (with the TE0807 hooks) and the PMU firmware
+were rebuilt from it.
+
+JTAG test (into RAM): after "fpga", xsdb must also remove the PS-PL isolation and release the PL reset (psu_init.tcl:
+psu_ps_pl_isolation_removal, psu_ps_pl_reset_config); without it the first register read timed out on the AXI
+path (the FSBL does this itself on SD boot). Then ID 0x80000000 = 0xAE150002, before U-Boot and under Linux.
+
+Card: BOOT.BIN with this bitstream (sha256 0f999af3414042db499637978bdd2301c125cdf4c937f9ddca63b77cf7e96763; the
+previous one kept as boot-2025.2-nopl.bin), SD boot, Linux reads the ID through /dev/mem (AEGIS_PQC_DEVMEM).
+gateway/pqc/pqc_selftest, cross-built for aarch64, against its software references:
+  id 0xae150002, 500 iterations each, Keccak zero-state KAT ok, NTT round trips failing: 0
+  operation   mismatches  core cycles   wall time hw     software
+  keccak               0         1002        20.4 us      20.6 us
+  mlkem_ntt            0          904       107.7 us      51.9 us
+  mlkem_intt           0          904       107.7 us      59.1 us
+  mldsa_ntt            0         1032       109.0 us      94.0 us
+  mldsa_intt           0         1032       109.0 us     102.6 us
+  (core cycles at 100 MHz: about 10 us in the core for each operation as counted; the wall time is mostly the
+  32-bit register transfers through the APB bridge, the same finding as on the PolarFire,
+  docs/accelerator-v2.md: correct, and not faster than the A53 in software at this interface)
+
+Gateway: the new BOOT value allowed, the previous one removed; the board is admitted on it:
+21:00:37 zynqmp-te0808 ADMITTED (software trust)  [credential: valid, heartbeat 8 (uptime_s=277;link=1;fw=linux-0.1.0)]
+21:01:11 zynqmp-te0808 ADMITTED (software trust)  [credential: valid, heartbeat 9 (uptime_s=311;link=1;fw=linux-0.1.0)]
+The bitstream is inside BOOT.BIN, so a changed bitstream changes the BOOT measurement. Under software trust that
+value is the hash of the file on the card, taken by Linux; step 6 moves the measurement into the boot chain.
+
+Hazard found on the way: with an empty PL (the earlier BOOT.BIN), a read at 0x8000_0000 is not answered and the
+CPU hangs until a power cycle. Documented in gateway/pqc/aegis_pqc_drv.c.

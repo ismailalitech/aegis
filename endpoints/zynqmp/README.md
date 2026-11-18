@@ -17,11 +17,14 @@ it `zynqmp-te0808`, from before the module was identified; it is a TE0807.) File
   script, and U-Boot (u-boot-xlnx xilinx-v2025.2, `xilinx_zynqmp_virt_defconfig` plus the fragment). TF-A is
   xilinx-v2025.2 with `make PLAT=zynqmp RESET_TO_BL31=1 bl31`. U-Boot keeps no environment and has the eMMC and
   QSPI disabled, so it writes neither.
-- `../../hw/rtl/aegis_pqc2_zynqmp.v`, `../../hw/vivado/aegis_pqc2_zynqmp_bd.tcl`: the Aegis accelerator for the
-  PL (registers through an AXI APB bridge on HPM0_LPD, DMA into DDR on HP0). Simulated, not built yet.
+- `../../hw/rtl/aegis_pqc2_zynqmp.v`, `../../hw/vivado/aegis_pqc2_zynqmp_bd.tcl`, `windows/build_hw_pqc.tcl`: the
+  Aegis accelerator in the PL (registers at 0x8000_0000 through an AXI APB bridge on HPM0_LPD, DMA into DDR on
+  HP0), 100 MHz, in the card's BOOT.BIN; `gateway/pqc/pqc_selftest` with `AEGIS_PQC_DEVMEM=0x80000000` passes on the
+  board (`evidence/zynqmp/pl-accelerator.txt`). Only read 0x8000_0000 with this bitstream loaded: with an empty PL
+  the read is never answered and the CPU hangs.
 
 A new BOOT.BIN is tried over JTAG into RAM first (`windows/jtag_boot.tcl`), and only then written to the card; the
-previous one stays on the card (`boot-2019.bin`, the one the board came with).
+previous ones stay on the card (`boot-2019.bin`, the one the board came with; `boot-2025.2-nopl.bin`).
 
 Power-on: 12 V, then press **S1** (the 12 V input alone powers only the carrier's controller). Boot mode is SD; with
 no card the carrier falls back to the QSPI flash.

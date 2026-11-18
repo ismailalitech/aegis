@@ -6,7 +6,7 @@
 #
 #   PS M_AXI_HPM0_LPD -> SmartConnect -> AXI APB Bridge -> aegis_pqc2 S_APB      registers at 0x8000_0000 (4 KiB)
 #   aegis_pqc2 M_AXI (64-bit, write only) -> PS S_AXI_HP0_FPD (64-bit)        DDR low and high
-#   one clock: pl_clk0 at 100 MHz (the PolarFire ran the same RTL at 50 MHz; lower it here if timing fails)
+#   one clock: pl_clk0 at 100 MHz (timing met with Vivado 2025.2: WNS +3.159 ns, WHS +0.033 ns)
 #
 # The HP0 port is not cache-coherent: the driver gives the DMA buffer non-cached memory or invalidates the cache
 # lines after a squeeze.
@@ -53,8 +53,8 @@ connect_bd_intf_net [get_bd_intf_pins aegis_pqc2_0/M_AXI] [get_bd_intf_pins zynq
 
 # addresses: the registers for the PS, and only DDR for the DMA master
 assign_bd_address -target_address_space /zynq_ultra_ps_e_0/Data -offset 0x80000000 -range 4K \
-    [get_bd_addr_segs axi_apb_bridge_0/AXI4_LITE/Reg]
-foreach seg {HP0_DDR_LO HP0_DDR_HIGH} {
+    [get_bd_addr_segs aegis_pqc2_0/S_APB/Reg]
+foreach seg {HP0_DDR_LOW HP0_DDR_HIGH} {
     set s [get_bd_addr_segs -quiet zynq_ultra_ps_e_0/SAXIGP2/$seg]
     if {$s ne ""} { assign_bd_address -target_address_space /aegis_pqc2_0/M_AXI $s }
 }
