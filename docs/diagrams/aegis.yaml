@@ -125,3 +125,22 @@
     - {from: fleet.top,  to: gw.bottom,  label: "set the address"}
     - {from: fleet.left, to: ep.bottom,  label: "attests", dashed: true}
   steps: [ep, e0, gw, e1, lan, fleet, e2, e3]
+
+- id: enforcement-vlan
+  alt: "One gateway port and a VLAN switch, as tested in network namespaces. The endpoint ports are untagged members of VLAN 20 only; the router's port is on VLAN 1; the gateway's single port carries VLAN 1 untagged and VLAN 20 tagged. The gateway has a VLAN interface for VLAN 20, routes and masquerades between it and the LAN, and enforces the ruleset on it. An endpoint reaches the LAN only through the gateway, and only while admitted; a LAN address or self-tagged frames on an endpoint get nowhere."
+  width: 900
+  height: 440
+  nodes:
+    ep:   {x: 20,  y: 40,  w: 220, h: 76, kind: sw,    title: "Endpoints", sub: "STM32, RW612, ...\n10.20.0.x"}
+    sw:   {x: 330, y: 40,  w: 240, h: 136, kind: plain, title: "Switch (802.1Q)", sub: "endpoint ports: VLAN 20,\nuntagged, only\ngateway port: VLAN 1 untagged\n+ VLAN 20 tagged"}
+    lan:  {x: 660, y: 40,  w: 220, h: 76, kind: plain, title: "Router, PC", sub: "VLAN 1, the LAN"}
+    gw:   {x: 330, y: 260, w: 240, h: 120, kind: hart,  title: "Gateway (one port)", sub: "end0: LAN\nend0.20: endpoint VLAN\nroutes, masquerades,\naegis.nft on end0.20"}
+    blk:  {x: 20,  y: 260, w: 220, h: 120, kind: bad,   title: "Blocked at the switch", sub: "a LAN address on an\nendpoint; frames tagged\nfor VLAN 1; LAN to\nendpoint directly"}
+    thru: {x: 660, y: 260, w: 220, h: 120, kind: good,  title: "Through the gateway", sub: "admitted: to the LAN\nquarantined: only the\nquote port; attestation\nalways"}
+  edges:
+    - {from: ep.right,   to: sw.left,    label: "VLAN 20"}
+    - {from: sw.right,   to: lan.left,   label: "VLAN 1"}
+    - {from: sw.bottom,  to: gw.top,     label: "trunk"}
+    - {from: gw.right,   to: thru.left}
+    - {from: blk.right,  to: gw.left,    dashed: true}
+  steps: [ep, e0, sw, e1, lan, e2, gw, e3, thru, blk, e4]

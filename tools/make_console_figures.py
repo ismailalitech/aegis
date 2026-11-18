@@ -30,6 +30,10 @@ two = rec('two-boards.txt')
 duo = rec('two-endpoints-demo.txt')
 rw = rec('rw612-endpoint.txt')
 tz = [clean(l) for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'trustzone-prover.txt')) if l.strip()]
+ev = lambda n: [clean(l) for l in open(os.path.join(ROOT, 'evidence', 'console', n)) if l.strip() and not l.startswith('#')]
+enf_old = [l for l in ev('enforcement-before-reply-fix.txt') if 'gateway' in l and ('PASS' in l or 'FAIL' in l) or l.startswith('passed')]
+enf_new = [l for l in ev('enforcement.txt') if 'gateway' in l and ('PASS' in l or 'FAIL' in l) or l.startswith('passed')]
+vlan = [l for l in ev('enforcement-vlan.txt') if not l.startswith('endpoint VLAN')]
 fz = [clean(l) for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'fuzzing.txt')) if l.strip()]
 prb = [clean(l) for l in open(os.path.join(ROOT, 'evidence', 'rw612-tfm', 'hardening-probes.txt')) if l.strip()]
 
@@ -210,6 +214,26 @@ figs = [
       {'lines': [3, 10], 'title': '8 workers, 30 min', 'text': 'Executions per worker, coverage and corpus size.'},
       {'lines': [11, 11], 'title': 'Result', 'text': 'About a million executions, nothing found.'},
       {'lines': [13, 13], 'title': 'Reached', 'text': 'The 20 missed lines are listed in the evidence, each with its reason.'}], width=980),
+ fig('console-enforcement-reply-bug', 'the ruleset that let no endpoint in',
+     'tests/host/test_enforcement.sh with two new checks: can the gateway reach the endpoint it must attest? With the '
+     'ruleset as it was, no: the input chain dropped the replies to the gateway\'s own connections. With the reply rule, '
+     'yes, and the endpoint still cannot open other gateway ports.',
+     '$ sudo tests/host/test_enforcement.sh      # the ruleset of 17 November', enf_old +
+     ['$ sudo tests/host/test_enforcement.sh      # with "ct direction reply accept"'] + enf_new,
+     [{'lines': [1, 5], 'title': 'Before', 'text': 'The gateway cannot attest an endpoint that is not admitted: nobody is ever let in.'},
+      {'lines': [6, 6], 'title': 'Before', 'text': '11 passed, 2 failed.'},
+      {'lines': [8, 13], 'title': 'After', 'text': 'Attestation works both ways; other gateway ports stay closed.'}], width=1000),
+ fig('console-enforcement-vlan', 'one gateway port and a VLAN switch, in network namespaces',
+     'tests/host/test_enforcement_vlan.sh: a VLAN-filtering bridge plays the switch, vlan-setup.sh and the ruleset run '
+     'unchanged in the gateway namespace. It checks admission and quarantine, the ways around a VLAN, and two known '
+     'limits, which behave as stated.',
+     '$ sudo tests/host/test_enforcement_vlan.sh', vlan,
+     [{'lines': [1, 5], 'title': 'Not attested', 'text': 'Only the quote port; the gateway can attest it.'},
+      {'lines': [6, 9], 'title': 'Admitted', 'text': 'To the LAN through the gateway; a second, unattested endpoint still cannot.'},
+      {'lines': [10, 12], 'title': 'Quarantined', 'text': 'Cut off; still attested.'},
+      {'lines': [13, 16], 'title': 'Ways around', 'text': 'A LAN address, self-tagged frames, LAN to endpoint: all blocked.'},
+      {'lines': [17, 22], 'title': 'Known limits', 'text': 'Same-VLAN endpoints see each other; a taken address passes until the next cycle.'},
+      {'lines': [23, 25], 'title': 'Undo', 'text': 'Nothing is left behind.'}], width=1000),
 ]
 yaml.safe_dump(figs, open(os.path.join(ROOT, 'docs', 'diagrams', 'console.yaml'), 'w'), sort_keys=False, width=140, allow_unicode=True)
 print(len(figs), 'console figures')

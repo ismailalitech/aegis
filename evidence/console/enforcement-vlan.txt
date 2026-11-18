@@ -1,0 +1,28 @@
+# sudo tests/host/test_enforcement_vlan.sh, 2026-11-18: one gateway port and a VLAN switch, in network namespaces
+
+endpoint VLAN 20 on end0.20 (10.20.0.1/24): routed, masqueraded, enforced
+-- an endpoint that has not attested
+PASS ping the LAN (block)
+PASS TCP to the LAN (block)
+PASS TCP to the gateway quote port (allow)
+PASS the gateway attests it over the VLAN (allow)
+-- admitted
+PASS ping the LAN (masqueraded by the gateway) (allow)
+PASS TCP to the LAN (allow)
+PASS the other, unattested endpoint still cannot (block)
+-- quarantined
+PASS TCP to the LAN (block)
+PASS the gateway still attests it (allow)
+-- ways around the VLAN
+PASS a LAN address on the endpoint: the LAN host directly (block)
+PASS frames tagged for the LAN's VLAN 1 (block)
+PASS a LAN host reaches the endpoint directly (block)
+-- known limit (needs the switch's port isolation): endpoints on the same VLAN see each other
+PASS endpoint to endpoint, past the gateway (allow)
+-- known limit (until the next cycle): a device that takes an admitted endpoint's address
+PASS the unattested device, with the admitted address, to the LAN (allow)
+   (the gateway's next cycle attests 10.20.0.2, gets no valid quote and quarantines it: see aegis-enforce.sh)
+PASS after that cycle's quarantine (block)
+-- undo
+PASS down removes the VLAN interface, the NAT table and the Aegis table
+passed 16, failed 0

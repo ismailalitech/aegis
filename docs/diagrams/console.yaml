@@ -692,3 +692,109 @@
     - 13
     title: Reached
     text: The 20 missed lines are listed in the evidence, each with its reason.
+- id: console-enforcement-reply-bug
+  type: terminal
+  title: the ruleset that let no endpoint in
+  alt: 'tests/host/test_enforcement.sh with two new checks: can the gateway reach the endpoint it must attest? With the ruleset as it was, no:
+    the input chain dropped the replies to the gateway''s own connections. With the reply rule, yes, and the endpoint still cannot open other
+    gateway ports.'
+  width: 1000
+  step: 3.4
+  height: 424
+  lines:
+  - '$ sudo tests/host/test_enforcement.sh      # the ruleset of 17 November'
+  - PASS TCP to the gateway quote port (allow)
+  - FAIL the gateway reaches the endpoint's prover (attestation) (wanted allow, got block)
+  - PASS TCP to the gateway quote port (allow)
+  - FAIL the gateway still attests the quarantined endpoint (wanted allow, got block)
+  - PASS the endpoint reaches another gateway port (SSH) (block)
+  - passed 11, failed 2
+  - '$ sudo tests/host/test_enforcement.sh      # with "ct direction reply accept"'
+  - PASS TCP to the gateway quote port (allow)
+  - PASS the gateway reaches the endpoint's prover (attestation) (allow)
+  - PASS TCP to the gateway quote port (allow)
+  - PASS the gateway still attests the quarantined endpoint (allow)
+  - PASS the endpoint reaches another gateway port (SSH) (block)
+  - passed 13, failed 0
+  callouts:
+  - lines:
+    - 1
+    - 5
+    title: Before
+    text: 'The gateway cannot attest an endpoint that is not admitted: nobody is ever let in.'
+  - lines:
+    - 6
+    - 6
+    title: Before
+    text: 11 passed, 2 failed.
+  - lines:
+    - 8
+    - 13
+    title: After
+    text: Attestation works both ways; other gateway ports stay closed.
+- id: console-enforcement-vlan
+  type: terminal
+  title: one gateway port and a VLAN switch, in network namespaces
+  alt: 'tests/host/test_enforcement_vlan.sh: a VLAN-filtering bridge plays the switch, vlan-setup.sh and the ruleset run unchanged in the gateway
+    namespace. It checks admission and quarantine, the ways around a VLAN, and two known limits, which behave as stated.'
+  width: 1000
+  step: 3.4
+  height: 664
+  lines:
+  - $ sudo tests/host/test_enforcement_vlan.sh
+  - -- an endpoint that has not attested
+  - PASS ping the LAN (block)
+  - PASS TCP to the LAN (block)
+  - PASS TCP to the gateway quote port (allow)
+  - PASS the gateway attests it over the VLAN (allow)
+  - -- admitted
+  - PASS ping the LAN (masqueraded by the gateway) (allow)
+  - PASS TCP to the LAN (allow)
+  - PASS the other, unattested endpoint still cannot (block)
+  - -- quarantined
+  - PASS TCP to the LAN (block)
+  - PASS the gateway still attests it (allow)
+  - -- ways around the VLAN
+  - 'PASS a LAN address on the endpoint: the LAN host directly (block)'
+  - PASS frames tagged for the LAN's VLAN 1 (block)
+  - PASS a LAN host reaches the endpoint directly (block)
+  - '-- known limit (needs the switch''s port isolation): endpoints on the same VLAN see each other'
+  - PASS endpoint to endpoint, past the gateway (allow)
+  - '-- known limit (until the next cycle): a device that takes an admitted endpoint''s address'
+  - PASS the unattested device, with the admitted address, to the LAN (allow)
+  - '   (the gateway''s next cycle attests 10.20.0.2, gets no valid quote and quarantines it: see aegis-enforce.sh)'
+  - PASS after that cycle's quarantine (block)
+  - -- undo
+  - PASS down removes the VLAN interface, the NAT table and the Aegis table
+  - passed 16, failed 0
+  callouts:
+  - lines:
+    - 1
+    - 5
+    title: Not attested
+    text: Only the quote port; the gateway can attest it.
+  - lines:
+    - 6
+    - 9
+    title: Admitted
+    text: To the LAN through the gateway; a second, unattested endpoint still cannot.
+  - lines:
+    - 10
+    - 12
+    title: Quarantined
+    text: Cut off; still attested.
+  - lines:
+    - 13
+    - 16
+    title: Ways around
+    text: 'A LAN address, self-tagged frames, LAN to endpoint: all blocked.'
+  - lines:
+    - 17
+    - 22
+    title: Known limits
+    text: Same-VLAN endpoints see each other; a taken address passes until the next cycle.
+  - lines:
+    - 23
+    - 25
+    title: Undo
+    text: Nothing is left behind.
