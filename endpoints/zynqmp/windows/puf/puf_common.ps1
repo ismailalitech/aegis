@@ -59,8 +59,12 @@ function Assert-OwnerOnlyAcl([string]$path, [switch]$RequireProtected) {
 function Assert-NotInGit([string]$path) {
   $git = Get-Command git.exe -ErrorAction SilentlyContinue
   if ($git) {
-    & git.exe -C $path rev-parse --is-inside-work-tree 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) { Fail "$path is inside a git work tree: keys must stay out of any repository" }
+    # PowerShell 5.1 with ErrorActionPreference 'Stop' turns git's stderr into a terminating error even with
+    # 2>$null, which killed gen_keys.ps1 in exactly the good case (not a repository): relax it for this call only.
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { & git.exe -C $path rev-parse --is-inside-work-tree 2>$null | Out-Null; $rc = $LASTEXITCODE }
+    finally { $ErrorActionPreference = $eap }
+    if ($rc -eq 0) { Fail "$path is inside a git work tree: keys must stay out of any repository" }
   }
 }
 
