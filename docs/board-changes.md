@@ -21,6 +21,7 @@
 | 18 November 2026: policy entry `zynqmp-te0808` (kind aegis-linux, BOOT/KERNEL/PROVER allowed) and its key `keys/zynqmp-te0808.mldsa65.pub` (enrolled with `enroll-pq`; the other pins kept). Backup `gateway/policy/fleet.json.bak-20261118-192548` | copy the backup back; remove the key file |
 | 18 November 2026, later: `fleet.py` with the kind `aegis-tee` (OP-TEE profiles); the entry `zynqmp-te0808` moved to that kind, pinned to the `-devhuk` profile, key `keys/zynqmp-te0807-tee.mldsa65.pub`. Backup `/root/aegis-backup-20261118-231911/` | copy the backup back; restart `aegis-fleet` |
 | 19 November 2026: the entry `zynqmp-te0808` pins the PUF-bound key (`keys/zynqmp-te0807-puf.mldsa65.pub`), the profile `aegis-zynqmp-optee-v1` and the seven boot measurements. Backup `/root/aegis-backup-20261119-073010/`. The same night the gateway hung silently for about 7 hours (journal ends at 22:56 UTC without an error; earlier only "mpfs_rtc: timed out uploading time to rtc"); a power cycle recovered it; cause unknown | copy the backup back |
+| 19 November 2026: `/etc/systemd/system.conf.d/aegis-watchdog.conf`: RuntimeWatchdogSec=20s, RebootWatchdogSec=25s (the hardware watchdog, mpfs_wdt, 28 s, nowayout; systemd had it off). Tested: with systemd letting go of it for one boot, the gateway reset itself after 25 s and came back with its services | delete the file; `systemctl daemon-reexec` (the watchdog then keeps running once opened: nowayout) |
 
 Nothing written to eNVM, keys, locks or the SD card's boot and payload partitions.
 
@@ -36,10 +37,11 @@ security views, merged image, all option bytes). The board held a TF-M v2.3.0 BL
 | Non-secure slot 0x08088000 replaced by the Aegis prover (`endpoints/stm32h573/artifacts/`) | same script |
 | Board 2, 18 November 2026: secure slot 0x0C038000 replaced by the build with the KEM_INIT fix and the encapsulation-key check (`~/aegis-tools/tfm-aegis-build-kemfix`, SPE `3cacd9d0...`, version 2.3.0, same signer and security counter, veneers unchanged); gateway policy for `stm32h573-dk-2` updated (backup `fleet.json.bak-stm32-kemfix` on the gateway); `evidence/stm32-kemfix/` | `STM32_SN=<board 2> endpoints/stm32h573/restore_from_backup.sh backups/stm32h573/20261118-100835-board2-before-kemfix` (its secure slot is the previous build), then the old SPE back in the policy |
 | Board 2, 18 November 2026: the non-secure slot temporarily held probe images (`probe.sh`: one word read each, and the SAES/DHUK test), then the normal prover again (`artifacts/prover-ns-0.5.0-mac.hex`, NSPE `34637a4e...`); secure slot, option bytes and counters untouched | nothing left to undo |
+| Board 1, 19 November 2026: secure slot upgraded to the KEM_INIT-fix image by `upgrade_secure.sh` (SPE `a5997cc3...` to `3cacd9d0...`, same version and signer; the old value removed from the policy after the board was admitted on the new one). Backup `backups/stm32h573/20261119-075159-stm32h573-dk-before-upgrade/` | `restore_from_backup.sh` with that backup; restore the policy backup `fleet.json.bak-20261119-075159` |
 
 To replace the secure image of a board, with backup, policy and checks: `endpoints/stm32h573/upgrade_secure.sh <endpoint>
 <ST-LINK serial> <signed .hex>` (tested on board 2 up to the write, and its gateway steps against the live gateway). For
-board 1, the image with the KEM_INIT fix is `endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix.hex`
+board 1 (done on 19 November 2026), the image with the KEM_INIT fix is `endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix.hex`
 (like every image there, kept on the bench PC, not in git; its checksum is in `artifacts/SHA256SUMS`; `build_tfm.sh`
 rebuilds it).
 

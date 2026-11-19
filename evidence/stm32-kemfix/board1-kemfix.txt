@@ -1,0 +1,15 @@
+STM32 board 1, 19 November 2026: endpoints/stm32h573/upgrade_secure.sh (LAN addresses masked)
+== 1. checks
+new image: SPE 3cacd9d03cddccd58fbe55fdf595ec155cf8cf0d66bb1712b2f7e68850258790
+== 2. backup to backups/stm32h573/20261119-075159-stm32h573-dk-before-upgrade
+running image: SPE a5997cc3c61af12d780ac4a8d62a2cd574c3343f077a179759f7efd36355750e (same version and signer as the new one)
+== 3. policy: allow the new SPE (root@192.168.x.x:/root/aegis/gateway/policy/fleet.json.bak-20261119-075159)
+allowed for stm32h573-dk: [('SPE', 'a5997cc3c61a'), ('NSPE', '34637a4e23d8'), ('SPE', '3cacd9d03cdd')]
+== 4. write the secure slot
+written and verified, reset at 2026-11-19 06:52:16 (gateway time)
+== 5. the gateway must admit stm32h573-dk again
+  06:52:32 stm32h573-dk ADMITTED  [credential: issued session 1b4a508f3cc7...]
+allowed for stm32h573-dk: [('NSPE', '34637a4e23d8'), ('SPE', '3cacd9d03cdd')]
+  06:53:07 stm32h573-dk ADMITTED  [credential: valid, heartbeat 1 (uptime_s=45;link=1;fw=0.5.0)]
+  06:53:41 stm32h573-dk ADMITTED  [credential: valid, heartbeat 2 (uptime_s=79;link=1;fw=0.5.0)]
+done: stm32h573-dk runs SPE 3cacd9d03cddccd58fbe55fdf595ec155cf8cf0d66bb1712b2f7e68850258790; backup backups/stm32h573/20261119-075159-stm32h573-dk-before-upgrade

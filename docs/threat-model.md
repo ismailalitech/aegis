@@ -107,5 +107,4 @@ Not considered, being out of scope or not achievable on this bench:
 8. **The PolarFire fabric accelerator is a performance block, not a security mechanism.** Version 2 (the SHA-3 sponge
    kept in the fabric) passes ACVP and makes liboqs 1.2-1.5 times faster (`docs/accelerator-v2.md`). The gateway's
    services do not enable it: they run in software.
-9. **STM32 board 1 runs the previous secure image** (without the T8/T9 fix of 18 November) until it is reconnected
-   and reflashed; board 2 runs the fixed one.
+9. Both STM32 boards run the secure image with the T8/T9 fix (board 1 since 19 November).
