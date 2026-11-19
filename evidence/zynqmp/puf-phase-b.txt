@@ -1,0 +1,51 @@
+Zynq UltraScale+ endpoint, phase B of docs/zynqmp-key-design.md: a key bound to this chip's PUF, without eFUSEs,
+19 November 2026. LAN addresses masked; no key, IV or helper-data value appears here (they stay on the Windows
+build PC, C:\tz\aegis-keys, owner-only).
+
+1. PUF registration in boot-header mode (endpoints/zynqmp/windows/puf; AMD's xilskey example over JTAG)
+   eFUSE guards: switches checked in the compiled header (only XSK_PUF_INFO_ON_UART TRUE), write APIs made
+   uncallable at compile time, ELF call-graph check (writers linked but unreachable), and a read-only eFUSE snapshot
+   that refuses unless CHASH, AUX, REG_DIS, SYN_WRLK and SYN_INVLD are blank. The first try stopped on PUF_MISC
+   bit 28: XSK_ZYNQMP_EFUSEPS_PUF_MISC_RESERVED, set on this chip from the factory (read again with Linux up), which
+   xilskey's own access check ignores; the guard now logs it.
+   App: "PUF Registration Completed", syndrome (3088 hex), AUX, CHASH, shutter 0x0100005E, black key (64 hex), IV
+   (24 hex); the red key print removed from the app. Parser: helperdata 1544 bytes, black key 32, IV 12.
+   eFUSE cache before the run and after a power cycle: 44 registers identical (EFUSE_UNCHANGED; IPDISABLE left out,
+   its VCU bit is valid only once the PL is configured).
+2. Boot image (built on the Windows PC; bootgen 2019.1 signed it: the 2025.2 Windows bootgen fails on every RSA key,
+   "Failed to calculated montgomery reduction in BN_MONT_CTX_set", while reading its own keys)
+   key source 0x28 = 0xA35C7C53 (black key in the boot header), attributes 0x0003C8C0 (PUF helper data in the
+   header, 4K mode, boot-header RSA authentication, no auth_only); FSBL and PMU firmware encrypted, the rest plain;
+   the red key absent from the image; bootgen -verify: header and FSBL signatures verified.
+   PPK (RSA-4096, in the boot header, not fused) SHA-256 of DER: 6079924d5f0c96b822883b8bd48d3db3ed916aff82e3ad4d0e7d73107f31d2b1
+   BOOT.BIN sha256 e5ebdf6cea7fc6399211abec9413a52b5095681219e670b7153fce02e09fda11 (the previous one kept on the card)
+3. First secure boot (console, passive capture, no JTAG):
+   Zynq MP First Stage Boot Loader (TE0807 hooks, Aegis 2025.2) 
+   AEGIS: hand-off flags=0x7 meas=7 bh_key_src=0xA35C7C53 csu_status=0x3
+   NOTICE:  BL31: v2.12.0(release):xilinx-v2025.2
+   I/TC: OP-TEE version: 4.7.0-dev #1 Wed Nov 18 23:02:43 UTC 2026 aarch64
+   I/TC: Aegis hand-off: flags 0x7, 7 measurements, keys from the device seed
+   Secure Boot:	authenticated, encrypted
+   I/TA: Aegis TA: key ready, profile aegis-zynqmp-optee-v1, hand-off status 1 flags 0x7 bh_key_src 0xa35c7c53 csu_status 0x3, 7 measurements
+4. From the PC through the bridge:
+   PQKEY: ML-DSA-65 key sha256 c02f156d609116a6632675fcad8cdae46cfc9267fdd1baab1567ceeb5e5527c9 (phase A's
+   development key was 5aefce9c...); PQCHAL: signature valid, profile aegis-zynqmp-optee-v1. Measurements, each the
+   first 32 bytes of the CSU's SHA3-384 over the partition as stored, recomputed on the PC from the same BOOT.BIN:
+     PMUFW    129888 bytes  43988623b5f94ff5b6fbf82b98f5e4d9cd6392972fc2f6f0428ebb1039a25d49  = PC
+     FSBL     148000 bytes  1119b5b5f919f06fb20fdd00408fcc88905853f68d141f23e04f21a6fbbeada1  = PC
+     PL      7797692 bytes  8e976350f1f205dee0734d097ad7650c928c57f990ea0f461ded9895fd237e76  = PC
+     TFA       40960 bytes  4cd0185eb13e8f5bfed2f4c6a5f61ccd54d05928b1a58948f66c8e50bd6264a0  = PC
+     TFA.1     13540 bytes  f468f8d7fd06152663d64fc44941dda82742754653c8fa889364831a9b151539  = PC
+     TEE      572888 bytes  53352832a957e67e4583e051a35315b2e3bd6e69163d7a155a025b394e65cbf5  = PC
+     UBOOT   1453680 bytes  5f0a2ef09f619518433da503acd0a38fa0b7a3a24453cffac78cf5b61a0343a3  = PC
+   (PMUFW and FSBL are hashed as stored, that is encrypted.)
+5. Gateway: the entry pins the new key and the profile and allows these seven values. Before the pin was changed,
+   the gateway refused the new key ("ML-DSA-65 quote signature invalid"); after:
+     06:30:35 zynqmp-te0808 ADMITTED (trustzone trust)  [credential: issued session bcfee3cea812...]
+     06:31:09 zynqmp-te0808 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=7;fw=zynqmp-optee-0.1.0)]
+6. Test 1 of the design (same image, same chip, same key): after a full power cycle the board came back with the
+   same key, c02f156d...
+
+Not yet done: tests 3 to 5 of the design (non-secure probes, an unencrypted FSBL naming the black key, tampered
+images with the new measurements) and phase C (PMU firmware AES secure-only, XPPU/XMPU, STRICT_DEVMEM, a better
+RNG seed for OP-TEE). The kernel U-Boot loads is not among the measurements yet.

@@ -1,4 +1,4 @@
-# Zynq UltraScale+ endpoint (18 November 2026: OP-TEE with the Aegis TA, admitted as trustzone-devkey)
+# Zynq UltraScale+ endpoint (19 November 2026: key bound to the chip's PUF, admitted with trustzone trust)
 
 The board: a Trenz **TEBF0808-04A** UltraITX+ carrier with a **TE0807 (XCZU4EG-1E, 4 GB DDR4)** module under a fan, plus two TE0790
 JTAG adapters (the one with the licence, green dot, on J12 for the MPSoC's JTAG and UART). This endpoint replaces the
@@ -34,6 +34,13 @@ it `zynqmp-te0808`, from before the module was identified; it is a TE0807.) File
   TF-A is built with `SPD=opteed`, and the device tree reserves 0x6000_0000-0x7FFF_FFFF. The gateway kind is
   `aegis-tee`: the profile `aegis-zynqmp-optee-devhuk-v1` ("trustzone-devkey") until the HUK comes from the PUF
   (phase B). Evidence: `evidence/zynqmp/optee-phase-a.txt`.
+
+- Phase B (`evidence/zynqmp/puf-phase-b.txt`): `fsbl/` (the FSBL hook: seed under the device key, partition
+  measurements, hand-off page), `handoff/` (its layout), `optee/os-patches` + `build_optee.sh` (OP-TEE takes the
+  seed and the measurements), `windows/puf/` (PUF registration in boot-header mode, the encrypted and boot-header-
+  authenticated image). The boot image is encrypted, so a new one can no longer be tried over JTAG first, and JTAG is
+  off after a secure boot: a failed boot is recovered with the card in the Linux PC's reader (the previous BOOT.BIN
+  stays on the card as `boot-2025.2-optee.bin`).
 
 A new BOOT.BIN is tried over JTAG into RAM first (`windows/jtag_boot.tcl`), and only then written to the card; the
 previous ones stay on the card (`boot-2019.bin`, the one the board came with; `boot-2025.2-nopl.bin`).
