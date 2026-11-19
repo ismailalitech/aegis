@@ -34,6 +34,7 @@ Copy `bench.env.example` to `bench.env` and set your addresses. Then:
 
     tools/setup_host.sh        # Python environment and liboqs
     tools/regression.sh        # host stages; add --board for the real boards
+                               # and --with-expiry for the endpoints' session end (about 3 minutes more)
     tools/demo.sh              # the live demo (needs the boards and an STM32 programmer)
     sudo tests/host/test_enforcement.sh   # the enforcement rules in network namespaces
     tests/fuzz/run.sh                     # fuzz the RW612 partition's protocol code (STM32=1: the STM32 partition)

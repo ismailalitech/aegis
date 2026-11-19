@@ -103,6 +103,13 @@ TF-M's storage erasing could stretch a session. The heartbeat status says which 
    `PQHB` and `PQSESSION`, and an answer to `PQCHAL`. A longer `--lifetime` gives a better figure for the rate.
 3. The gateway's side of it: with the service running again, the first cycle reads "issued session ...".
 
+`tools/regression.sh --board --with-expiry` (or `AEGIS_REGRESSION_EXPIRY=1`) does 2 and 3 as the stage
+`endpoint-expiry`, off by default. It stops `aegis-fleet`, runs the check on the gateway for each endpoint that holds
+a session (`EXPIRY_ENDPOINTS="name ..."` to choose), starts the service again however the stage ends, also on a
+failure or Ctrl-C (and a timer on the gateway starts it after 15 minutes if the PC goes away), and passes only when
+the checks pass and those endpoints are ADMITTED again. A quarantined endpoint (one not connected, say) loses its
+session on the gateway and is left out.
+
 ## Old and new together
 
 The credential format did not change, so no combination needs a flag day.
