@@ -18,7 +18,13 @@ esac
 EP=${1:?endpoint}; VERDICT=${2:?admit|quarantine}
 IP=$(python3 -c "import json,sys; p=json.load(open('$POLICY')); print(next(e.get('ip', e['host']) for e in p['endpoints'] if e['name']==sys.argv[1]))" "$EP")
 case "$VERDICT" in
-admit)      nft add element inet aegis admitted "{ $IP }" 2>/dev/null || true ;;
-quarantine) nft delete element inet aegis admitted "{ $IP }" 2>/dev/null || true ;;
+# A failed change is reported (exit 3), not hidden: fleet.py records the code as enforce_rc, and a quarantine that
+# did not happen must not look like one that did. Removing an address that is not in the set is not a failure.
+admit)      nft add element inet aegis admitted "{ $IP }" || { echo "aegis-enforce: admit $EP ($IP) failed" >&2; exit 3; } ;;
+quarantine) if nft get element inet aegis admitted "{ $IP }" >/dev/null 2>&1; then
+                nft delete element inet aegis admitted "{ $IP }" || { echo "aegis-enforce: quarantine $EP ($IP) failed" >&2; exit 3; }
+            elif ! nft list set inet aegis admitted >/dev/null 2>&1; then
+                echo "aegis-enforce: no admitted set (ruleset not loaded); $EP ($IP) is not being enforced" >&2; exit 3
+            fi ;;
 *) echo "unknown verdict $VERDICT" >&2; exit 2 ;;
 esac
