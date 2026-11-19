@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Build docs/diagrams/console.yaml (console figures with numbered callouts) from the records in evidence/console/.
+"""Build docs/diagrams/console.yaml (console figures with numbered callouts) from the records in evidence/ (console/,
+rw612-tfm/, zynqmp/, stm32-tz/).
 
 Every line drawn comes from a file a real run wrote; this script only adds the command line and the callouts.
 Run it, then tools/gen_diagrams.py.
@@ -62,6 +63,34 @@ tz_probe = ['NXP rules:   ' + l for l in section(prb_h, "# NXP") if l.split()[0]
 for head in ('# Aegis target_cfg.c', '# Stage B', '# After the security review'):
     tz_probe += ['Aegis rules: ' + l for l in section(prb_h, head) if l.split()[0] in PROBED]
 tz_probe += ['Aegis rules: ' + [l for l in section(prb_h, '# After the security review') if l.startswith('ENET_EIR')][0]]
+
+
+# the Zynq UltraScale+ and STM32 TrustZone records: a tab is drawn as four spaces, lines are taken without their indent
+zq = lambda *p: [clean(l).replace('\t', '    ') for l in open(os.path.join(ROOT, 'evidence', *p))]
+
+
+def between(lines, first, last):
+    """Stripped lines from the one starting with `first` to the one starting with `last`, inclusive."""
+    s = [l.strip() for l in lines]
+    a = next(i for i, l in enumerate(s) if l.startswith(first))
+    b = next(i for i, l in enumerate(s) if i >= a and l.startswith(last))
+    return s[a:b + 1]
+
+
+zq_puf = zq('zynqmp', 'puf-phase-b.txt')
+zq_boot = between(zq_puf, 'Zynq MP First Stage Boot Loader', 'I/TA: Aegis TA: key ready')
+# gateway journal lines for the board in the three records: Linux prover, OP-TEE with the development HUK, PUF key
+zq_j = [[l.strip() for l in zq('zynqmp', n) if ' zynqmp-te0808 ' in l and l.strip()[:2].isdigit()]
+        for n in ('boot-chain.txt', 'optee-phase-a.txt', 'puf-phase-b.txt')]
+zq_cmd = '$ ssh <gateway> journalctl -u aegis-fleet -o cat | grep zynqmp-te0808'
+zq_gw = (zq_j[0] + [zq_cmd + '     # OP-TEE, development HUK'] + zq_j[1] +
+         [zq_cmd + '     # the key from the PUF'] + zq_j[2])
+zq_o2 = 1 + len(zq_j[0]) + 1                      # first line of each stage, counting the command line as 0
+zq_o3 = zq_o2 + len(zq_j[1]) + 1
+zq_q = 1 + next(i for i, l in enumerate(zq_gw) if 'QUARANTINED (software trust)' in l)
+stm_probe = [l.strip() for l in zq('stm32-tz', 'tz-probes.txt')
+             if l.strip().startswith(('SAES-DHUK:', 'NS_FLASH ', 'S_FLASH_S ', 'S_FLASH_NS ', 'S_SRAM_S ', 'S_SRAM_NS ',
+                                      'SAES 0x', 'RNG 0x', 'NS_CODE ')) and 'TZIC SR1-4' in l]
 
 figs = [
  fig('console-demo-journal', 'gateway journal during the demo',
@@ -234,6 +263,38 @@ figs = [
       {'lines': [13, 16], 'title': 'Ways around', 'text': 'A LAN address, self-tagged frames, LAN to endpoint: all blocked.'},
       {'lines': [17, 22], 'title': 'Known limits', 'text': 'Same-VLAN endpoints see each other; a taken address passes until the next cycle.'},
       {'lines': [23, 25], 'title': 'Undo', 'text': 'Nothing is left behind.'}], width=1000),
+ fig('console-zynqmp-secure-boot', 'first boot from the encrypted, PUF-keyed image',
+     'The serial console of the first secure boot: the FSBL reports the hand-off with flags 0x7, seven measurements and '
+     'the black key named in the boot header; TF-A and OP-TEE start and OP-TEE takes its keys from the device seed; '
+     'U-Boot reports an authenticated, encrypted boot; the Aegis trusted application has its key on the profile '
+     'aegis-zynqmp-optee-v1.',
+     '$ (serial console at power-on, no JTAG attached)', zq_boot,
+     [{'lines': [1, 2], 'title': 'FSBL', 'text': 'Seed derived under the device key, seven partitions measured, black key named in the header.'},
+      {'lines': [3, 4], 'title': 'OP-TEE', 'text': 'TF-A starts OP-TEE 4.7, which takes the hand-off page.'},
+      {'lines': [5, 5], 'title': 'Keys from the chip', 'text': 'OP-TEE derives its keys from the device seed, not its development HUK.'},
+      {'lines': [6, 6], 'title': 'U-Boot', 'text': 'The boot ROM authenticated and decrypted the image.'},
+      {'lines': [7, 7], 'title': 'The Aegis TA', 'text': 'Key ready on the profile the gateway pins.'}], width=1160),
+ fig('console-zynqmp-gateway', 'the gateway journal: software trust, trustzone-devkey, trustzone',
+     'The gateway journal for the Zynq UltraScale+ board in three stages. With the Linux prover it is admitted with '
+     'software trust, and a boot script changed by one line is quarantined on its KERNEL measurement. With OP-TEE and '
+     'its development key it is admitted with trustzone-devkey trust after a power-on reset. With the key from the '
+     'PUF it is admitted with trustzone trust.',
+     zq_cmd + '     # Linux prover, our boot chain', zq_gw,
+     [{'lines': [1, zq_q - 1], 'title': 'Software trust', 'text': 'The Linux prover: a key in a file, measurements taken by Linux.'},
+      {'lines': [zq_q, zq_q], 'title': 'Tamper test', 'text': 'boot.scr with one added line: KERNEL not allowed, credential revoked.'},
+      {'lines': [zq_q + 1, zq_o2 - 2], 'title': 'Back', 'text': 'The good file back: admitted with a new session.'},
+      {'lines': [zq_o2, zq_o2 + len(zq_j[1]) - 1], 'title': 'trustzone-devkey', 'text': "Power-on reset, then the TA answers with OP-TEE's development key."},
+      {'lines': [zq_o3, zq_o3 + len(zq_j[2]) - 1], 'title': 'trustzone', 'text': 'The key from the PUF, pinned with the seven boot measurements.'}], width=1100),
+ fig('console-stm32-tz-probes', 'the STM32 from the non-secure side',
+     "Results of probe.sh on STM32 board 2. The secure partition's key derivation run from the non-secure side is "
+     'refused and the SAES illegal-access flag is set. Reads of secure flash and secure SRAM through the secure aliases '
+     'fault, and the chip resets; reads through non-secure aliases of secure SRAM, SAES and the RNG return zero and set '
+     'their flags. A word of the non-secure code reads as expected.',
+     '$ endpoints/stm32h573/probe.sh <out> --saes, then NAME=0xADDR ...   # summary lines', stm_probe,
+     [{'lines': [1, 1], 'title': 'DHUK from the non-secure side', 'text': 'SAES refuses; TZIC SR3 bit 19 is its illegal-access flag.'},
+      {'lines': [2, 5], 'title': 'Fault', 'text': 'The read never returns; TF-M resets the chip, 23 times in 40 s.'},
+      {'lines': [6, 8], 'title': 'Read as zero', 'text': 'The GTZC returns zero and flags SRAM1, SAES or the RNG.'},
+      {'lines': [9, 9], 'title': 'Control', 'text': 'A word of the non-secure code: the same value as over SWD.'}], width=1120),
 ]
 yaml.safe_dump(figs, open(os.path.join(ROOT, 'docs', 'diagrams', 'console.yaml'), 'w'), sort_keys=False, width=140, allow_unicode=True)
 print(len(figs), 'console figures')
