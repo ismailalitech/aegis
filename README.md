@@ -37,6 +37,7 @@ Copy `bench.env.example` to `bench.env` and set your addresses. Then:
     tools/demo.sh              # the live demo (needs the boards and an STM32 programmer)
     sudo tests/host/test_enforcement.sh   # the enforcement rules in network namespaces
     tests/fuzz/run.sh                     # fuzz the RW612 partition's protocol code (STM32=1: the STM32 partition)
+    tools/bench_watch.py --gateway <addr> # log when the gateway or an endpoint goes quiet (--once: one check)
 
 ## Layout
 
