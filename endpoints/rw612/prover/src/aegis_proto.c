@@ -39,7 +39,7 @@
 #define PK_LEN      MLDSA_PUBLICKEYBYTES(65)
 #define SIG_LEN     MLDSA_BYTES(65)
 #define CRED_MAX    6144u
-#define CLAIMS_MAX  1024u
+#define CLAIMS_MAX  AEGIS_CLAIMS_MAX
 
 /* PSA claim numbers (common/psa_token.py), so the gateway's measurement check applies unchanged */
 #define C_PROFILE   (-75000)

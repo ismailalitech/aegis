@@ -22,7 +22,9 @@ Boot (JTAG into RAM first, then from the card, power-on reset):
   OF: reserved mem: 0x0000000060000000..0x000000006fffffff (262144 KiB) nomap non-reusable optee_core@60000000
   optee: revision 4.7 (86846f4fdf14f25b)
   optee: initialized driver
-  I/TA: Aegis TA: key ready
+  E/TA:  TA_CreateEntryPoint:120 Aegis TA: key ready   (JTAG run; that build logged it with EMSG. The card's
+                                                      build uses IMSG, which the TA dev kit's default log level
+                                                      compiles out, so the card boot prints no TA line)
   AEGIS-TEE-BRIDGE ready on 7444
 From the PC, through the bridge:
   PQKEY: ML-DSA-65 key sha256 5aefce9c1df80ffd6c0402b4f348d33576f49b0d6b8a81d79d2ca664ae00b684

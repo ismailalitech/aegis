@@ -1,0 +1,14 @@
+# Key material and registration outputs belong in C:\tz\aegis-keys on the Windows PC, never here.
+*.hex
+*.nky
+*.pem
+*.log
+helperdata*.txt
+black_*.txt
+puf_info.txt
+BOOT*.BIN
+*.bin
+*.elf
+build/
+reg-*/
+bootgen-*/

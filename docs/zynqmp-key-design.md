@@ -60,10 +60,31 @@ U-Boot loads, hashed by U-Boot into the hand-off (or by OP-TEE from memory, if U
   cannot make an FSBL that the device key decrypts without the red key. Whether the boot ROM loads the device key
   for an unencrypted FSBL that names the black-key source is not documented, so it gets tested before the claim is
   made (test 4 below). Boot-header authentication (`bh_auth_enable`) adds an RSA signature with a key in the boot
-  header. It proves nothing against an attacker who writes the card, so it is optional here.
+  header. It proves nothing against an attacker who writes the card. **But AMD's documents say PUF regeneration
+  needs authentication** (UG1085, "Storing Keys in Encrypted Form"; UG1209, "Using the PUF"), so the encrypted
+  image is built with it; it is tried without first only to record what the boot ROM does.
 - **Secure memory:** OP-TEE's 0x6000_0000-0x7FFF_FFFF is withheld from Linux by the device tree. Against root on
   Linux that holds only if the DDR's XMPU is configured for it (FSBL hook) and `/dev/mem` is restricted
   (`CONFIG_STRICT_DEVMEM`). Both are part of phase C and are tested by probes.
+
+## Learnt while building phase B (19 November 2026)
+
+- **The red key passes through the board once.** At registration it goes over JTAG into RAM and the AES engine,
+  because the PUF can only encrypt a key it is given. It is not stored; a power cycle follows. It is generated and
+  kept on the Windows build PC only (`C:\tz\aegis-keys`, owner-only), which also runs bootgen for the encrypted
+  image (`endpoints/zynqmp/windows/puf/`).
+- **JTAG is disabled after a secure boot.** While the card holds the encrypted image, a failed boot is recovered
+  by putting the card in the Linux PC's reader; the previous BOOT.BIN stays on the card under another name.
+- **Measurements are of the boot image as stored**, re-read by the FSBL hook (CSU SHA3-384, first 32 bytes), and
+  the kernel that U-Boot loads is not yet among them: OP-TEE wipes and keeps the hand-off page before U-Boot runs.
+- **OP-TEE derives every key from the full 32-byte seed** when the hand-off is valid and chip-bound
+  (`huk_subkey_derive` overridden in the platform patch); otherwise its development HUK, unchanged, which gives
+  the phase-A key.
+- **OP-TEE's random numbers come from a software generator seeded from a timer** (no TRNG used on this platform).
+  They feed ML-KEM key generation and the hedged ML-DSA signatures. Open: seed it from a better source (phase C).
+- **The hand-off page is not authenticated.** Until the XMPU guards it (phase C), Linux root could plant a page
+  before a warm reset. The FSBL hook always overwrites it; a planted seed would also give a key the gateway's pin
+  refuses.
 
 ## Phases
 

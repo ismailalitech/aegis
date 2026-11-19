@@ -76,6 +76,7 @@ Not considered, being out of scope or not achievable on this bench:
 | T18 | One chip, two firmwares: the RW612's single-image prover (same chip key) passes as the TrustZone one | the gateway pins the claims profile per endpoint | `test_rw612_proto.py`: a valid signature refused by the pin | tested |
 | T19 | Re-enrolment silently replaces a pinned key | `enroll-pq` keeps existing pins unless `--force` | `test_5_enroll_keeps_an_existing_pin` | tested |
 | T20 | An endpoint's secure partition stack overflows into another partition | TF-M's stack limit register faults first; on the RW612 the high-water mark is reported in every heartbeat | RW612 `stack=19368/32768` (`evidence/rw612-tfm/upgrade-0.2.1.txt`); STM32 at least 19088/26624, read over SWD after attestation, provisioning and a heartbeat (`evidence/stm32-tz/tz-probes.txt`) | measured |
+| T21 | Cloning the ZynqMP endpoint's key, or using it from Linux | key derived in the FSBL under the device key (the boot header's black key, decrypted only by this chip's PUF), handed to OP-TEE before the normal world runs; the TA signs in the secure world | the same key across a power cycle; the gateway refused the new key under the old pin; partition measurements equal to the PC's (`evidence/zynqmp/puf-phase-b.txt`). Linux-side probes and the PMU firmware's AES lock-down are phase C | **partly tested** |
 
 ## 5. Known limitations (state these with any claim)
 
