@@ -1,0 +1,18 @@
+tools/regression.sh --board, 19 November 2026 (logs/regression/20261119-122116, kept on the bench PC)
+Bench: STM32 boards 1 and 2 on SPE 02549860 (sstack and endpoint-side expiry) with prover 0.6.0; RW612 TF-M 0.2.2;
+gateway with the hardware watchdog and panic-on-lockup; the Zynq UltraScale+ and the Arduino not connected.
+
+PASS host-unit-tests
+PASS host-redteam
+PASS rtl-simulation
+PASS acvp-pc-software
+PASS acvp-vectors-intact
+PASS gateway-phase1
+PASS fabric-selftest
+PASS fabric-acvp
+PASS fabric-sponge-acvp
+PASS fleet-once
+PASS fleet-session
+PASS fleet-heartbeat
+PASS device-redteam
+passed 13, failed 0 -> 20261119-122116

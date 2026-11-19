@@ -1,4 +1,4 @@
-# The session's end on the endpoint (state of 2026-11-19: built and tested on the PC, not yet on the boards)
+# The session's end on the endpoint (state of 2026-11-19: on both STM32 boards and the RW612; the Zynq with phase C)
 
 A credential lasts an hour and the gateway renews it five minutes before it expires (`architecture.md`). Until now
 only the gateway checked that: an endpoint kept answering heartbeats under a session for as long as it had power. If
@@ -41,8 +41,9 @@ The STM32's non-secure prover prints the partition's status codes instead: `ERR 
 It covers an endpoint clock up to 6 % fast: such an endpoint still does not end a session before the gateway's own
 expiry. The least exact clock among the endpoints is the STM32's internal 32 kHz oscillator (LSI), an RC oscillator
 good to a few per cent; the others count a crystal's clock. A slow clock lengthens the session by its error (5 % slow:
-about 67 minutes of real time for an hour's credential). The actual rate of each board's clock is still to be read on
-the bench, from `ttl`. In normal operation none of this is reached: the gateway replaces the session after 55 minutes.
+about 67 minutes of real time for an hour's credential). Measured on the bench (`evidence/endpoint-expiry/bench.txt`):
+both STM32 boards' LSI at 0.941 endpoint seconds per gateway second (inside the margin; an hour's credential can then
+last about 68 minutes), the RW612's SysTick at 1.000. In normal operation none of this is reached: the gateway replaces the session after 55 minutes.
 
 Every heartbeat status ends with `;ttl=<seconds left>`, under the MAC. On the bench that shows the endpoint's clock
 running, and its rate against the gateway's clock, without waiting an hour.
@@ -86,9 +87,10 @@ TF-M's storage erasing could stretch a session. The heartbeat status says which 
   the safe direction; the gateway's attestation cycle sees the rest.
 - **A clock that the other side can slow lengthens the session.** That is the ZynqMP's timestamp clock until phase C,
   the RW612's fallback clock, and any debugger (out of scope on this bench: `threat-model.md`, limitation 1).
-- **The clocks are not yet verified on the boards.** The protocol logic is tested on the PC and fuzzed against a
-  model; the STM32's RTC code runs there against a stand-in for the registers. First on each board: `ttl` must fall by
-  the gateway's cycle time from one heartbeat to the next.
+- **Verified on the boards** (`evidence/endpoint-expiry/bench.txt`): on both STM32s and the RW612, `ttl` falls with
+  the gateway's cycle, and a 32 s credential is refused after its end while attestation still answers. Not yet probed:
+  a non-secure write to the STM32's RTC settings (the partition's settings check would end the session: it fails
+  closed).
 
 ## Checking it on a board
 
