@@ -1,0 +1,30 @@
+tools/regression.sh --board --with-expiry, 19 November 2026 (logs/regression/20261119-141033, kept on the bench PC)
+Bench: STM32 boards 1 and 2 on SPE 02549860 (sstack and endpoint-side expiry) with prover 0.6.0; RW612 TF-M 0.2.2;
+gateway with the hardware watchdog and panic-on-lockup; the Zynq UltraScale+ and the Arduino not connected (both
+quarantined, so they hold no session and the expiry stage leaves them out).
+
+PASS host-unit-tests
+PASS host-redteam
+PASS rtl-simulation
+PASS acvp-pc-software
+PASS acvp-vectors-intact
+PASS gateway-phase1
+PASS fabric-selftest
+PASS fabric-acvp
+PASS fabric-sponge-acvp
+PASS fleet-once
+PASS fleet-session
+PASS fleet-heartbeat
+PASS device-redteam
+PASS endpoint-expiry
+passed 14, failed 0 -> 20261119-141033
+
+endpoint-expiry (aegis-fleet stopped, tests/board/expiry_check.py on the gateway, 32 s credentials, 4 min 5 s for
+the whole run):
+ frdm-rw612      ttl 34 -> 17, clock 1.0,   after the end PQHB and PQSESSION "ERR pq expired", PQCHAL PQTOKEN
+ stm32h573-dk-2  ttl 34 -> 18, clock 0.941, after the end PQHB and PQSESSION "ERR pq -140",    PQCHAL PQTOKEN
+ stm32h573-dk    ttl 34 -> 18, clock 0.941, after the end PQHB and PQSESSION "ERR pq -140",    PQCHAL PQTOKEN
+Gateway journal, first cycle after the stage started aegis-fleet again (UTC):
+13:14:33 stm32h573-dk ADMITTED  [credential: issued session 28c9babb4125...]
+13:14:33 stm32h573-dk-2 ADMITTED  [credential: issued session 177dd1289e67...]
+13:14:33 frdm-rw612 ADMITTED (trustzone trust)  [credential: issued session 1ad12ce96f4d...]

@@ -155,7 +155,9 @@ rebuilt kernel (`docs/phase4-notes.md`). Today the gateway decides and records.
 ## Where things run and how to check them
 
 - `tools/regression.sh --board`: host tests, red-team, RTL simulation, ACVP on PC, gateway checks, fabric self-test,
-  ACVP with the fabric, fleet admission, session, heartbeat, device red-team.
+  ACVP with the fabric, fleet admission, session, heartbeat, device red-team. With `--with-expiry` (or
+  `AEGIS_REGRESSION_EXPIRY=1`) also `endpoint-expiry`: the session's end on every endpoint that holds a session
+  (`docs/endpoint-expiry.md`), with the fleet service stopped for it and started again afterwards.
 - `tests/fuzz/run.sh` and `STM32=1 tests/fuzz/run.sh`: the endpoint partitions under libFuzzer, ASan and UBSan
   (also in CI).
 - `tools/demo.sh`: the end-to-end story on the boards in under 2 minutes.
