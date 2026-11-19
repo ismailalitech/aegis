@@ -1,0 +1,69 @@
+files: results/stm32-board2-run1.json, results/stm32-board2-run2.json, results/stm32-board2-run3.json
+state: {'halted_in_secure_CDS': True, 'secure_debug_enabled_S_SDE': True, 'run_DSCSR': '0x30000', 'run_MPU_CTRL_cur': '0x0', 'run_SAU_CTRL_cur': '0x1', 'cpuid_seen': '0x410fd214', 'dwt_ctrl_seen': '0x40000001', 'demcr_seen': '0x1100000'}
+EMPTY overhead: min 1 max 1
+
+Total cycles for 128 instructions (min/max over 3 runs x 8 reps), overhead 1 subtracted
+class               SMULL_T    SMULL_D    UMULL_T    UMULL_D    SMLAL_T    SMLAL_D    UMLAL_T    UMLAL_D    MUL_T      MUL_D      MLA_T      MLA_D      ADDW_T     ADDW_D     
+0x0                 129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+1x1                 129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+7Fx7F               129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+FFFFxFFFF           129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+7FFFFFFFx7FFFFFFF   129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+80000000x80000000   129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+FFFFFFFFxFFFFFFFF   129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+rand x rand         129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+rand x rand +acc    129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+1xFFFFFFFF          129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+FFFFFFFFx1          129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+7Fx80000000         129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+80000000x7F         129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+FFFFx7FFFFFFFF      129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+7FFFFFFFxFFFF       129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+0xFFFFFFFF          129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+FFFFFFFFx0          129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+mldsa q-1 x zeta    129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+mldsa t x -q        129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+mldsa 1 x -q        129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+mldsa neg x coeff   129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+mlkem -1665x1665    129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+mlkem 3328x-3329    129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+mlkem compress      129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+2^16x2^16           129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+int16 ext +acc      129        384        129        384        129        129        129        129        129        384        129        129        129        129        
+
+Per block across ALL operand classes (min..max total, cycles/instr):
+  SMULL_T  129..129  -> 1.008..1.008 cyc/instr  CONSTANT
+  SMULL_D  384..384  -> 3.000..3.000 cyc/instr  CONSTANT
+  UMULL_T  129..129  -> 1.008..1.008 cyc/instr  CONSTANT
+  UMULL_D  384..384  -> 3.000..3.000 cyc/instr  CONSTANT
+  SMLAL_T  129..129  -> 1.008..1.008 cyc/instr  CONSTANT
+  SMLAL_D  129..129  -> 1.008..1.008 cyc/instr  CONSTANT
+  UMLAL_T  129..129  -> 1.008..1.008 cyc/instr  CONSTANT
+  UMLAL_D  129..129  -> 1.008..1.008 cyc/instr  CONSTANT
+  MUL_T    129..129  -> 1.008..1.008 cyc/instr  CONSTANT
+  MUL_D    384..384  -> 3.000..3.000 cyc/instr  CONSTANT
+  MLA_T    129..129  -> 1.008..1.008 cyc/instr  CONSTANT
+  MLA_D    129..129  -> 1.008..1.008 cyc/instr  CONSTANT
+  ADDW_T   129..129  -> 1.008..1.008 cyc/instr  CONSTANT
+  ADDW_D   129..129  -> 1.008..1.008 cyc/instr  CONSTANT
+
+mld_montgomery_reduce((int64)a*b) per call (incl. call + 2 CYCCNT reads):
+  zeros                  min 17 max 17
+  small                  min 17 max 17
+  +-(q-1)                min 17 max 17
+  rand coeff x coeff     min 17 max 17
+  rand int24 x coeff     min 17 max 17
+  near 2^31*q bound      min 17 max 17
+  0 x rand               min 17 max 17
+  rand32 x rand32        min 17 max 17
+  empty call            min 5 max 5
+  ALL classes           min 17 max 17 -> CONSTANT
+  montgomery outputs checked against a Python reference: 0 mismatches
+
+pointwise_montgomery over 256 coefficients (min/max over runs x 4 reps):
+  zeros                min 5909 max 5909
+  +-(q-1)              min 5909 max 5909
+  random coeffs        min 5909 max 5909
+  small |x|<8          min 5909 max 5909
+  rand int32 x coeff   min 5909 max 5909
+  ALL                  min 5909 max 5909 -> CONSTANT

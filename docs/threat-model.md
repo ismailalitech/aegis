@@ -99,6 +99,8 @@ Not considered, being out of scope or not achievable on this bench:
      SDK does not set up level 3 for this board.
 5. **Side channels and fault injection are not evaluated.** ML-DSA signing is hedged on both endpoint types: fresh
    randomness in every signature, refused if randomness fails.
+   One assumption of the PQ code was measured: the Cortex-M33's multiplies (SMULL, UMULL, SMLAL, UMLAL, MUL, MLA) take
+   a fixed number of cycles whatever the operands, on both STM32s and the RW612 (`tools/m33_mul_timing/`).
 6. **No network enforcement on the real gateway yet** (T16): the ruleset and the one-port VLAN design are tested in
    network namespaces (`docs/vlan-enforcement.md`), but the bench has no VLAN switch in place. With one, endpoints on
    the same VLAN still see each other unless the switch isolates its ports. A device that takes an absent admitted
