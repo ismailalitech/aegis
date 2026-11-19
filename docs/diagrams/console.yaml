@@ -936,3 +936,113 @@
     - 9
     title: Control
     text: 'A word of the non-secure code: the same value as over SWD.'
+- id: console-stm32-sstack
+  type: terminal
+  title: the secure stack mark in every heartbeat
+  alt: The gateway journal for the two STM32 boards after the secure image with the stack mark. With the old non-secure prover 0.5.0 the heartbeats
+    carry no stack mark. With prover 0.6.0 every heartbeat ends with sstack=19088/26624, the secure partition's stack high-water mark, under the
+    session's KMAC; board 1 reports the same figure.
+  width: 1020
+  step: 3.4
+  height: 424
+  lines:
+  - '$ ssh <gateway> journalctl -u aegis-fleet -o cat | grep stm32h573-dk-2      # new secure image, prover 0.5.0'
+  - '09:02:15 stm32h573-dk-2 ADMITTED  [credential: issued session e03532f481e2...]'
+  - '09:02:49 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1 (uptime_s=50;link=1;fw=0.5.0)]'
+  - '09:03:23 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 2 (uptime_s=84;link=1;fw=0.5.0)]'
+  - '$ ssh <gateway> journalctl -u aegis-fleet -o cat | grep stm32h573-dk-2      # prover 0.6.0'
+  - '09:04:03 stm32h573-dk-2 ADMITTED  [credential: issued session 988db46d4c81...]'
+  - '09:04:37 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1 (uptime_s=46;link=1;fw=0.6.0;sstack=19088/26624)]'
+  - '09:05:11 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 2 (uptime_s=80;link=1;fw=0.6.0;sstack=19088/26624)]'
+  - '09:05:45 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 3 (uptime_s=114;link=1;fw=0.6.0;sstack=19088/26624)]'
+  - '$ ssh <gateway> journalctl -u aegis-fleet -o cat | grep ''stm32h573-dk ''      # board 1, prover 0.6.0'
+  - '09:08:56 stm32h573-dk ADMITTED  [credential: issued session 836896198fd9...]'
+  - '09:09:30 stm32h573-dk ADMITTED  [credential: valid, heartbeat 1 (uptime_s=54;link=1;fw=0.6.0;sstack=19088/26624)]'
+  - '09:10:04 stm32h573-dk ADMITTED  [credential: valid, heartbeat 2 (uptime_s=88;link=1;fw=0.6.0;sstack=19088/26624)]'
+  - '09:10:38 stm32h573-dk ADMITTED  [credential: valid, heartbeat 3 (uptime_s=122;link=1;fw=0.6.0;sstack=19088/26624)]'
+  callouts:
+  - lines:
+    - 1
+    - 3
+    title: New secure image, old prover
+    text: Admitted on SPE e68ad797; prover 0.5.0 does not ask for the stack mark.
+  - lines:
+    - 5
+    - 5
+    title: Prover 0.6.0
+    text: Admitted with a new session on the new non-secure image.
+  - lines:
+    - 6
+    - 8
+    title: The stack mark
+    text: 'sstack=19088/26624 in every heartbeat, under the KMAC: the depth read over SWD.'
+  - lines:
+    - 10
+    - 13
+    title: Board 1
+    text: 'The same steps and the same figure: 19,088 of 26,624 bytes.'
+- id: console-endpoint-expiry
+  type: terminal
+  title: a 32-second credential ends on each endpoint
+  alt: expiry_check.py on the gateway, once for each endpoint, with a credential that lasts 32 s. On both STM32 boards ttl falls from 34 to 18
+    in the heartbeat and the secure RTC runs at 0.941 s per gateway second; after the end the heartbeat and the session query get -140, a session
+    ended by the clock. On the RW612 the secure SysTick (clk=ref) runs at 1.0 and the replies are ERR pq expired. Attestation still answers on
+    all three.
+  width: 1020
+  step: 3.4
+  height: 604
+  lines:
+  - '$ python3 expiry_check.py /root/aegis/gateway/policy/fleet.json stm32h573-dk-2 --lifetime 32      # aegis-fleet stopped'
+  - '"lifetime_s": 32, "ends_after_s": 34,'
+  - '"A_heartbeat": "uptime_s=108;link=1;fw=0.6.0;sstack=19088/26624;ttl=34",'
+  - '"B_heartbeat": "uptime_s=125;link=1;fw=0.6.0;sstack=19088/26624;ttl=18",'
+  - '"B_endpoint_seconds_per_gateway_second": 0.941,'
+  - '"C_heartbeat_after_end": "ERR pq -140", "C_session_after_end": "ERR pq -140", "C_waited_s": 39.4,'
+  - '"D_attestation": "PQTOKEN"'
+  - $ python3 expiry_check.py /root/aegis/gateway/policy/fleet.json stm32h573-dk --lifetime 32
+  - '"lifetime_s": 32,'
+  - '"A_heartbeat": "uptime_s=126;link=1;fw=0.6.0;sstack=19088/26624;ttl=34",'
+  - '"B_heartbeat": "uptime_s=143;link=1;fw=0.6.0;sstack=19088/26624;ttl=18",'
+  - '"B_endpoint_seconds_per_gateway_second": 0.941,'
+  - '"C_heartbeat_after_end": "ERR pq -140",'
+  - '"C_session_after_end": "ERR pq -140",'
+  - '"D_attestation": "PQTOKEN"'
+  - $ python3 expiry_check.py /root/aegis/gateway/policy/fleet.json frdm-rw612 --lifetime 32
+  - '"lifetime_s": 32,'
+  - '"A_heartbeat": "requests=9;stack=19384/32768;clk=ref;fw=rw612-tfm-0.2.2;ttl=34",'
+  - '"B_heartbeat": "requests=10;stack=19384/32768;clk=ref;fw=rw612-tfm-0.2.2;ttl=17",'
+  - '"B_endpoint_seconds_per_gateway_second": 1.0,'
+  - '"C_heartbeat_after_end": "ERR pq expired",'
+  - '"C_session_after_end": "ERR pq expired",'
+  - '"D_attestation": "PQTOKEN"'
+  callouts:
+  - lines:
+    - 1
+    - 1
+    title: A 32 s credential
+    text: 'The endpoint ends it after 34 s: the lifetime plus a sixteenth.'
+  - lines:
+    - 2
+    - 4
+    title: ttl and the clock rate
+    text: ttl, under the KMAC, falls from 34 to 18. The STM32 RTC on the LSI runs at 0.941.
+  - lines:
+    - 5
+    - 6
+    title: After the end
+    text: 'Heartbeat and session query: -140, ended by the clock. Attestation still answers.'
+  - lines:
+    - 8
+    - 14
+    title: Board 1
+    text: 'The same values: 34, 18, 0.941, -140, a token.'
+  - lines:
+    - 17
+    - 19
+    title: RW612 secure SysTick
+    text: 'clk=ref, the function clock: 1.0 against the gateway.'
+  - lines:
+    - 20
+    - 22
+    title: RW612 after the end
+    text: ERR pq expired from its protocol code; attestation still answers.
