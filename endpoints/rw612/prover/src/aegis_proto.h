@@ -32,10 +32,21 @@ struct aegis_measurement {
 #define AEGIS_CLAIMS_MAX 1024u
 #endif
 
+/* A session ends on the endpoint's own clock (docs/endpoint-expiry.md). The credential's lifetime is its signed
+ * "expires" minus "issued", at most AEGIS_CRED_LIFETIME_MAX seconds; the session lives that long plus a margin of one
+ * sixteenth. The margin covers a clock up to 6 % fast (the least exact one is the STM32's RC oscillator, good to a
+ * few per cent), so an endpoint does not end a session before the gateway's own expiry. */
+#define AEGIS_CRED_LIFETIME_MAX 86400u
+#define AEGIS_SESSION_LIMIT(lifetime) ((uint64_t)(lifetime) + (lifetime) / 16u)
+
 struct aegis_proto_platform {
 	int (*random)(uint8_t *out, size_t n);           /* hardware randomness; 0 on success */
 	void (*measure)(uint8_t out[32], size_t *len);   /* SHA-256 of the running image, and its length (APP) */
 	uint32_t (*uptime_s)(void);
+	/* Required. Seconds from a counter that only advances and that nothing outside this image (the non-secure
+	 * side, the normal world) can set, slow or stop; any origin. Returns 0, or nonzero when the counter cannot be
+	 * trusted now: the session then ends and no new one starts. */
+	int (*monotonic_s)(uint64_t *now);
 	/* Optional, used when set (the TF-M partition sets them; the Zephyr prover leaves them 0): */
 	const char *profile;                                               /* claims profile */
 	size_t (*measure_all)(struct aegis_measurement *m, size_t max);    /* several components instead of APP */

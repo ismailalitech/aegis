@@ -5,6 +5,7 @@
  * fits the claims buffer, and which ML-DSA-65 key the TA gets. The stand-in derives the TA's keys as OP-TEE does:
  * without a seed of the chip's, OP-TEE 4.7.0's own construction with the development HUK, which must give the key
  * the board had in phase A (evidence/zynqmp/optee-phase-a.txt); with one, the patch's (aegis_handoff_kdf.c).
+ * And the session clock: the TA starts a session only on a system time the normal world cannot change.
  * Built and run by run.sh (ASan, UBSan).
  */
 #include <stdarg.h>
@@ -74,10 +75,23 @@ void TEE_GenerateRandom(void *buf, size_t n)
 		((uint8_t *)buf)[i] = x += 0x9d;
 }
 
+/* OP-TEE's system time and its protection level (1000: the physical counter; 100: a time the normal world controls) */
+static uint32_t stub_seconds = 42, stub_time_level = 1000;
+static int stub_no_time_level;
+
 void TEE_GetSystemTime(TEE_Time *t)
 {
-	t->seconds = 42;
+	t->seconds = stub_seconds;
 	t->millis = 0;
+}
+
+TEE_Result TEE_GetPropertyAsU32(TEE_PropSetHandle set, const char *name, uint32_t *value)
+{
+	if (set != TEE_PROPSET_TEE_IMPLEMENTATION || strcmp(name, "gpd.tee.systemTime.protectionLevel") ||
+	    stub_no_time_level)
+		return TEE_ERROR_ITEM_NOT_FOUND;
+	*value = stub_time_level;
+	return TEE_SUCCESS;
 }
 
 void TEE_MemFill(void *buf, uint32_t x, size_t n)
@@ -431,6 +445,58 @@ static void test_largest(void)
 	CHECK(claims_len <= AEGIS_CLAIMS_MAX);
 }
 
+/* one request line to the TA; the reply as text */
+static const char *line(const char *req)
+{
+	static char in[256], reply[AEGIS_TA_REPLY_MAX + 1];
+	TEE_Param p[TEE_NUM_PARAMS];
+
+	memset(p, 0, sizeof(p));
+	snprintf(in, sizeof(in), "%s", req);
+	p[0].memref.buffer = in;
+	p[0].memref.size = strlen(in);
+	p[1].memref.buffer = reply;
+	p[1].memref.size = AEGIS_TA_REPLY_MAX;
+	CHECK(TA_InvokeCommandEntryPoint(NULL, AEGIS_TA_CMD_LINE,
+					 TEE_PARAM_TYPES(TEE_PARAM_TYPE_MEMREF_INPUT, TEE_PARAM_TYPE_MEMREF_OUTPUT, 0, 0),
+					 p) == TEE_SUCCESS);
+	reply[p[1].memref.size <= AEGIS_TA_REPLY_MAX ? p[1].memref.size : 0] = '\0';
+	return reply;
+}
+
+/* The session clock. With a trusted system time a PQKEMFIN reaches the credential checks (here: a malformed one);
+ * with a time the normal world controls, or an OP-TEE that does not say, the TA has no clock and refuses before
+ * them, so no session can start. (The lifetime itself is tested with the gateway's code in
+ * tests/host/test_rw612_proto.py and in tests/fuzz: the protocol code is the same file.) */
+static void test_session_clock(void)
+{
+	static const char init[] = "PQKEMINIT 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+
+	six_measurements();
+	boot_and_quote();
+	CHECK(strstr(stub_log, "session clock trusted (level 1000)") != NULL);
+	CHECK(!strcmp(line("PQHB 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"), "ERR pq no-session"));
+	CHECK(!strncmp(line(init), "PQKEMEK ", 8));
+	CHECK(!strcmp(line("PQKEMFIN 00 00"), "ERR bad-request"));
+
+	stub_time_level = 100;
+	boot_and_quote();
+	CHECK(strstr(stub_log, "session clock NOT trusted") != NULL);
+	CHECK(!strncmp(line(init), "PQKEMEK ", 8));
+	CHECK(!strcmp(line("PQKEMFIN 00 00"), "ERR clock"));
+	stub_time_level = 1000;
+
+	stub_no_time_level = 1;
+	boot_and_quote();
+	CHECK(!strncmp(line(init), "PQKEMEK ", 8));
+	CHECK(!strcmp(line("PQKEMFIN 00 00"), "ERR clock"));
+	stub_no_time_level = 0;
+
+	boot_and_quote();
+	CHECK(!strncmp(line(init), "PQKEMEK ", 8));
+	CHECK(!strcmp(line("PQKEMFIN 00 00"), "ERR bad-request"));
+}
+
 int main(void)
 {
 	test_no_pta();
@@ -442,6 +508,7 @@ int main(void)
 	test_valid_without_measurements();
 	test_bad_answers();
 	test_largest();
+	test_session_clock();
 	if (failures) {
 		printf("%d check(s) FAILED\n", failures);
 		return 1;

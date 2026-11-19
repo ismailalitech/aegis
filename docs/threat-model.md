@@ -17,7 +17,7 @@ gap. Nothing here is a certification claim.
 | Gateway identity key (ML-DSA-65) | `/var/lib/aegis/identity.sk`, mode 0600, PolarFire Linux | signs gateway quotes and endpoint credentials |
 | STM32 device key (ML-DSA-65) | derived at boot from the STM32H5 DHUK inside the TF-M secure partition; never leaves secure RAM | signs endpoint quotes and its ML-KEM keys |
 | RW612 device key (ML-DSA-65) | derived at the first request from the die key in ELS (CKDF, HMAC) inside the Aegis TF-M partition; ELS is secure-privileged only | the same, for the RW612 |
-| Session keys (from ML-KEM-768) | endpoint secure RAM; gateway `/var/lib/aegis/credentials/*.session` (0600) | authenticate heartbeats between attestations |
+| Session keys (from ML-KEM-768) | endpoint secure RAM, wiped by the endpoint when the credential's lifetime is over (T22); gateway `/var/lib/aegis/credentials/*.session` (0600) | authenticate heartbeats between attestations |
 | Policy (allowed measurements, enrolled keys, pinned profiles) | `gateway/policy/fleet.json`, `keys/` on the gateway | decides admission |
 | Measurements | STM32: TF-M BL2 (MCUboot) boot records in the PSA token. RW612: SHA-256 of the whole secure and non-secure flash partitions, taken by the secure partition before non-secure code runs | evidence of what software runs |
 | Gateway platform state | PolarFire fabric design and digests, design info, security locks, aegisd code hash | evidence in the gateway's own quote |
@@ -77,6 +77,7 @@ Not considered, being out of scope or not achievable on this bench:
 | T19 | Re-enrolment silently replaces a pinned key | `enroll-pq` keeps existing pins unless `--force` | `test_5_enroll_keeps_an_existing_pin` | tested |
 | T20 | An endpoint's secure partition stack overflows into another partition | TF-M's stack limit register faults first; the high-water mark is reported in every heartbeat, under the MAC | RW612 `stack=19368/32768` (`evidence/rw612-tfm/upgrade-0.2.1.txt`); STM32 `sstack=19088/26624` in every heartbeat on both boards, the same as read over SWD (`evidence/stm32-sstack/heartbeat-sstack.txt`, `evidence/stm32-tz/tz-probes.txt`) | measured |
 | T21 | Cloning the ZynqMP endpoint's key, or using it from Linux | key derived in the FSBL under the device key (the boot header's black key, decrypted only by this chip's PUF), handed to OP-TEE before the normal world runs; the TA signs in the secure world | the same key across a power cycle; the gateway refused the new key under the old pin; partition measurements equal to the PC's (`evidence/zynqmp/puf-phase-b.txt`). Linux-side probes and the PMU firmware's AES lock-down are phase C | **partly tested** |
+| T22 | A session outlives its credential: the gateway is gone, or the endpoint's non-secure side is taken over and keeps asking for heartbeat proofs | the endpoint's secure side ends the session on its own clock, the credential's signed lifetime plus a sixteenth after it accepted it, and wipes the key; a clock that fails, runs backwards or was reconfigured ends it too, and then no session starts. The clock is out of the non-secure side's reach: the RTC on the LSI, made secure, on the STM32; the secure SysTick on the RW612; the physical counter through OP-TEE on the ZynqMP ([endpoint-expiry.md](endpoint-expiry.md)) | PC: `test_rw612_proto.py` and `test_linux_prover.py` (accepted a second before the end, refused at it, the session gone, no clock, credentials without a lifetime), `test_fleet.py` (the gateway provisions again), `tests/fuzz` (both partitions against a model holding the clock, with clock faults), the TA's tests. Boards: not yet run | **built and tested on the PC; not on the boards** |
 
 ## 5. Known limitations (state these with any claim)
 
@@ -102,8 +103,18 @@ Not considered, being out of scope or not achievable on this bench:
    network namespaces (`docs/vlan-enforcement.md`), but the bench has no VLAN switch in place. With one, endpoints on
    the same VLAN still see each other unless the switch isolates its ports. A device that takes an absent admitted
    endpoint's address passes until the next cycle quarantines it.
-7. **Credential expiry** (one hour, renewed five minutes before) is checked by the gateway only; the endpoints have
-   no trusted time.
+7. **Credential expiry** (one hour, renewed five minutes before) is checked by the gateway, and on the boards so far
+   by the gateway only. The endpoint-side end of a session (T22) is built and tested on the PC and still has to be
+   flashed and checked on each board. Its limits, once it runs:
+   - The endpoints have no wall clock: they measure how long a session has lasted, not whether a credential is
+     current. The session's life counts from the endpoint's acceptance, on the endpoint's clock: an hour's credential
+     gives 63 minutes 45 seconds of that clock, and a clock that runs slow (the STM32's is an RC oscillator, good to a
+     few per cent) lengthens it by its error.
+   - A clock that someone else can slow lengthens the session: a debugger on any endpoint (limitation 1); on the
+     ZynqMP the normal world, through the counter's clock control, until phase C locks it; on the RW612, if the
+     partition had to fall back to the processor clock (its status says so), a non-secure image that keeps TF-M's
+     flash erasing.
+   - An endpoint that is switched off or reset is not detected by this; the reset loses the session.
 8. **The PolarFire fabric accelerator is a performance block, not a security mechanism.** Version 2 (the SHA-3 sponge
    kept in the fabric) passes ACVP and makes liboqs 1.2-1.5 times faster (`docs/accelerator-v2.md`). The gateway's
    services do not enable it: they run in software.

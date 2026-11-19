@@ -10,28 +10,44 @@
  *   0  a raw message: type, two input sizes, two output sizes (from the payload), input bytes from the payload
  *   1  KEM_INIT with a nonce from the payload
  *   2  KEM_FINISH built as the gateway would, then changed (fields left out or wrong, text added, a newline, the
- *      signature or ciphertext damaged, or the payload signed as the whole body)
+ *      signature or ciphertext damaged, or the payload signed as the whole body); the op byte's upper bits change the
+ *      validity: bits 3-5 pick 0 as the gateway writes it, 1 no "issued", 2 no "expires", 3 a lifetime of zero,
+ *      4 "expires" twice, 5 eleven digits, 6 a string, 7 a second too long; bits 6-7 pick the lifetime (3600, 1,
+ *      86400 or 40 seconds)
  *   3  HEARTBEAT with a nonce and status data from the payload; the op byte's upper bits pick out[1]: 0 the prover's
  *      buffer (HB_STATUS_MAX), 1 none (provers up to 0.5.0), 2 exactly the length the status needs, else 5 * bits
  *   4  QUOTE with a challenge from the payload
  *   5  SESSION
  *   6  after K good random draws, the next N fail; with 4 or more payload bytes also a new stack scenario: the stack is
  *      filled again from a stand-in stack pointer at the offset in bytes 2-3 (out of range: not filled, "sstack=na"),
- *      and with 6 or more the top <bytes 4-5> bytes are marked used
+ *      and with 6 or more the top <bytes 4-5> bytes are marked used.
+ *      With upper bits in the op byte, the session clock's hardware instead (the RTC's registers are memory here and
+ *      the harness plays the RTC): 1 the counter moves on by the payload's seconds (32 bits), 2 by its counts,
+ *      3 back by its counts; 4 one thing goes wrong (payload byte: the LSI or the RTC switched off, another RTC
+ *      clock, a security bit cleared, another mode or prescaler, initialisation mode, the register clock off, a wrap
+ *      flag that will not clear, a wrap flag set); 5 a reset: the partition's state is cleared and its clock started
+ *      again on hardware from the payload (byte 0: the LSI never ready, initialisation mode never entered or never
+ *      left, a counter that stands still; byte 1: the RTC clock BL2 left; bytes 2-5: the counter's value)
  *   7  GET_PUBKEY
  * Checks, besides the sanitizers:
  *   - no psa_write beyond the caller's output size (TF-M panics on it), no read of an input that is not there;
- *   - a credential is accepted if and only if an exchange is pending, the sizes are valid, its body has no newline and
- *     fits, the gateway's signature over it is valid, and it names SHA3-256(ct) and SHA3-256(ek) of the pending
- *     exchange (checked here independently); a raw message is never accepted as a credential;
+ *   - a credential is accepted if and only if an exchange is pending, the clock works, the sizes are valid, its body
+ *     has no newline and fits, the gateway's signature over it is valid, it names SHA3-256(ct) and SHA3-256(ek) of the
+ *     pending exchange, and it carries "issued" and "expires" once each with a lifetime of 1 to 86400 seconds
+ *     (checked here independently); a raw message is never accepted as a credential;
+ *   - the clock starts if and only if the hardware lets it (the model says which), and is given up for good when a
+ *     setting is found changed; a session answers until the counter shows its lifetime plus a sixteenth after the
+ *     accepted KEM_FINISH, and from that count on, or when the clock is given up, the counter is below the session's
+ *     start or it wrapped, SESSION and HEARTBEAT answer PSA_ERROR_DOES_NOT_EXIST (before any session:
+ *     PSA_ERROR_BAD_STATE), whatever messages came in between;
  *   - a KEM_INIT with valid arguments that is refused leaves no exchange pending;
  *   - confirmation tag, session id, credential hash and every heartbeat tag are what the gateway computes; the
  *     heartbeat counter counts up by one (from boot, across sessions); a refused exchange leaves the session as it
  *     was;
- *   - a heartbeat with out[1] returns the status "<data>;sstack=<used>/<size>" (or ";sstack=na"), with the used figure
- *     the model expects from the stack scenario, and its tag covers exactly that text; without out[1] the tag covers
- *     the data alone; status data naming "sstack=" is refused, as is an out[1] too small for the status, and neither
- *     counts;
+ *   - a heartbeat with out[1] returns the status "<data>;sstack=<used>/<size>;ttl=<seconds left>" (or
+ *     ";sstack=na;ttl=..."), with the used figure the model expects from the stack scenario and the seconds left
+ *     rounded up, and its tag covers exactly that text; without out[1] the tag covers the data alone; status data
+ *     naming "sstack=" or "ttl=" is refused, as is an out[1] too small for the status, and neither counts;
  *   - every KEM key and quote is signed by the device key.
  */
 #include <stdarg.h>
@@ -43,6 +59,10 @@
 /* the partition reads the stack pointer through this (on the board: the SP register) */
 static uintptr_t fz_sp;
 #define AEGIS_TEST_SP fz_sp
+/* the RTC stand-in reacts here; a flag is given up after 64 polls (on the board: 4 million) */
+static void fz_hw_step(void);
+#define AEGIS_TEST_HW_STEP() fz_hw_step()
+#define SCLK_WAIT 64u
 #include "aegis_pq_attest.c"
 
 /* stand-in for the partition's stack (TF-M's generated tfm_sp_aegis_pq_stack) */
@@ -127,17 +147,138 @@ HAL_StatusTypeDef HAL_CRYP_Encrypt(CRYP_HandleTypeDef *h, uint32_t *in, uint16_t
 	return HAL_OK;
 }
 
+/* ---- the session clock's hardware: the RTC on the LSI, as far as the partition uses it ---- */
+RTC_TypeDef fz_rtc;
+RCC_TypeDef fz_rcc;
+PWR_TypeDef fz_pwr;
+#define HW_LSI_DEAD    0x01u /* LSIRDY never comes */
+#define HW_INIT_STUCK  0x02u /* initialisation mode is never entered */
+#define HW_INITF_STAYS 0x04u /* ... or never left */
+#define HW_NO_COUNT    0x08u /* the counter stands still */
+#define HW_LSI_OFF     0x10u /* BL2 left the LSI off (the partition switches it on) */
+static struct {
+	unsigned flags, steps;
+	int booting;     /* while the partition starts the clock the counter runs by itself, a count every 8 polls */
+	int ssruf_stuck; /* the wrap flag does not clear */
+} hw;
+
+static void fz_advance(uint64_t counts)
+{
+	if (counts > fz_rtc.SSR) fz_rtc.SR |= RTC_SR_SSRUF; /* it passes zero */
+	fz_rtc.SSR -= (uint32_t)counts;
+}
+
+static void fz_hw_step(void)
+{
+	if ((fz_rcc.BDCR & RCC_BDCR_LSION) && !(hw.flags & HW_LSI_DEAD)) fz_rcc.BDCR |= RCC_BDCR_LSIRDY;
+	else fz_rcc.BDCR &= ~RCC_BDCR_LSIRDY;
+	if (fz_rtc.ICSR & RTC_ICSR_INIT) {
+		if (!(hw.flags & HW_INIT_STUCK)) fz_rtc.ICSR |= RTC_ICSR_INITF;
+	} else {
+		if (!(hw.flags & HW_INITF_STAYS)) fz_rtc.ICSR &= ~RTC_ICSR_INITF;
+		fz_rtc.ICSR |= RTC_ICSR_RSF;
+	}
+	if (fz_rtc.SCR & RTC_SCR_CSSRUF) {
+		if (!hw.ssruf_stuck) fz_rtc.SR &= ~RTC_SR_SSRUF;
+		fz_rtc.SCR = 0;
+	}
+	if (hw.booting && !(hw.flags & HW_NO_COUNT) && ++hw.steps % 8 == 0) fz_advance(1);
+}
+
 /* ---- the gateway's side ---- */
 static uint8_t gw_sec[MLDSA_SECRETKEYBYTES(65)], gw_pub[PK_LEN];
 static struct {
 	int pending;
 	uint8_t ek[KEM_EK_LEN], nonce[32];
 	int session;
+	int expired;           /* the last session was ended by the clock */
+	uint64_t start, limit; /* the clock at the session's start; the counts it may live */
+	int clk;               /* the partition has a clock */
+	uint32_t epoch;        /* the wraps of the counter the partition has seen */
+	uint64_t now;          /* the clock at this message: epoch << 32 | counts */
 	uint8_t session_key[32], cred_hash[32];
 	uint64_t hb;
 	int stack_ok;
 	unsigned stack_used;
 } M;
+
+/* the settings the clock needs, read from the registers (an independent check, with the reference manual's values) */
+static int model_clock_settings(void)
+{
+	return (fz_rcc.BDCR & 0x0C008300u) == 0x0C008200u /* LSI on and ready, RTC on, RTC clock = LSI */ &&
+	       (fz_rcc.SECCFGR & 0x8u) && (fz_rtc.SECCFGR & 0x8000u) && (fz_rtc.PRIVCFGR & 0x8000u) &&
+	       (fz_rtc.ICSR & 0x1FC0u) == 0x0100u /* binary mode, not in initialisation */ &&
+	       (fz_rtc.PRER >> 16 & 0x7Fu) == 127u;
+}
+
+/* What every message does first, once per message: read the clock; a session past its end, or whose age the clock
+ * cannot give, is gone. */
+static void model_sweep(void)
+{
+	fz_hw_step();
+	if (M.clk && !model_clock_settings()) M.clk = 0;
+	if (M.clk && (fz_rtc.SR & RTC_SR_SSRUF)) {
+		if (hw.ssruf_stuck) M.clk = 0;
+		else M.epoch++;
+	}
+	if (M.clk) M.now = (uint64_t)M.epoch << 32 | (0xFFFFFFFFu - fz_rtc.SSR);
+	if (M.session && (!M.clk || M.now < M.start || M.now >> 32 != M.start >> 32 || M.now - M.start >= M.limit)) {
+		M.session = 0;
+		M.expired = 1;
+	}
+}
+
+static psa_status_t model_no_session(void)
+{
+	return M.expired ? PSA_ERROR_DOES_NOT_EXIST : PSA_ERROR_BAD_STATE;
+}
+
+/* "<key>":<1 to 10 digits> then ',' or '}', the key exactly once (an independent reading, not the partition's) */
+static int model_number(const uint8_t *b, size_t n, const char *key, uint64_t *v)
+{
+	char pat[32], digits[12];
+	size_t pl = (size_t)snprintf(pat, sizeof(pat), "\"%s\":", key), d = 0;
+	const uint8_t *at = memmem(b, n, pat, pl), *end = b + n;
+
+	if (!at || memmem(at + 1, (size_t)(end - at - 1), pat, pl)) return 0;
+	for (at += pl; at < end && *at >= '0' && *at <= '9' && d < 11; at++) digits[d++] = (char)*at;
+	if (d < 1 || d > 10 || at == end || (*at != ',' && *at != '}')) return 0;
+	digits[d] = 0;
+	*v = strtoull(digits, NULL, 10);
+	return 1;
+}
+
+static uint64_t model_lifetime(const uint8_t *b, size_t n)
+{
+	uint64_t issued, expires;
+
+	if (!model_number(b, n, "issued", &issued) || !model_number(b, n, "expires", &expires)) return 0;
+	return expires > issued && expires - issued <= 86400 ? expires - issued : 0;
+}
+
+/* Start the partition's clock on hardware as BL2 leaves it (the RTC on the LSI, calendar mode), changed by the
+ * flags; rtcsel is the RTC clock BL2 chose (0 none, 1 LSE, 2 LSI, 3 HSE). */
+static void clock_boot(unsigned flags, unsigned rtcsel, uint32_t count)
+{
+	memset(&fz_rtc, 0, sizeof(fz_rtc));
+	memset(&fz_rcc, 0, sizeof(fz_rcc));
+	memset(&fz_pwr, 0, sizeof(fz_pwr));
+	memset(&hw, 0, sizeof(hw));
+	hw.flags = flags;
+	fz_rcc.BDCR = RCC_BDCR_RTCEN | (rtcsel & 3u) << 8 | ((flags & HW_LSI_OFF) ? 0u : RCC_BDCR_LSION | RCC_BDCR_LSIRDY);
+	fz_rtc.ICSR = RTC_ICSR_RSF;
+	fz_rtc.PRER = 127u << 16 | 249u;
+	fz_rtc.SSR = count;
+	hw.booting = 1;
+	sclk_start();
+	hw.booting = 0;
+	M.clk = !(flags & (HW_LSI_DEAD | HW_INIT_STUCK | HW_INITF_STAYS | HW_NO_COUNT)) &&
+		((rtcsel & 3u) == 0 || (rtcsel & 3u) == 2);
+	M.epoch = 0;
+	if (M.clk != sclk_ok)
+		DIE("clock start with flags %#x, RTC clock %u: the partition says %d", flags, rtcsel & 3u, sclk_ok);
+	if (fz_pwr.DBPCR != 1u) DIE("backup domain write access not requested");
+}
 
 /* one message; buffers are exactly the sizes the caller declares, so ASan sees any overrun */
 static psa_status_t send(int32_t type, const uint8_t *in0, size_t l0, const uint8_t *in1, size_t l1, size_t o0,
@@ -223,6 +364,7 @@ static void op_raw(const uint8_t *p, size_t n)
 	if (l0 > dn) l0 = dn;
 	if (l1 > dn - l0) l1 = dn - l0;
 	valid_init = type == AEGIS_PQ_KEM_INIT && l0 == 32 && o0 >= KEM_EK_LEN && o1 >= SIG_LEN;
+	model_sweep();
 	st = send(type, d, l0, d + l0, l1, o0, o1, &r0, &r1, &w0, &w1);
 	if (valid_init) {
 		M.pending = 0;
@@ -238,9 +380,13 @@ static void op_raw(const uint8_t *p, size_t n)
 		if (st == PSA_SUCCESS) DIE("a raw message was accepted as a credential");
 		if (!M.pending) {
 			if (st != PSA_ERROR_BAD_STATE) DIE("KEM_FINISH without an exchange: %d", (int)st);
+		} else if (!M.clk) {
+			if (st != PSA_ERROR_HARDWARE_FAILURE) DIE("KEM_FINISH without a clock: %d", (int)st);
 		} else if (st != PSA_ERROR_INVALID_ARGUMENT) {
 			M.pending = 0;
 		}
+	} else if ((type == AEGIS_PQ_HEARTBEAT || type == AEGIS_PQ_SESSION) && !M.session) {
+		if (st != model_no_session()) DIE("message %d without a session: %d", (int)type, (int)st);
 	} else if (type == AEGIS_PQ_HEARTBEAT && st == PSA_SUCCESS) {
 		M.hb++;
 	}
@@ -255,6 +401,7 @@ static void op_kem_init(const uint8_t *p, size_t n)
 	psa_status_t st;
 
 	memcpy(nonce, p, n < 32 ? n : 32);
+	model_sweep();
 	st = send(AEGIS_PQ_KEM_INIT, nonce, 32, NULL, 0, KEM_EK_LEN, SIG_LEN, &r0, &r1, &w0, &w1);
 	M.pending = 0;
 	if (st == PSA_SUCCESS) {
@@ -280,18 +427,23 @@ static void op_kem_init(const uint8_t *p, size_t n)
 #define F_STALE_EK  0x40
 #define F_SIGN_RAW  0x80
 
-static void op_kem_fin(const uint8_t *p, size_t n)
+static void op_kem_fin(uint8_t sel, const uint8_t *p, size_t n)
 {
 	static uint8_t body[CRED_MAX + 512], cred[CRED_MAX + 512 + SIG_LEN + 1], msg[32 + CRED_MAX + 512];
 	static const char hx[] = "0123456789abcdef";
+	static const unsigned lifetimes[4] = {3600, 1, 86400, 40};
+	const unsigned variant = sel & 7u, life = lifetimes[(sel >> 3) & 3u];
+	const unsigned long long issued = 1795000000ull;
 	const uint8_t pre[2] = {0, 0};
 	uint8_t flags = n ? p[0] : 0, coins[32] = {0}, ct[KEM_CT_LEN], k[32], h_ct[32], h_ek[32], stale[32], rnd[32] = {0};
 	const uint8_t *extra = n > 33 ? p + 33 : p;
 	size_t extra_n = n > 33 ? n - 33 : 0, bl = 0, cl, ctl = KEM_CT_LEN, w0, w1;
-	int pending = M.pending, expect, sizes_ok;
+	int pending = M.pending, expect, sizes_ok, bound;
+	uint64_t lifetime;
 	uint8_t *r0, *r1;
 	psa_status_t st;
 
+	model_sweep();
 	if (n > 1) memcpy(coins, p + 1, n - 1 < 32 ? n - 1 : 32);
 	if (aegis_mlkem_enc_derand(ct, k, M.ek, coins) != 0) DIE("encaps");
 	sha3_256(ct, KEM_CT_LEN, h_ct);
@@ -317,7 +469,19 @@ static void op_kem_fin(const uint8_t *p, size_t n)
 		if (extra[i] == '\n' && !(flags & F_NEWLINE)) continue;
 		body[bl++] = extra[i];
 	}
-	if (!(flags & F_SIGN_RAW)) { body[bl++] = '"'; body[bl++] = '}'; }
+	if (!(flags & F_SIGN_RAW)) {
+		/* the validity, last in the body: "issued" ends at a comma, "expires" at the closing brace */
+		const unsigned long long from = variant == 5 ? issued * 10 : issued; /* 5: eleven digits, same lifetime */
+
+		body[bl++] = '"';
+		if (variant != 1) bl += (size_t)sprintf((char *)body + bl, ",\"issued\":%llu", from);
+		if (variant == 4) bl += (size_t)sprintf((char *)body + bl, ",\"expires\":%llu", from + life);
+		if (variant == 6) bl += (size_t)sprintf((char *)body + bl, ",\"expires\":\"%llu\"", from + life);
+		else if (variant != 2)
+			bl += (size_t)sprintf((char *)body + bl, ",\"expires\":%llu",
+					      from + (variant == 3 ? 0 : variant == 7 ? 86401 : life));
+		body[bl++] = '}';
+	}
 	memcpy(msg, "aegis-credential-v1", 20);
 	memcpy(msg + 20, body, bl);
 	memcpy(cred, body, bl);
@@ -329,11 +493,16 @@ static void op_kem_fin(const uint8_t *p, size_t n)
 	st = send(AEGIS_PQ_KEM_FINISH, ct, ctl, cred, cl, 32, 0, &r0, &r1, &w0, &w1);
 
 	sizes_ok = ctl == KEM_CT_LEN && cl > 0 && cl <= CRED_MAX;
-	expect = pending && sizes_ok && !memchr(body, '\n', bl) && 20 + bl <= sizeof(signed_msg) &&
-		 !(flags & F_BAD_SIG) && contains(body, bl, "kem_ct_sha3_256", h_ct) &&
-		 contains(body, bl, "kem_ek_sha3_256", h_ek);
+	lifetime = model_lifetime(body, bl);
+	bound = pending && M.clk && sizes_ok && !memchr(body, '\n', bl) && 20 + bl <= sizeof(signed_msg) &&
+		!(flags & F_BAD_SIG) && contains(body, bl, "kem_ct_sha3_256", h_ct) &&
+		contains(body, bl, "kem_ek_sha3_256", h_ek);
+	expect = bound && lifetime != 0;
 	if (!pending) {
 		if (st != PSA_ERROR_BAD_STATE) DIE("KEM_FINISH without an exchange: %d", (int)st);
+	} else if (!M.clk) {
+		if (st != PSA_ERROR_HARDWARE_FAILURE) DIE("KEM_FINISH without a clock: %d", (int)st);
+		/* refused before the exchange was used: it stays pending */
 	} else if (!sizes_ok) {
 		if (st != PSA_ERROR_INVALID_ARGUMENT) DIE("bad sizes: %d", (int)st);
 	} else {
@@ -341,7 +510,8 @@ static void op_kem_fin(const uint8_t *p, size_t n)
 		if (expect != (st == PSA_SUCCESS))
 			DIE("credential %s, but the model says %s (%d)", st == PSA_SUCCESS ? "accepted" : "refused",
 			    expect ? "valid" : "invalid", (int)st);
-		if (!expect && st != PSA_ERROR_INVALID_SIGNATURE) DIE("refusal code %d", (int)st);
+		if (!bound && st != PSA_ERROR_INVALID_SIGNATURE) DIE("refusal code %d", (int)st);
+		if (bound && !lifetime && st != PSA_ERROR_NOT_PERMITTED) DIE("no lifetime: %d", (int)st);
 	}
 	if (expect) {
 		uint8_t tag[32], h_cred[32];
@@ -355,6 +525,9 @@ static void op_kem_fin(const uint8_t *p, size_t n)
 		      (size_t)32);
 		memcpy(M.cred_hash, h_cred, 32);
 		M.session = 1;
+		M.expired = 0;
+		M.start = M.now;
+		M.limit = (lifetime + lifetime / 16) * 250;
 		/* M.hb is not reset: this partition's heartbeat counter runs from boot across sessions (the RW612's restarts
 		 * at 1 with each session); the gateway only needs it to rise within a session, and the nonce makes each
 		 * heartbeat fresh */
@@ -363,7 +536,7 @@ static void op_kem_fin(const uint8_t *p, size_t n)
 	free(r1);
 }
 
-static int has_key(const uint8_t *d, size_t n) { return memmem(d, n, "sstack=", 7) != NULL; }
+static int names_key(const uint8_t *d, size_t n) { return memmem(d, n, "sstack=", 7) || memmem(d, n, "ttl=", 4); }
 
 static void op_hb(uint8_t sel, const uint8_t *p, size_t n)
 {
@@ -375,19 +548,23 @@ static void op_hb(uint8_t sel, const uint8_t *p, size_t n)
 	psa_status_t st;
 
 	memcpy(nonce, p, n < 32 ? n : 32);
+	model_sweep();
 	if (dl <= HB_DATA_MAX) {
 		memcpy(want, data, dl);
 		wl = dl + (size_t)(M.stack_ok ? sprintf(want + dl, ";sstack=%u/%u", M.stack_used, AEGIS_PQ_STACK_SIZE)
 					      : sprintf(want + dl, ";sstack=na"));
+		/* the seconds the session has left, rounded up */
+		wl += (size_t)sprintf(want + wl, ";ttl=%llu",
+				      M.session ? (unsigned long long)((M.limit - (M.now - M.start) + 249) / 250) : 0ull);
 	}
 	o1 = sel == 0 ? HB_STATUS_MAX : sel == 1 ? 0 : sel == 2 ? wl : 5u * sel;
 	st = send(AEGIS_PQ_HEARTBEAT, nonce, 32, data, dl, 40, o1, &r0, &r1, &w0, &w1);
 	if (!M.session) {
-		if (st != PSA_ERROR_BAD_STATE) DIE("HEARTBEAT without a session: %d", (int)st);
+		if (st != model_no_session()) DIE("HEARTBEAT without a session: %d", (int)st);
 	} else if (dl > HB_DATA_MAX) {
 		if (st != PSA_ERROR_INVALID_ARGUMENT) DIE("long heartbeat data: %d", (int)st);
-	} else if (has_key(data, dl)) {
-		if (st != PSA_ERROR_INVALID_ARGUMENT) DIE("heartbeat data naming sstack= : %d", (int)st);
+	} else if (names_key(data, dl)) {
+		if (st != PSA_ERROR_INVALID_ARGUMENT) DIE("heartbeat data naming sstack= or ttl= : %d", (int)st);
 	} else if (o1 && o1 < wl) {
 		if (st != PSA_ERROR_BUFFER_TOO_SMALL) DIE("heartbeat status buffer %zu < %zu: %d", o1, wl, (int)st);
 	} else {
@@ -439,6 +616,7 @@ static void op_quote(const uint8_t *p, size_t n)
 	psa_status_t st;
 
 	memcpy(ch, p, n < 32 ? n : 32);
+	model_sweep();
 	st = send(AEGIS_PQ_QUOTE, ch, 32, NULL, 0, TOKEN_MAX, SIG_LEN, &r0, &r1, &w0, &w1);
 	if (st == PSA_SUCCESS) {
 		if (w0 != FZ_TOKEN_LEN || w1 != SIG_LEN || memcmp(r0 + 8, ch, 32)) DIE("QUOTE output");
@@ -454,10 +632,12 @@ static void op_session(void)
 {
 	uint8_t id[32], *r0, *r1;
 	size_t w0, w1;
-	psa_status_t st = send(AEGIS_PQ_SESSION, NULL, 0, NULL, 0, 64, 0, &r0, &r1, &w0, &w1);
+	psa_status_t st;
 
+	model_sweep();
+	st = send(AEGIS_PQ_SESSION, NULL, 0, NULL, 0, 64, 0, &r0, &r1, &w0, &w1);
 	if (!M.session) {
-		if (st != PSA_ERROR_BAD_STATE) DIE("SESSION without a session");
+		if (st != model_no_session()) DIE("SESSION without a session: %d", (int)st);
 	} else {
 		sha3v(id, 2, "aegis-session-id-v1", (size_t)19, M.session_key, (size_t)32);
 		if (st != PSA_SUCCESS || w0 != 64 || memcmp(r0, id, 32) || memcmp(r0 + 32, M.cred_hash, 32))
@@ -471,11 +651,43 @@ static void op_pubkey(void)
 {
 	uint8_t *r0, *r1;
 	size_t w0, w1;
-	psa_status_t st = send(AEGIS_PQ_GET_PUBKEY, NULL, 0, NULL, 0, PK_LEN, 0, &r0, &r1, &w0, &w1);
+	psa_status_t st;
 
+	model_sweep();
+	st = send(AEGIS_PQ_GET_PUBKEY, NULL, 0, NULL, 0, PK_LEN, 0, &r0, &r1, &w0, &w1);
 	if (st != PSA_SUCCESS || w0 != PK_LEN || memcmp(r0, pk, PK_LEN)) DIE("GET_PUBKEY");
 	free(r0);
 	free(r1);
+}
+
+/* the partition after a reset, on clock hardware from the arguments */
+static void reset(unsigned hw_flags, unsigned rtcsel, uint32_t count)
+{
+	kem_pending = 0; session_ready = 0; session_expired = 0; hb_counter = 0; kem_counter = 0;
+	session_start = session_limit = 0;
+	memset(session_key, 0, sizeof(session_key));
+	memset(&M, 0, sizeof(M));
+	stack_scenario(AEGIS_PQ_STACK_SIZE - 1024, 0);
+	clock_boot(hw_flags, rtcsel, count);
+}
+
+/* one thing goes wrong with the clock's hardware */
+static void clock_fault(unsigned what)
+{
+	switch (what % 12u) {
+	case 0: fz_rcc.BDCR &= ~RCC_BDCR_LSION; break;
+	case 1: fz_rcc.BDCR &= ~RCC_BDCR_RTCEN; break;
+	case 2: fz_rcc.BDCR ^= RCC_BDCR_RTCSEL_0; break;
+	case 3: fz_rcc.SECCFGR = 0; break;
+	case 4: fz_rtc.SECCFGR = 0; break;
+	case 5: fz_rtc.PRIVCFGR = 0; break;
+	case 6: fz_rtc.ICSR ^= 0x200u; break;      /* another binary mode */
+	case 7: fz_rtc.ICSR |= RTC_ICSR_INIT; break;
+	case 8: fz_rtc.PRER = 126u << 16 | 249u; break;
+	case 9: fz_rcc.APB3ENR = 0; break;         /* the register clock: the partition switches it on again */
+	case 10: hw.ssruf_stuck = 1; break;
+	case 11: fz_rtc.SR |= RTC_SR_SSRUF; break; /* reads as a wrap: the session ends, the clock stays */
+	}
 }
 
 int LLVMFuzzerInitialize(int *argc, char ***argv)
@@ -495,10 +707,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	size_t i = 0;
 	int ops = 0;
 
-	kem_pending = 0; session_ready = 0; hb_counter = 0; kem_counter = 0;
-	memset(session_key, 0, sizeof(session_key));
-	memset(&M, 0, sizeof(M));
-	stack_scenario(AEGIS_PQ_STACK_SIZE - 1024, 0);
+	reset(0, 2, 0xFFFF0000u);
 	rng_state = 0x9e3779b97f4a7c15ull;
 	rng_skip = rng_fail = 0;
 	while (i + 3 <= size && ops++ < 24) {
@@ -511,15 +720,25 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		switch (op) {
 		case 0: op_raw(p, n); break;
 		case 1: op_kem_init(p, n); break;
-		case 2: op_kem_fin(p, n); break;
+		case 2: op_kem_fin(sel, p, n); break;
 		case 3: op_hb(sel, p, n); break;
 		case 4: op_quote(p, n); break;
 		case 5: op_session(); break;
-		case 6:
-			rng_skip = n ? p[0] & 3 : 0;
-			rng_fail = n > 1 ? p[1] & 3 : 1;
-			if (n >= 4) stack_scenario(u16(p, n, 2), n >= 6 ? u16(p, n, 4) : 0);
+		case 6: {
+			uint32_t v = (uint32_t)(u16(p, n, 0) | u16(p, n, 2) << 16);
+
+			if (sel == 1) fz_advance((uint64_t)(v % 17000000u) * 250u);
+			else if (sel == 2) fz_advance(v);
+			else if (sel == 3) fz_rtc.SSR += v;
+			else if (sel == 4) clock_fault(n ? p[0] : 0);
+			else if (sel == 5) reset(n ? p[0] & 0x1Fu : 0, n > 1 ? p[1] : 2, (uint32_t)(u16(p, n, 2) | u16(p, n, 4) << 16));
+			else {
+				rng_skip = n ? p[0] & 3 : 0;
+				rng_fail = n > 1 ? p[1] & 3 : 1;
+				if (n >= 4) stack_scenario(u16(p, n, 2), n >= 6 ? u16(p, n, 4) : 0);
+			}
 			break;
+		}
 		case 7: op_pubkey(); break;
 		}
 	}

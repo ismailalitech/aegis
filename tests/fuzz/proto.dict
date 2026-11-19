@@ -14,3 +14,7 @@
 "\"endpoint_pq_pk_sha256\":\""
 "sstack="
 ";sstack=na"
+"ttl="
+"\"issued\":"
+"\"expires\":"
+"ERR pq expired"

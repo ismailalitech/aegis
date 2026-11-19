@@ -1,6 +1,7 @@
 """The aegis-linux prover (endpoints/zybo/aegis_linux_prover.py) against the gateway's own code (fleet.py), on the PC:
 attestation with software trust, ML-KEM provisioning with the credential checks, KMAC256 heartbeats, the session query,
-and the refusals (a changed boot file, a wrong pinned key, a credential from another key or for another exchange)."""
+and the refusals (a changed boot file, a wrong pinned key, a credential from another key or for another exchange), and
+the session's end on the prover's own clock (docs/endpoint-expiry.md)."""
 import hashlib
 import json
 import os
@@ -96,12 +97,13 @@ class LinuxProver(unittest.TestCase):
         for n in (1, 2):
             status, ctr = fleet.heartbeat(self.ep(), r["session_key"], timeout=10)
             self.assertEqual(ctr, n)
-            self.assertTrue(status.startswith(b"uptime_s="))
+            self.assertRegex(status, rb"^uptime_s=\d+;link=1;fw=linux-0\.2\.0;ttl=382[345]$")
         with self.assertRaises(ValueError):       # the first heartbeat construction does not verify a KMAC device
             fleet.heartbeat(self.ep(heartbeat_mac="sha3-256"), r["session_key"], timeout=10)
 
-    def kem_raw(self, sign_key, bind_ct=True):
-        """Run the exchange by hand to send a credential the gateway code would never make."""
+    def kem_raw(self, sign_key, bind_ct=True, validity=None):
+        """Run the exchange by hand to send a credential the gateway code would never make. validity replaces the
+        "issued" and "expires" fields."""
         nonce = os.urandom(32)
         p = fleet._exchange("127.0.0.1", self.port, "PQKEMINIT " + nonce.hex(), 10).split()
         ek = bytes.fromhex(p[2])
@@ -109,7 +111,8 @@ class LinuxProver(unittest.TestCase):
         body = {"v": 1, "type": "credential", "endpoint": "zybo",
                 "endpoint_pq_pk_sha256": hashlib.sha256(self.prover.pk).hexdigest(),
                 "kem_ct_sha3_256": fleet._sha3(ct if bind_ct else b"other").hex(),
-                "kem_ek_sha3_256": fleet._sha3(ek).hex(), "expires": 4102444800}
+                "kem_ek_sha3_256": fleet._sha3(ek).hex()}
+        body.update({"issued": 4102441200, "expires": 4102444800} if validity is None else validity)
         cred = wire.canonical(body) + b"\n" + mldsa.sign(sign_key, fleet.CRED_LABEL, wire.canonical(body))
         return fleet._exchange("127.0.0.1", self.port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), 10)
 
@@ -135,13 +138,68 @@ class LinuxProver(unittest.TestCase):
         body = {"v": 1, "type": "credential", "endpoint": "zybo",
                 "endpoint_pq_pk_sha256": hashlib.sha256(self.prover.pk).hexdigest(),
                 "kem_ct_sha3_256": fleet._sha3(ct).hex(), "kem_ek_sha3_256": fleet._sha3(ek1).hex(),
-                "expires": 4102444800}
+                "issued": 4102441200, "expires": 4102444800}
         cred = wire.canonical(body) + b"\n" + mldsa.sign(self.gw_sk, fleet.CRED_LABEL, wire.canonical(body))
         self.assertIn("ERR cred no-exchange",
                       fleet._exchange("127.0.0.1", self.port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), 10))
         with mock.patch.object(self.prover, "handle", side_effect=KeyError("boom")):
             self.assertEqual(fleet._exchange("127.0.0.1", self.port, "PQKEY", 10).strip(), "ERR internal")
         self.assertTrue(fleet._exchange("127.0.0.1", self.port, "PQKEY", 10).startswith("PQKEY "))
+
+    def ask(self, line):
+        return fleet._exchange("127.0.0.1", self.port, line, 10).strip()
+
+    def test_8_session_ends_on_the_provers_clock(self):
+        """The credential lasts an hour; the prover ends the session 3825 s (an hour and a sixteenth) after the
+        PQKEMFIN on its own clock. A clock that fails or runs backwards ends it too, and then none starts."""
+        t = [50000]
+        self.prover.clock = lambda: t[0]
+        try:
+            ep = self.ep()
+            r = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20)
+            self.assertEqual(r["body"]["expires"] - r["body"]["issued"], 3600)
+            t[0] += 3824                                    # the last second
+            status, ctr = fleet.heartbeat(ep, r["session_key"], timeout=10)
+            self.assertTrue(status.endswith(b";ttl=1"), status)
+            self.assertEqual(fleet.query_session(ep)[0], r["session_id"])
+            t[0] += 1                                       # the end: refused, and the session is gone
+            with self.assertRaises(ValueError):
+                fleet.heartbeat(ep, r["session_key"], timeout=10)
+            self.assertEqual(self.ask("PQHB " + "00" * 32), "ERR pq expired")
+            self.assertEqual(self.ask("PQSESSION"), "ERR pq expired")
+            self.assertIsNone(self.prover.session)
+            t[0] -= 3825                                    # it does not come back with the clock
+            self.assertEqual(self.ask("PQSESSION"), "ERR pq expired")
+            self.assertTrue(fleet.attest(ep, None, self.d, timeout=10)["admitted"])   # attestation needs no session
+            r2 = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20)        # what the gateway does next
+            self.assertEqual(fleet.heartbeat(ep, r2["session_key"], timeout=10)[1], 1)
+            t[0] -= 1                                       # backwards
+            self.assertEqual(self.ask("PQHB " + "00" * 32), "ERR pq expired")
+            r3 = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20)
+
+            def broken():
+                raise OSError("no clock")
+            self.prover.clock = broken
+            self.assertEqual(self.ask("PQSESSION"), "ERR pq expired")
+            with self.assertRaises(ValueError) as e:
+                fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20)
+            self.assertIn("ERR clock", str(e.exception))
+            self.assertNotEqual(r3["session_id"], r2["session_id"])
+        finally:
+            self.prover.clock = prover_mod.monotonic_s
+
+    def test_9_credential_must_carry_a_lifetime(self):
+        r = fleet.provision(self.ep(), self.d, self.gw_sk, "gid", {}, timeout=20)
+        t = 4102444800
+        for validity in ({"expires": t}, {"issued": t}, {}, {"issued": t, "expires": t}, {"issued": t, "expires": t - 1},
+                         {"issued": t, "expires": t + 86401}, {"issued": str(t), "expires": t + 60},
+                         {"issued": t, "expires": float(t + 60)}, {"issued": True, "expires": 60},
+                         {"issued": -5, "expires": 60}):
+            self.assertEqual(self.kem_raw(self.gw_sk, validity=validity).strip(), "ERR cred validity", validity)
+        self.assertEqual(fleet.query_session(self.ep())[0], r["session_id"],
+                         "a refused credential must not replace the session")
+        self.assertTrue(self.kem_raw(self.gw_sk, validity={"issued": t, "expires": t + 86400}).startswith("PQKEMOK "))
+        self.assertTrue(prover_mod.monotonic_s() > 0)
 
     def test_6_malformed_requests(self):
         for line in ("", "PQCHAL zz", "PQCHAL " + "00" * 31, "PQKEMFIN 00", "HELLO", "PQHB " + "00" * 32 + " extra"):

@@ -104,18 +104,28 @@ ML-DSA signing is hedged on both: fresh randomness in every signature.
 1. `PQKEMINIT <nonce>` -> a fresh ML-KEM-768 encapsulation key `ek`, signed by the device key with the nonce. A new
    `PQKEMINIT` cancels any pending exchange.
 2. The gateway encapsulates and sends `PQKEMFIN <ct> <credential>`. The credential is signed by the gateway key and
-   names SHA3-256(ct), SHA3-256(ek) and the endpoint's key.
+   names SHA3-256(ct), SHA3-256(ek), the endpoint's key and its validity (`issued`, `expires`).
 3. The endpoint verifies against the pinned gateway key, decapsulates and answers a key-confirmation tag.
 
 Both sides keep session = SHA3-256("aegis-session-v1" || K || nonce || SHA3(ct)); the key never leaves either side.
 A credential lasts an hour and is renewed five minutes before it expires.
 
+**The session's end** (source and tests of 19 November 2026; not yet on the boards, `endpoint-expiry.md`): both
+sides end it.
+- **The gateway** by its own clock: it stops using a session five minutes before the credential's `expires` and
+  provisions again.
+- **The endpoint** on a clock of its secure side: the credential's lifetime (`expires - issued`, from the signed
+  text) plus a sixteenth after the accepted `PQKEMFIN`, it wipes the session key. `PQHB` and `PQSESSION` then answer
+  `ERR pq expired`. The clock is one the non-secure side cannot set or stop: the RTC on its own oscillator on the
+  STM32, the secure SysTick on the RW612, OP-TEE's system time (the physical counter) on the ZynqMP. The heartbeat
+  status ends with the seconds left, `;ttl=<n>`.
+
 **Heartbeat** (every cycle while a credential is valid): `PQHB <nonce>` -> status text, counter,
 KMAC256(session, nonce || counter || status, 256, "aegis-hb-v2") (NIST SP 800-185). The gateway needs the counter to
 rise within a session. The status carries the secure partition's stack high-water mark: the STM32 partition appends
 ";sstack=<used>/<size>" to the non-secure text before MACing it (secure image with prover 0.6.0 and later), the RW612
-partition writes "stack=<used>/<size>" into its own status. A failure leads to re-provisioning; QUARANTINED deletes the credential and session key on the
-gateway.
+partition writes "stack=<used>/<size>" into its own status. A failure leads to re-provisioning, as does an endpoint
+that has ended the session itself; QUARANTINED deletes the credential and session key on the gateway.
 
 ## Decision loop (aegis-fleet, every 30 s)
 

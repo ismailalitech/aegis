@@ -3,7 +3,9 @@
  *   aegis_rw612_host <port> <seed hex> <provisioning root hex> <gateway pk hex file> <image file> [<second image>]
  * With a second image it behaves like the TF-M partition (endpoints/rw612/tfm/aegis_pq): profile aegis-rw612-tfm-v1,
  * measurements SPE (the first file) and NSPE (the second).
- * Prints "READY <pk sha256>" when it listens. One request per connection, as on the board. */
+ * Prints "READY <pk sha256>" when it listens. One request per connection, as on the board.
+ * The session clock is CLOCK_MONOTONIC; a test moves it through the file named by the environment variable
+ * AEGIS_TEST_CLOCK: seconds to add (negative: the clock runs backwards), or "fail" for a clock that cannot be read. */
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -63,12 +65,28 @@ static size_t host_measure_all(struct aegis_measurement *m, size_t max)
 
 static int host_status(char *buf, size_t cap)
 {
-	return snprintf(buf, cap, "requests=0;stack=na;fw=rw612-tfm-0.2.1");
+	return snprintf(buf, cap, "requests=0;stack=na;fw=rw612-tfm-0.2.2");
 }
 
 static uint32_t host_uptime(void)
 {
 	return (uint32_t)(time(NULL) - t0);
+}
+
+static int host_monotonic(uint64_t *now)
+{
+	const char *path = getenv("AEGIS_TEST_CLOCK");
+	char buf[32] = "";
+	struct timespec ts;
+	FILE *f = path ? fopen(path, "r") : NULL;
+
+	if (f) {
+		if (!fgets(buf, sizeof(buf), f)) buf[0] = 0;
+		fclose(f);
+	}
+	if (!strncmp(buf, "fail", 4) || clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return -1;
+	*now = (uint64_t)((long long)ts.tv_sec + 1000000000LL + atoll(buf));
+	return 0;
 }
 
 static void unhex(const char *s, uint8_t *o, size_t n)
@@ -79,9 +97,9 @@ static void unhex(const char *s, uint8_t *o, size_t n)
 int main(int argc, char **argv)
 {
 	static const struct aegis_proto_platform pl = {
-		.random = host_random, .measure = host_measure, .uptime_s = host_uptime};
+		.random = host_random, .measure = host_measure, .uptime_s = host_uptime, .monotonic_s = host_monotonic};
 	static const struct aegis_proto_platform pl_tfm = {
-		.random = host_random, .measure = host_measure, .uptime_s = host_uptime,
+		.random = host_random, .measure = host_measure, .uptime_s = host_uptime, .monotonic_s = host_monotonic,
 		.profile = "aegis-rw612-tfm-v1", .measure_all = host_measure_all, .status = host_status};
 	static char line[AEGIS_LINE_MAX + 2], reply[AEGIS_REPLY_MAX];
 	static char gwhex[2 * 1952 + 8];

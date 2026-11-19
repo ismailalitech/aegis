@@ -1,0 +1,45 @@
+Endpoint-side credential expiry on the bench (docs/endpoint-expiry.md), 19 November 2026. LAN addresses masked.
+
+Images: STM32 boards 1 and 2 secure image ...-kemfix-sstack-expiry (SPE 02549860..., version 2.3.0, same signer; the
+non-secure prover 0.6.0 unchanged); RW612 TF-M 0.2.2 (SPE 1b38ab1a..., NSPE unchanged 24979a1f...). Each was
+admitted on the new value before the old one was removed. The Zynq TA change is built, not deployed (the board is
+away; it comes with phase C).
+
+tests/board/expiry_check.py, run on the gateway with aegis-fleet stopped: a credential with a 32 s lifetime, a
+heartbeat before and after its end (lifetime plus a sixteenth), the endpoint's clock rate against the gateway's.
+
+STM32 board 2:
+ "lifetime_s": 32, "ends_after_s": 34,
+ "A_heartbeat": "uptime_s=108;link=1;fw=0.6.0;sstack=19088/26624;ttl=34",
+ "B_heartbeat": "uptime_s=125;link=1;fw=0.6.0;sstack=19088/26624;ttl=18",
+ "B_endpoint_seconds_per_gateway_second": 0.941,
+ "C_heartbeat_after_end": "ERR pq -140", "C_session_after_end": "ERR pq -140", "C_waited_s": 39.4,
+ "D_attestation": "PQTOKEN"
+STM32 board 1:
+ "lifetime_s": 32,
+ "A_heartbeat": "uptime_s=126;link=1;fw=0.6.0;sstack=19088/26624;ttl=34",
+ "B_heartbeat": "uptime_s=143;link=1;fw=0.6.0;sstack=19088/26624;ttl=18",
+ "B_endpoint_seconds_per_gateway_second": 0.941,
+ "C_heartbeat_after_end": "ERR pq -140",
+ "C_session_after_end": "ERR pq -140",
+ "D_attestation": "PQTOKEN"
+RW612:
+ "lifetime_s": 32,
+ "A_heartbeat": "requests=9;stack=19384/32768;clk=ref;fw=rw612-tfm-0.2.2;ttl=34",
+ "B_heartbeat": "requests=10;stack=19384/32768;clk=ref;fw=rw612-tfm-0.2.2;ttl=17",
+ "B_endpoint_seconds_per_gateway_second": 1.0,
+ "C_heartbeat_after_end": "ERR pq expired",
+ "C_session_after_end": "ERR pq expired",
+ "D_attestation": "PQTOKEN"
+(-140 is the code the STM32 partition returns for "session ended by the clock" (docs/endpoint-expiry.md); the STM32
+prover prints PSA codes, the RW612's protocol code prints "ERR pq expired". Attestation still answers after the end; the gateway provisions a new session at its next
+cycle.)
+
+Clock rates: the STM32's RTC runs on its internal RC oscillator (LSI) at 0.941 s per gateway second on both boards,
+inside the 1/16 margin, so the endpoint never ends a session before the gateway does; a session can then last up to
+3825/0.941 = about 4065 s of real time. The RW612's secure SysTick (clk=ref) runs at 1.000.
+
+All three endpoints afterwards (gateway journal):
+10:28:22 stm32h573-dk ADMITTED  [credential: valid, heartbeat 27 (uptime_s=992;link=1;fw=0.6.0;sstack=19088/26624;ttl=3005)]
+10:28:22 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 33 (uptime_s=1217;link=1;fw=0.6.0;sstack=19088/26624;ttl=2771)]
+10:28:22 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=19;stack=19384/32768;clk=ref;fw=rw612-tfm-0.2.2;ttl=3791)]

@@ -15,6 +15,11 @@
  *   aegis-zynqmp-optee-devhuk-v1  anything else (no hand-off, no such seed, or an OP-TEE without the PTA): the HUK
  *                                 is OP-TEE's default (zero on this platform), the same on every chip.
  *
+ * Session clock (docs/endpoint-expiry.md): TEE_GetSystemTime. OP-TEE on this platform derives it from the physical
+ * counter (CNTPCT_EL0 / CNTFRQ_EL0, CFG_SECURE_TIME_SOURCE_CNTPCT): the normal world can neither write the counter nor
+ * its frequency register (CNTVOFF_EL2 moves only the virtual counter it sees itself). The TA asks OP-TEE for the
+ * time's protection level once and, below 1000 (a time taken from Linux), reports no clock: no session then starts.
+ *
  * Measurements: the hand-off's list, as the FSBL took it. Without a hand-off the claims carry one component,
  * BOOTCHAIN, with a zero value and the description "not measured", so a verifier cannot mistake it for a
  * measurement.
@@ -49,6 +54,7 @@ static struct {
 	struct aegis_ho_meas meas[AEGIS_HANDOFF_MAX_MEAS];
 } boot;
 static int ready;
+static int clock_trusted;
 static uint32_t served;
 static char line[AEGIS_TA_LINE_MAX + 1];
 static char reply[AEGIS_TA_REPLY_MAX];
@@ -71,6 +77,17 @@ static uint32_t s_uptime_s(void)
 
 	TEE_GetSystemTime(&t);
 	return t.seconds;
+}
+
+static int s_monotonic(uint64_t *now)
+{
+	TEE_Time t = { };
+
+	if (!clock_trusted)
+		return -1;
+	TEE_GetSystemTime(&t);
+	*now = t.seconds;
+	return 0;
 }
 
 static size_t s_measure_all(struct aegis_measurement *m, size_t max)
@@ -106,6 +123,7 @@ static struct aegis_proto_platform platform = {
 	.random = s_random,
 	.measure = s_measure_unused,
 	.uptime_s = s_uptime_s,
+	.monotonic_s = s_monotonic,
 	.profile = PROFILE_DEVHUK, /* query_boot() decides */
 	.measure_all = s_measure_all,
 	.status = s_status,
@@ -183,8 +201,12 @@ static void query_boot(void)
 TEE_Result TA_CreateEntryPoint(void)
 {
 	uint8_t seed[32], root[32];
+	uint32_t level = 0;
 	TEE_Result res;
 
+	/* 1000: a hardware counter the normal world cannot change; 100: a time it controls */
+	clock_trusted = TEE_GetPropertyAsU32(TEE_PROPSET_TEE_IMPLEMENTATION, "gpd.tee.systemTime.protectionLevel",
+					     &level) == TEE_SUCCESS && level >= 1000;
 	query_boot();
 	res = derive("aegis-zynqmp-mldsa65-seed-v1", seed);
 	if (res == TEE_SUCCESS)
@@ -196,8 +218,10 @@ TEE_Result TA_CreateEntryPoint(void)
 	ready = (res == TEE_SUCCESS);
 	if (ready)
 		IMSG("Aegis TA: key ready, profile %s, hand-off status %u flags %#x bh_key_src %#x csu_status %#x, "
-		     "%u measurements", platform.profile, (unsigned int)boot.status, (unsigned int)boot.flags,
-		     (unsigned int)boot.bh_key_src, (unsigned int)boot.csu_status, (unsigned int)boot.count);
+		     "%u measurements, session clock %s (level %u)", platform.profile, (unsigned int)boot.status,
+		     (unsigned int)boot.flags, (unsigned int)boot.bh_key_src, (unsigned int)boot.csu_status,
+		     (unsigned int)boot.count, clock_trusted ? "trusted" : "NOT trusted: no sessions",
+		     (unsigned int)level);
 	else
 		EMSG("Aegis TA: key FAILED");
 	return res;

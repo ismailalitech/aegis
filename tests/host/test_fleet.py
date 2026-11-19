@@ -119,9 +119,13 @@ class FakeEndpoint:
             tag = sha3(b"aegis-confirm-v1", k, self.nonce, sha3(ct), sha3(cred))
             self.session = sha3(b"aegis-session-v1", k, self.nonce, sha3(ct))
             self.cred = cred
+            self.expired = False
             c.sendall(b"PQKEMOK %s END\r\n" % tag.hex().encode())
             return
         if line.startswith("PQHB "):
+            if getattr(self, "expired", False):   # the endpoint ended the session on its own clock
+                c.sendall(b"ERR pq expired\r\n")
+                return
             nonce = bytes.fromhex(line.split()[1])
             self.hb = getattr(self, "hb", 0) + 1
             ctr = self.hb.to_bytes(8, "little")
@@ -248,6 +252,14 @@ class Fleet(unittest.TestCase):
         self.assertEqual(ch, r["credential_sha3_256"])
         body, sig = r["credential"].split(b"\n", 1)
         self.assertTrue(mldsa.verify(gw_pk, b"aegis-credential-v1", body, sig))
+        # the lifetime as the endpoints read it from the signed text (docs/endpoint-expiry.md): "issued" and "expires"
+        # once each, plain digits ended by ',' or '}', at most a day apart
+        import re
+        issued, expires = (re.findall(rb'"%s":(\d{1,10})[,}]' % k, body) for k in (b"issued", b"expires"))
+        self.assertEqual((len(issued), len(expires)), (1, 1))
+        self.assertEqual((body.count(b'"issued":'), body.count(b'"expires":')), (1, 1))
+        self.assertEqual(int(expires[0]) - int(issued[0]), fleet.CRED_LIFETIME_S)
+        self.assertTrue(300 < fleet.CRED_LIFETIME_S <= 86400)
 
     def test_kem_key_signed_by_other_key_refused(self):
         _, conf, _, gw_sk = self.provision_ep("kem-mitm")
@@ -274,6 +286,24 @@ class Fleet(unittest.TestCase):
         self.assertTrue(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state).startswith("valid, heartbeat 2"))
         self.assertEqual(fleet.credential_step(conf, {"admitted": False}, self.dir, state=state), "revoked")
         self.assertFalse(os.path.exists(os.path.join(state, "credentials", "kem-good.session")))
+
+    def test_session_ended_by_the_endpoint_is_provisioned_again(self):
+        """An endpoint that has ended the session on its own clock answers "ERR pq expired"; the gateway provisions
+        again in the same cycle, as for any failed heartbeat."""
+        ep, conf, gw_pk, gw_sk = self.provision_ep("kem-good")
+        state = tempfile.mkdtemp()
+        with open(os.path.join(state, "identity.json"), "w") as f:
+            json.dump({"body": {"v": 1, "type": "identity", "pk": gw_pk.hex()}}, f)
+        with open(os.path.join(state, "identity.sk"), "wb") as f:
+            f.write(gw_sk)
+        first = fleet.credential_step(conf, {"admitted": True, "measurements": {}}, self.dir, state=state)
+        self.assertTrue(first.startswith("issued session "), first)
+        self.assertTrue(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state).startswith("valid, heartbeat 1"))
+        ep.expired = True
+        again = fleet.credential_step(conf, {"admitted": True, "measurements": {}}, self.dir, state=state)
+        self.assertTrue(again.startswith("issued session "), again)
+        self.assertNotEqual(again, first)
+        self.assertTrue(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state).startswith("valid, heartbeat "))
 
     def test_heartbeat_kmac256(self):
         ep, conf, _, gw_sk = self.provision_ep("kem-good")

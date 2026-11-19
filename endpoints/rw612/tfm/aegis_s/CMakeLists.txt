@@ -23,7 +23,7 @@ mcux_add_macro(
         -DENABLE_HEAP\
         -DMLD_CONFIG_FILE=\\\"aegis_mldsa_config.h\\\"\
         -DAEGIS_DEVICE_FW=\\\"rw612-tfm\\\"\
-        -DAEGIS_DEVICE_VERSION=\\\"0.2.1\\\"\
+        -DAEGIS_DEVICE_VERSION=\\\"0.2.2\\\"\
        "
 )
 
