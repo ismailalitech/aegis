@@ -125,7 +125,7 @@ class FakeEndpoint:
             nonce = bytes.fromhex(line.split()[1])
             self.hb = getattr(self, "hb", 0) + 1
             ctr = self.hb.to_bytes(8, "little")
-            status = b"uptime_s=1;link=1;fw=test"
+            status = getattr(self, "hb_status", b"uptime_s=1;link=1;fw=test")
             if getattr(self, "hb_mac", None) == "kmac256":
                 tag = kmac.kmac256(self.session, nonce + ctr + status, 32, b"aegis-hb-v2")
             else:
@@ -283,6 +283,18 @@ class Fleet(unittest.TestCase):
         status, ctr = fleet.heartbeat(conf, r["session_key"], timeout=5)
         self.assertEqual(ctr, 1)
         self.assertTrue(status.startswith(b"uptime_s="))
+
+    def test_heartbeat_status_with_secure_stack(self):
+        # the STM32 partition appends ";sstack=<used>/<size>" under its MAC: opaque text to the gateway, longest case
+        # 128 bytes from the non-secure side plus 19
+        ep, conf, _, gw_sk = self.provision_ep("kem-good")
+        r = fleet.provision(conf, self.dir, gw_sk, "gid", {}, timeout=5)
+        ep.hb_mac = conf["heartbeat_mac"] = "kmac256"
+        for st in (b"uptime_s=62;link=1;fw=0.6.0;sstack=19344/26624", b"uptime_s=62;link=1;fw=0.6.0;sstack=na",
+                   b"x" * 128 + b";sstack=26624/26624"):
+            ep.hb_status = st
+            status, _ = fleet.heartbeat(conf, r["session_key"], timeout=5)
+            self.assertEqual(status, st)
 
     def test_heartbeat_mac_mismatch_refused(self):
         ep, conf, _, gw_sk = self.provision_ep("kem-good")

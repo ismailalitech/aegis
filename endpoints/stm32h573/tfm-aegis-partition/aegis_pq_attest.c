@@ -37,12 +37,18 @@
  *                      established session alone). A KEM_INIT with valid arguments cancels the pending
  *                      exchange first, so a refused one leaves nothing pending.
  *   type 5 SESSION:    out[0] <- SHA3-256("aegis-session-id-v1" || session) || SHA3-256(credential)
- *   type 6 HEARTBEAT:  in[0] = 32-byte gateway nonce, in[1] = up to 128 bytes of NS status data
+ *   type 6 HEARTBEAT:  in[0] = 32-byte gateway nonce, in[1] = up to 128 bytes of NS status data, which must not
+ *                      contain "sstack=" (that key is the partition's)
+ *                      status = data || ";sstack=<used>/<size>" (the high-water mark of this partition's stack, in
+ *                               bytes; ";sstack=na" if the stack could not be filled at initialisation)
  *                      out[0] <- counter (8 bytes LE, increases every call)
- *                                || KMAC256(K = session, X = nonce || counter || data, L = 256,
+ *                                || KMAC256(K = session, X = nonce || counter || status, L = 256,
  *                                           S = "aegis-hb-v2")   (NIST SP 800-185, aegis_kmac.c)
+ *                      out[1] <- status (at most HB_STATUS_MAX = 147 bytes; a smaller nonzero out[1] is refused with
+ *                                PSA_ERROR_BUFFER_TOO_SMALL). The non-secure side shows this text, as MACed.
+ *                      Without out[1] (out_size[1] == 0: provers up to 0.5.0) status = data, as before.
  *                      AEGIS_HB_KMAC=0 builds the first version instead:
- *                                SHA3-256("aegis-hb-v1" || session || nonce || counter || data)
+ *                                SHA3-256("aegis-hb-v1" || session || nonce || counter || status)
  *                      A light, symmetric proof of the session between full attestations.
  * The Non-Secure world can ask for quotes and run provisioning but never sees the seed, the
  * secret keys, K or the session key.
@@ -95,6 +101,19 @@ static uint8_t signed_msg[sizeof("aegis-kem-init-v1") + 32 + MLKEM_PUBLICKEYBYTE
 			  sizeof("aegis-kem-init-v1") + 32 + MLKEM_PUBLICKEYBYTES(768) : sizeof(QUOTE_LABEL) + TOKEN_MAX];
 static uint8_t sig[MLDSA_BYTES(65)];
 static int key_ready;
+
+/* The partition's stack (generated/aegis_pq_attest/auto_generated/intermedia_aegis_pq_attest.c; its size is stack_size
+ * in aegis_pq_attest.yaml). At initialisation the part below the current frame is filled with a pattern; every
+ * heartbeat reports how much of the stack has ever been used (as the RW612 partition does). TF-M sets the stack limit
+ * register to the stack's base, so an overflow faults rather than writing past it; this shows the margin. The PC
+ * tests (tests/fuzz/stm32) define AEGIS_TEST_SP and their own stack array. */
+extern uint8_t tfm_sp_aegis_pq_stack[];
+#define AEGIS_PQ_STACK_SIZE 0x6800u
+#define STACK_FILL          0xA5u
+#define HB_DATA_MAX         128u
+#define HB_SSTACK_MAX       (sizeof(";sstack=65535/65535") - 1u)
+#define HB_STATUS_MAX       (HB_DATA_MAX + HB_SSTACK_MAX)
+static int stack_filled;
 
 static uint8_t prov_root[32];
 static uint8_t kem_ek[KEM_EK_LEN];
@@ -218,10 +237,85 @@ static int derive_from_dhuk(const uint8_t label[32], uint8_t out[32])
 	return rc;
 }
 
+#if defined(AEGIS_TEST_SP)
+#define current_sp() ((uintptr_t)(AEGIS_TEST_SP))
+#else
+static uintptr_t current_sp(void)
+{
+	uintptr_t sp;
+
+	__asm volatile("mov %0, sp" : "=r"(sp));
+	return sp;
+}
+#endif
+
+/* Fill the stack below the current frame, keeping 256 bytes of margin under it. */
+static void stack_fill(void)
+{
+	uintptr_t lo = (uintptr_t)tfm_sp_aegis_pq_stack, sp = current_sp();
+	volatile uint8_t *p = tfm_sp_aegis_pq_stack;
+
+	if (sp < lo + 512u || sp > lo + AEGIS_PQ_STACK_SIZE) {
+		return; /* not running on the partition's stack: report nothing rather than a wrong number */
+	}
+	for (uintptr_t i = 0; i < sp - 256u - lo; i++) {
+		p[i] = STACK_FILL;
+	}
+	stack_filled = 1;
+}
+
+/* The stack grows down from the top, so the lowest byte that lost the pattern bounds the deepest use. */
+static unsigned stack_used(void)
+{
+	size_t untouched = 0;
+
+	while (untouched < AEGIS_PQ_STACK_SIZE && tfm_sp_aegis_pq_stack[untouched] == STACK_FILL) {
+		untouched++;
+	}
+	return (unsigned)(AEGIS_PQ_STACK_SIZE - untouched);
+}
+
+static size_t put_text(char *out, const char *t)
+{
+	size_t n = strlen(t);
+
+	memcpy(out, t, n);
+	return n;
+}
+
+static size_t put_uint(char *out, unsigned v)
+{
+	char d[10];
+	size_t n = 0, k = 0;
+
+	do {
+		d[n++] = (char)('0' + v % 10u);
+		v /= 10u;
+	} while (v);
+	while (n) {
+		out[k++] = d[--n];
+	}
+	return k;
+}
+
+/* ";sstack=<used>/<size>" or ";sstack=na"; at most HB_SSTACK_MAX bytes (both numbers are at most 0x6800) */
+static size_t sstack_field(char out[HB_SSTACK_MAX])
+{
+	size_t k = put_text(out, ";sstack=");
+
+	if (!stack_filled) {
+		return k + put_text(out + k, "na");
+	}
+	k += put_uint(out + k, stack_used());
+	out[k++] = '/';
+	return k + put_uint(out + k, AEGIS_PQ_STACK_SIZE);
+}
+
 psa_status_t aegis_pq_init(void)
 {
 	uint8_t seed[32];
 
+	stack_fill(); /* first, so the key generation below counts towards the high-water mark */
 	if (derive_from_dhuk(seed_label, seed) != 0 || derive_from_dhuk(prov_label, prov_root) != 0) {
 		wipe(seed, sizeof(seed));
 		return PSA_SUCCESS; /* service stays up and answers PSA_ERROR_BAD_STATE */
@@ -456,6 +550,18 @@ static psa_status_t do_kem_finish(const psa_msg_t *msg)
 
 static uint64_t hb_counter;
 
+static int has_sstack_key(const uint8_t *d, size_t n)
+{
+	static const char key[] = "sstack=";
+
+	for (size_t i = 0; i + sizeof(key) - 1 <= n; i++) {
+		if (memcmp(d + i, key, sizeof(key) - 1) == 0) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
 static psa_status_t do_heartbeat(const psa_msg_t *msg)
 {
 #if AEGIS_HB_KMAC
@@ -465,17 +571,29 @@ static psa_status_t do_heartbeat(const psa_msg_t *msg)
 	static const char lbl[] = "aegis-hb-v1";
 	struct sha3 h;
 #endif
-	uint8_t nonce[32], data[128], out[40], ctr[8];
-	size_t dlen = msg->in_size[1];
+	uint8_t nonce[32], status[HB_STATUS_MAX], out[40], ctr[8];
+	size_t dlen = msg->in_size[1], slen;
+	int give_status = msg->out_size[1] != 0;
 
 	if (!session_ready) {
 		return PSA_ERROR_BAD_STATE;
 	}
-	if (msg->in_size[0] != 32 || dlen > sizeof(data) || msg->out_size[0] < sizeof(out)) {
+	if (msg->in_size[0] != 32 || dlen > HB_DATA_MAX || msg->out_size[0] < sizeof(out)) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
-	if (psa_read(msg->handle, 0, nonce, 32) != 32 || (dlen && psa_read(msg->handle, 1, data, dlen) != dlen)) {
+	if (psa_read(msg->handle, 0, nonce, 32) != 32 || (dlen && psa_read(msg->handle, 1, status, dlen) != dlen)) {
 		return PSA_ERROR_INVALID_ARGUMENT;
+	}
+	/* the non-secure side must not be able to put its own stack figure under the MAC, with or without out[1] */
+	if (has_sstack_key(status, dlen)) {
+		return PSA_ERROR_INVALID_ARGUMENT;
+	}
+	slen = dlen;
+	if (give_status) {
+		slen += sstack_field((char *)status + dlen);
+		if (msg->out_size[1] < slen) {
+			return PSA_ERROR_BUFFER_TOO_SMALL;
+		}
 	}
 	hb_counter++;
 	for (int i = 0; i < 8; i++) ctr[i] = (uint8_t)(hb_counter >> (8 * i));
@@ -484,7 +602,7 @@ static psa_status_t do_heartbeat(const psa_msg_t *msg)
 	aegis_kmac256_init(&k, session_key, 32, (const uint8_t *)lbl, sizeof(lbl) - 1);
 	aegis_kmac256_update(&k, nonce, 32);
 	aegis_kmac256_update(&k, ctr, 8);
-	aegis_kmac256_update(&k, data, dlen);
+	aegis_kmac256_update(&k, status, slen);
 	aegis_kmac256_final(&k, out + 8, 32); /* also wipes the KMAC state */
 #else
 	sha3_init(&h);
@@ -492,10 +610,13 @@ static psa_status_t do_heartbeat(const psa_msg_t *msg)
 	sha3_update(&h, session_key, 32);
 	sha3_update(&h, nonce, 32);
 	sha3_update(&h, ctr, 8);
-	sha3_update(&h, data, dlen);
+	sha3_update(&h, status, slen);
 	sha3_final(&h, out + 8);
 #endif
 	psa_write(msg->handle, 0, out, sizeof(out));
+	if (give_status) {
+		psa_write(msg->handle, 1, status, slen);
+	}
 	return PSA_SUCCESS;
 }
 

@@ -25,3 +25,7 @@ e123757f63f6b4dd432d88103034411abc699e887d4de1b2070eeaeb153bd3a1  endpoints/stm3
 9316091a06764622997d982510b3218b85e9f2315ac60ec9f1d9f56377675bdd  endpoints/stm32h573/artifacts/prover-ns-0.5.0-mac.bin
 cf2c22ddb052ced69e1b780cce79a4714db91eba64085531cd275cfff8326bc8  endpoints/stm32h573/artifacts/prover-ns-0.5.0-mac-tampered.bin
 90566e7056e034b2b67a94d1a271c694c013b17da1d3e50e6fcdc09fd3f99d0c  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix.hex
+c7004ac26b8ffa5371d325bfd3fdea9903ca94a4cc56d3682548e2d7f0e7c181  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix-sstack.hex
+2788920ee60dde7d18faea791dfe5e323e2800eb1a7c2b2cfc858398387f97b8  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix-sstack.bin
+3e1238b5acc109cfc855944f4edad92bb732eb402a62e8e320c0d18cd8c892cc  endpoints/stm32h573/artifacts/prover-ns-0.6.0-sstack.hex
+d29843fdbd8338f1762a188ad9bd9c93c618a429bbfa013cea3be6eb743b7759  endpoints/stm32h573/artifacts/prover-ns-0.6.0-sstack.bin
