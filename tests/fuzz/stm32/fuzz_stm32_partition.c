@@ -11,10 +11,13 @@
  *   1  KEM_INIT with a nonce from the payload
  *   2  KEM_FINISH built as the gateway would, then changed (fields left out or wrong, text added, a newline, the
  *      signature or ciphertext damaged, or the payload signed as the whole body)
- *   3  HEARTBEAT with a nonce and status data from the payload
+ *   3  HEARTBEAT with a nonce and status data from the payload; the op byte's upper bits pick out[1]: 0 the prover's
+ *      buffer (HB_STATUS_MAX), 1 none (provers up to 0.5.0), 2 exactly the length the status needs, else 5 * bits
  *   4  QUOTE with a challenge from the payload
  *   5  SESSION
- *   6  after K good random draws, the next N fail
+ *   6  after K good random draws, the next N fail; with 4 or more payload bytes also a new stack scenario: the stack is
+ *      filled again from a stand-in stack pointer at the offset in bytes 2-3 (out of range: not filled, "sstack=na"),
+ *      and with 6 or more the top <bytes 4-5> bytes are marked used
  *   7  GET_PUBKEY
  * Checks, besides the sanitizers:
  *   - no psa_write beyond the caller's output size (TF-M panics on it), no read of an input that is not there;
@@ -25,6 +28,10 @@
  *   - confirmation tag, session id, credential hash and every heartbeat tag are what the gateway computes; the
  *     heartbeat counter counts up by one (from boot, across sessions); a refused exchange leaves the session as it
  *     was;
+ *   - a heartbeat with out[1] returns the status "<data>;sstack=<used>/<size>" (or ";sstack=na"), with the used figure
+ *     the model expects from the stack scenario, and its tag covers exactly that text; without out[1] the tag covers
+ *     the data alone; status data naming "sstack=" is refused, as is an out[1] too small for the status, and neither
+ *     counts;
  *   - every KEM key and quote is signed by the device key.
  */
 #include <stdarg.h>
@@ -33,7 +40,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* the partition reads the stack pointer through this (on the board: the SP register) */
+static uintptr_t fz_sp;
+#define AEGIS_TEST_SP fz_sp
 #include "aegis_pq_attest.c"
+
+/* stand-in for the partition's stack (TF-M's generated tfm_sp_aegis_pq_stack) */
+uint8_t tfm_sp_aegis_pq_stack[AEGIS_PQ_STACK_SIZE];
 
 #define DIE(...) do { fprintf(stderr, "ORACLE: " __VA_ARGS__); fputc('\n', stderr); abort(); } while (0)
 #define SIG_LEN MLDSA_BYTES(65)
@@ -122,6 +135,8 @@ static struct {
 	int session;
 	uint8_t session_key[32], cred_hash[32];
 	uint64_t hb;
+	int stack_ok;
+	unsigned stack_used;
 } M;
 
 /* one message; buffers are exactly the sizes the caller declares, so ASan sees any overrun */
@@ -348,34 +363,73 @@ static void op_kem_fin(const uint8_t *p, size_t n)
 	free(r1);
 }
 
-static void op_hb(const uint8_t *p, size_t n)
+static int has_key(const uint8_t *d, size_t n) { return memmem(d, n, "sstack=", 7) != NULL; }
+
+static void op_hb(uint8_t sel, const uint8_t *p, size_t n)
 {
 	uint8_t nonce[32] = {0}, tag[32], ctr[8], *r0, *r1;
 	const uint8_t *data = n > 32 ? p + 32 : p;
-	size_t dl = n > 32 ? n - 32 : 0, w0, w1;
+	size_t dl = n > 32 ? n - 32 : 0, w0, w1, o1, wl = 0;
+	char want[HB_STATUS_MAX + 1];
 	struct aegis_kmac km;
 	psa_status_t st;
 
 	memcpy(nonce, p, n < 32 ? n : 32);
-	st = send(AEGIS_PQ_HEARTBEAT, nonce, 32, data, dl, 40, 0, &r0, &r1, &w0, &w1);
+	if (dl <= HB_DATA_MAX) {
+		memcpy(want, data, dl);
+		wl = dl + (size_t)(M.stack_ok ? sprintf(want + dl, ";sstack=%u/%u", M.stack_used, AEGIS_PQ_STACK_SIZE)
+					      : sprintf(want + dl, ";sstack=na"));
+	}
+	o1 = sel == 0 ? HB_STATUS_MAX : sel == 1 ? 0 : sel == 2 ? wl : 5u * sel;
+	st = send(AEGIS_PQ_HEARTBEAT, nonce, 32, data, dl, 40, o1, &r0, &r1, &w0, &w1);
 	if (!M.session) {
 		if (st != PSA_ERROR_BAD_STATE) DIE("HEARTBEAT without a session: %d", (int)st);
-	} else if (dl > 128) {
+	} else if (dl > HB_DATA_MAX) {
 		if (st != PSA_ERROR_INVALID_ARGUMENT) DIE("long heartbeat data: %d", (int)st);
+	} else if (has_key(data, dl)) {
+		if (st != PSA_ERROR_INVALID_ARGUMENT) DIE("heartbeat data naming sstack= : %d", (int)st);
+	} else if (o1 && o1 < wl) {
+		if (st != PSA_ERROR_BUFFER_TOO_SMALL) DIE("heartbeat status buffer %zu < %zu: %d", o1, wl, (int)st);
 	} else {
+		const uint8_t *mac_text = o1 ? (const uint8_t *)want : data;
+		size_t mac_len = o1 ? wl : dl;
+
 		if (st != PSA_SUCCESS || w0 != 40) DIE("HEARTBEAT: %d", (int)st);
+		if (o1 && (w1 != wl || memcmp(r1, want, wl)))
+			DIE("heartbeat status %.*s, the model says %.*s", (int)w1, (const char *)r1, (int)wl, want);
+		if (!o1 && w1) DIE("heartbeat status written without out[1]");
 		M.hb++;
 		for (int i = 0; i < 8; i++) ctr[i] = (uint8_t)(M.hb >> (8 * i));
 		if (memcmp(r0, ctr, 8)) DIE("heartbeat counter");
 		aegis_kmac256_init(&km, M.session_key, 32, (const uint8_t *)"aegis-hb-v2", 11);
 		aegis_kmac256_update(&km, nonce, 32);
 		aegis_kmac256_update(&km, ctr, 8);
-		aegis_kmac256_update(&km, data, dl);
+		aegis_kmac256_update(&km, mac_text, mac_len);
 		aegis_kmac256_final(&km, tag, 32);
 		if (memcmp(tag, r0 + 8, 32)) DIE("heartbeat tag");
 	}
 	free(r0);
 	free(r1);
+}
+
+/* refill the stand-in stack from a stack pointer at byte offset off, then mark the top depth bytes used */
+static void stack_scenario(size_t off, size_t depth)
+{
+	memset(tfm_sp_aegis_pq_stack, 0, AEGIS_PQ_STACK_SIZE);
+	stack_filled = 0;
+	fz_sp = (uintptr_t)tfm_sp_aegis_pq_stack + off;
+	stack_fill();
+	if (depth > AEGIS_PQ_STACK_SIZE) depth = AEGIS_PQ_STACK_SIZE;
+	memset(tfm_sp_aegis_pq_stack + AEGIS_PQ_STACK_SIZE - depth, 0x5a, depth);
+	/* filled: bytes [0, off - 256) hold the pattern, so the first other byte is at min(off - 256, size - depth) */
+	M.stack_ok = off >= 512 && off <= AEGIS_PQ_STACK_SIZE;
+	M.stack_used = 0;
+	if (M.stack_ok) {
+		size_t first = off - 256 < AEGIS_PQ_STACK_SIZE - depth ? off - 256 : AEGIS_PQ_STACK_SIZE - depth;
+
+		M.stack_used = (unsigned)(AEGIS_PQ_STACK_SIZE - first);
+	}
+	if (M.stack_ok != stack_filled) DIE("stack fill from offset %zu: filled %d", off, stack_filled);
 }
 
 static void op_quote(const uint8_t *p, size_t n)
@@ -444,10 +498,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	kem_pending = 0; session_ready = 0; hb_counter = 0; kem_counter = 0;
 	memset(session_key, 0, sizeof(session_key));
 	memset(&M, 0, sizeof(M));
+	stack_scenario(AEGIS_PQ_STACK_SIZE - 1024, 0);
 	rng_state = 0x9e3779b97f4a7c15ull;
 	rng_skip = rng_fail = 0;
 	while (i + 3 <= size && ops++ < 24) {
-		uint8_t op = data[i] & 7;
+		uint8_t op = data[i] & 7, sel = data[i] >> 3;
 		size_t n = (size_t)data[i + 1] | (size_t)data[i + 2] << 8;
 		const uint8_t *p = data + i + 3;
 
@@ -457,10 +512,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		case 0: op_raw(p, n); break;
 		case 1: op_kem_init(p, n); break;
 		case 2: op_kem_fin(p, n); break;
-		case 3: op_hb(p, n); break;
+		case 3: op_hb(sel, p, n); break;
 		case 4: op_quote(p, n); break;
 		case 5: op_session(); break;
-		case 6: rng_skip = n ? p[0] & 3 : 0; rng_fail = n > 1 ? p[1] & 3 : 1; break;
+		case 6:
+			rng_skip = n ? p[0] & 3 : 0;
+			rng_fail = n > 1 ? p[1] & 3 : 1;
+			if (n >= 4) stack_scenario(u16(p, n, 2), n >= 6 ? u16(p, n, 4) : 0);
+			break;
 		case 7: op_pubkey(); break;
 		}
 	}

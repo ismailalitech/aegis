@@ -112,7 +112,9 @@ A credential lasts an hour and is renewed five minutes before it expires.
 
 **Heartbeat** (every cycle while a credential is valid): `PQHB <nonce>` -> status text, counter,
 KMAC256(session, nonce || counter || status, 256, "aegis-hb-v2") (NIST SP 800-185). The gateway needs the counter to
-rise within a session. A failure leads to re-provisioning; QUARANTINED deletes the credential and session key on the
+rise within a session. The status carries the secure partition's stack high-water mark: the STM32 partition appends
+";sstack=<used>/<size>" to the non-secure text before MACing it (secure image with prover 0.6.0 and later), the RW612
+partition writes "stack=<used>/<size>" into its own status. A failure leads to re-provisioning; QUARANTINED deletes the credential and session key on the
 gateway.
 
 ## Decision loop (aegis-fleet, every 30 s)

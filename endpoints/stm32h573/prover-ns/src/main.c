@@ -19,6 +19,10 @@
  *   device -> "PQTOKEN <toklen> <hex> <siglen> <hex> END"
  *             token from TF-M, signature by the Aegis secure partition (ML-DSA-65 key derived
  *             from the chip's DHUK) over "aegis-endpoint-quote-v1\0" || token
+ *   host   -> "PQHB <64 hex digits>"                heartbeat nonce
+ *   device -> "PQHB <status hex> <counter hex> <tag hex> END"
+ *             status "uptime_s=..;link=..;fw=..;sstack=<used>/<size>": this side's text plus the secure
+ *             partition's stack high-water mark, all under the partition's KMAC (from 0.6.0)
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -135,6 +139,8 @@ static int parse_hex(const char *s, uint8_t *out, size_t len)
 #define KEM_EK_LEN  1184u
 #define KEM_CT_LEN  1088u
 #define CRED_MAX    6144u
+#define HB_DATA_MAX   128u /* the partition's limit for our status text */
+#define HB_STATUS_MAX 147u /* ours plus ";sstack=<used>/<size>", as the partition returns it */
 
 static int hex_nibble_any(char c)
 {
@@ -233,8 +239,10 @@ static size_t handle_pq(const char *line, char *out, size_t max)
 		return k + 6;
 	}
 	if (strncmp(line, "PQHB ", 5) == 0) {
-		uint8_t nonce[32], r[40];
+		uint8_t nonce[32], r[40], signed_status[HB_STATUS_MAX];
 		char status[96];
+		const uint8_t *shown = (const uint8_t *)status;
+		size_t shown_len;
 		int sl;
 
 		if (parse_hex(line + 5, nonce, 32) != 0) {
@@ -242,17 +250,33 @@ static size_t handle_pq(const char *line, char *out, size_t max)
 		}
 		sl = snprintf(status, sizeof(status), "uptime_s=%lu;link=%d;fw=%s", (unsigned long)(ticks_ms / 1000u),
 			      aegis_eth_link_up(), AEGIS_PROVER_VERSION);
+		if (sl < 0 || (size_t)sl >= sizeof(status) || (size_t)sl > HB_DATA_MAX) {
+			return (size_t)snprintf(out, max, "ERR status\r\n");
+		}
+		shown_len = (size_t)sl;
 		{
 			psa_invec i[2] = {{nonce, 32}, {status, (size_t)sl}};
-			psa_outvec o[1] = {{r, sizeof(r)}};
+			psa_outvec o[2] = {{r, sizeof(r)}, {signed_status, sizeof(signed_status)}};
 
-			st = psa_call(AEGIS_PQ_SERVICE_HANDLE, AEGIS_PQ_HEARTBEAT, i, 2, o, 1);
+			st = psa_call(AEGIS_PQ_SERVICE_HANDLE, AEGIS_PQ_HEARTBEAT, i, 2, o, 2);
+			if (st == PSA_SUCCESS && (o[0].len != sizeof(r) || o[1].len > sizeof(signed_status))) {
+				return (size_t)snprintf(out, max, "ERR pq-reply\r\n");
+			}
+			/* The partition appends its stack figure and MACs the whole text; show exactly that text. A
+			 * secure image older than this answers nothing in o[1] and MACs our own status. */
+			if (st == PSA_SUCCESS && o[1].len) {
+				shown = signed_status;
+				shown_len = o[1].len;
+			}
 		}
 		if (st != PSA_SUCCESS) {
 			return (size_t)snprintf(out, max, "ERR pq %ld\r\n", (long)st);
 		}
+		if (max < 5 + 2 * shown_len + 1 + 16 + 1 + 64 + 6) {
+			return (size_t)snprintf(out, max, "ERR too-long\r\n");
+		}
 		k = (size_t)snprintf(out, max, "PQHB ");
-		k += put_hex_into(out + k, (const uint8_t *)status, (size_t)sl);
+		k += put_hex_into(out + k, shown, shown_len);
 		out[k++] = ' ';
 		k += put_hex_into(out + k, r, 8);
 		out[k++] = ' ';
