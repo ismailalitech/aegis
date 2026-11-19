@@ -91,6 +91,19 @@ zq_q = 1 + next(i for i, l in enumerate(zq_gw) if 'QUARANTINED (software trust)'
 stm_probe = [l.strip() for l in zq('stm32-tz', 'tz-probes.txt')
              if l.strip().startswith(('SAES-DHUK:', 'NS_FLASH ', 'S_FLASH_S ', 'S_FLASH_NS ', 'S_SRAM_S ', 'S_SRAM_NS ',
                                       'SAES 0x', 'RNG 0x', 'NS_CODE ')) and 'TZIC SR1-4' in l]
+# the stack mark in the heartbeat: the gateway lines of each step, board 2 then board 1
+ss = [l for l in zq('stm32-sstack', 'heartbeat-sstack.txt')]
+ss_gw = lambda first, last, board: [l for l in between(ss, first, last) if re.match(r'\d\d:\d\d:\d\d %s ' % board, l)]
+ss_cmd = '$ ssh <gateway> journalctl -u aegis-fleet -o cat | grep %s'
+ss_lines = (ss_gw('== board 2: secure image', 'done: stm32h573-dk-2', 'stm32h573-dk-2') +
+            [ss_cmd % 'stm32h573-dk-2' + '      # prover 0.6.0'] +
+            ss_gw('== board 2: non-secure prover', '== board 1: secure image', 'stm32h573-dk-2') +
+            [ss_cmd % "'stm32h573-dk '" + '      # board 1, prover 0.6.0'] +
+            ss_gw('== board 1: non-secure prover', 'sstack=19088/26624 equals', 'stm32h573-dk'))
+# the end of a session on the endpoint's clock: expiry_check.py's fields for each endpoint
+ex = [l for l in zq('endpoint-expiry', 'bench.txt')]
+ex_run = lambda head: between(ex, head, '"D_attestation"')[1:]
+ex_cmd = '$ python3 expiry_check.py /root/aegis/gateway/policy/fleet.json %s --lifetime 32'
 
 figs = [
  fig('console-demo-journal', 'gateway journal during the demo',
@@ -295,6 +308,28 @@ figs = [
       {'lines': [2, 5], 'title': 'Fault', 'text': 'The read never returns; TF-M resets the chip, 23 times in 40 s.'},
       {'lines': [6, 8], 'title': 'Read as zero', 'text': 'The GTZC returns zero and flags SRAM1, SAES or the RNG.'},
       {'lines': [9, 9], 'title': 'Control', 'text': 'A word of the non-secure code: the same value as over SWD.'}], width=1120),
+ fig('console-stm32-sstack', 'the secure stack mark in every heartbeat',
+     'The gateway journal for the two STM32 boards after the secure image with the stack mark. With the old non-secure '
+     'prover 0.5.0 the heartbeats carry no stack mark. With prover 0.6.0 every heartbeat ends with sstack=19088/26624, '
+     'the secure partition\'s stack high-water mark, under the session\'s KMAC; board 1 reports the same figure.',
+     ss_cmd % 'stm32h573-dk-2' + '      # new secure image, prover 0.5.0', ss_lines,
+     [{'lines': [1, 3], 'title': 'New secure image, old prover', 'text': 'Admitted on SPE e68ad797; prover 0.5.0 does not ask for the stack mark.'},
+      {'lines': [5, 5], 'title': 'Prover 0.6.0', 'text': 'Admitted with a new session on the new non-secure image.'},
+      {'lines': [6, 8], 'title': 'The stack mark', 'text': 'sstack=19088/26624 in every heartbeat, under the KMAC: the depth read over SWD.'},
+      {'lines': [10, 13], 'title': 'Board 1', 'text': 'The same steps and the same figure: 19,088 of 26,624 bytes.'}], width=1020),
+ fig('console-endpoint-expiry', 'a 32-second credential ends on each endpoint',
+     'expiry_check.py on the gateway, once for each endpoint, with a credential that lasts 32 s. On both STM32 boards '
+     'ttl falls from 34 to 18 in the heartbeat and the secure RTC runs at 0.941 s per gateway second; after the end the '
+     'heartbeat and the session query get -140, a session ended by the clock. On the RW612 the secure SysTick (clk=ref) '
+     'runs at 1.0 and the replies are ERR pq expired. Attestation still answers on all three.',
+     ex_cmd % 'stm32h573-dk-2' + '      # aegis-fleet stopped',
+     ex_run('STM32 board 2:') + [ex_cmd % 'stm32h573-dk'] + ex_run('STM32 board 1:') + [ex_cmd % 'frdm-rw612'] + ex_run('RW612:'),
+     [{'lines': [1, 1], 'title': 'A 32 s credential', 'text': 'The endpoint ends it after 34 s: the lifetime plus a sixteenth.'},
+      {'lines': [2, 4], 'title': 'ttl and the clock rate', 'text': 'ttl, under the KMAC, falls from 34 to 18. The STM32 RTC on the LSI runs at 0.941.'},
+      {'lines': [5, 6], 'title': 'After the end', 'text': 'Heartbeat and session query: -140, ended by the clock. Attestation still answers.'},
+      {'lines': [8, 14], 'title': 'Board 1', 'text': 'The same values: 34, 18, 0.941, -140, a token.'},
+      {'lines': [17, 19], 'title': 'RW612 secure SysTick', 'text': 'clk=ref, the function clock: 1.0 against the gateway.'},
+      {'lines': [20, 22], 'title': 'RW612 after the end', 'text': 'ERR pq expired from its protocol code; attestation still answers.'}], width=1020),
 ]
 yaml.safe_dump(figs, open(os.path.join(ROOT, 'docs', 'diagrams', 'console.yaml'), 'w'), sort_keys=False, width=140, allow_unicode=True)
 print(len(figs), 'console figures')
