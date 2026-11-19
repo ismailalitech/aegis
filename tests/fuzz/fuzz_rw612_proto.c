@@ -15,18 +15,27 @@
  *   0  a raw request line (anything at all)
  *   1  PQKEMINIT with a nonce from the payload
  *   2  PQKEMFIN built as the gateway would, then changed by the payload (fields left out or wrong, text added,
- *      signature or ciphertext damaged, a newline inside the body, or the payload signed as the whole body)
+ *      signature or ciphertext damaged, a newline inside the body, or the payload signed as the whole body); the op
+ *      byte's upper bits change the validity: bits 3-5 pick 0 as the gateway writes it, 1 no "issued", 2 no
+ *      "expires", 3 a lifetime of zero, 4 "expires" twice, 5 eleven digits, 6 a string, 7 a second too long; bits 6-7
+ *      pick the lifetime (3600, 1, 86400 or 40 seconds)
  *   3  PQHB with a nonce from the payload
  *   4  PQCHAL with a challenge from the payload
  *   5  PQSESSION
- *   6  after K good random draws, the next N fail (K, N from the payload)
+ *   6  after K good random draws, the next N fail (K, N from the payload); with upper bits in the op byte, the
+ *      session clock instead: 1 forward by the payload's seconds (32 bits), 2 it fails or works again, 3 backwards
  *   7  set the platform's status text (from the payload; never empty, as on the board)
  *
  * Besides the sanitizers, it checks every answer against a model of the protocol and aborts when they differ:
  *   - every reply fits, ends at the returned length and is printable ASCII;
- *   - a credential is accepted if and only if an exchange is pending, the ciphertext has the right length, the body
- *     has no newline, the gateway's ML-DSA-65 signature over it is valid, and it names SHA3-256(ct), SHA3-256(ek) of
- *     the pending exchange and SHA-256(device pk), all checked here independently;
+ *   - a credential is accepted if and only if an exchange is pending, the clock works, the ciphertext has the right
+ *     length, the body has no newline, the gateway's ML-DSA-65 signature over it is valid, it names SHA3-256(ct),
+ *     SHA3-256(ek) of the pending exchange and SHA-256(device pk), and it carries "issued" and "expires" once each
+ *     with a lifetime of 1 to 86400 seconds, all checked here independently;
+ *   - a session answers until the clock shows its lifetime plus a sixteenth after the accepted PQKEMFIN, and from
+ *     that second on, or when the clock fails or runs backwards, PQHB and PQSESSION answer "ERR pq expired" (before
+ *     any session: "ERR pq no-session"), whatever requests came in between; every heartbeat status ends with the
+ *     seconds left;
  *   - a raw line is never accepted as a credential (no forged or replayed credential);
  *   - a refused PQKEMINIT leaves no exchange pending;
  *   - the confirmation tag, the session id, the credential hash and every heartbeat tag are what the gateway computes,
@@ -84,8 +93,19 @@ static int fz_status(char *buf, size_t cap) { return snprintf(buf, cap, "%s", st
 static void fz_measure(uint8_t out[32], size_t *len) { memset(out, 0, 32); *len = 0; }
 static uint32_t fz_uptime(void) { return 7; }
 
+/* the session clock: the harness moves it and makes it fail */
+static uint64_t fz_now;
+static int fz_clock_fail;
+
+static int fz_monotonic(uint64_t *now)
+{
+	if (fz_clock_fail) return -1;
+	*now = fz_now;
+	return 0;
+}
+
 static const struct aegis_proto_platform platform = {
-	.random = fz_random, .measure = fz_measure, .uptime_s = fz_uptime,
+	.random = fz_random, .measure = fz_measure, .uptime_s = fz_uptime, .monotonic_s = fz_monotonic,
 	.profile = "aegis-rw612-tfm-v1", .measure_all = fz_measure_all, .status = fz_status};
 
 /* ---- the model: what the gateway knows ---- */
@@ -93,9 +113,49 @@ static struct {
 	int pending;               /* a PQKEMINIT was answered and no PQKEMFIN has used it */
 	uint8_t ek[KEM_EK_LEN], nonce[32];
 	int session;
+	int expired;               /* the last session was ended by the clock */
+	uint64_t start, limit;     /* the clock when the session started; the seconds it may live */
 	uint8_t session_key[32], cred_hash[32];
 	uint64_t hb;
 } M;
+
+/* what any request does first: a session past its end, or whose age the clock cannot give, is gone */
+static void model_sweep(void)
+{
+	if (M.session && (fz_clock_fail || fz_now < M.start || fz_now - M.start >= M.limit)) {
+		M.session = 0;
+		M.expired = 1;
+	}
+}
+
+static const char *model_no_session(void)
+{
+	return M.expired ? "ERR pq expired" : "ERR pq no-session";
+}
+
+/* "<key>":<1 to 10 digits> then ',' or '}', the key exactly once (an independent reading, not the device's) */
+static int model_number(const uint8_t *b, size_t n, const char *key, uint64_t *v)
+{
+	char pat[32], digits[12];
+	size_t pl = (size_t)snprintf(pat, sizeof(pat), "\"%s\":", key), d = 0;
+	const uint8_t *at = memmem(b, n, pat, pl), *end = b + n;
+
+	if (!at || memmem(at + 1, (size_t)(end - at - 1), pat, pl)) return 0;
+	for (at += pl; at < end && *at >= '0' && *at <= '9' && d < 11; at++) digits[d++] = (char)*at;
+	if (d < 1 || d > 10 || at == end || (*at != ',' && *at != '}')) return 0;
+	digits[d] = 0;
+	*v = strtoull(digits, NULL, 10);
+	return 1;
+}
+
+/* the lifetime a body carries, or 0 */
+static uint64_t model_lifetime(const uint8_t *b, size_t n)
+{
+	uint64_t issued, expires;
+
+	if (!model_number(b, n, "issued", &issued) || !model_number(b, n, "expires", &expires)) return 0;
+	return expires > issued && expires - issued <= 86400 ? expires - issued : 0;
+}
 
 /* ---- helpers ---- */
 static char *hexs(const uint8_t *p, size_t n, char *o)
@@ -176,6 +236,7 @@ static char *call(const uint8_t *req, size_t n)
 
 	memcpy(line, req, n);
 	line[n] = 0;
+	model_sweep();
 	r = aegis_proto_handle(line, out, AEGIS_REPLY_MAX);
 	free(line);
 	if (r < 0 || (size_t)r >= AEGIS_REPLY_MAX) DIE("reply length %d", r);
@@ -210,7 +271,9 @@ static void op_raw(const uint8_t *p, size_t n)
 		}
 	} else if (tn == 3 && !strcmp(t[0], "PQKEMFIN")) {
 		if (!strncmp(rep, "PQKEMOK", 7)) DIE("a raw line was accepted as a credential");
-		if (strcmp(rep, "ERR cred no-exchange") && strcmp(rep, "ERR bad-request")) M.pending = 0;
+		if (M.pending && fz_clock_fail && strcmp(rep, "ERR clock")) DIE("PQKEMFIN without a clock: %.40s", rep);
+		if (strcmp(rep, "ERR cred no-exchange") && strcmp(rep, "ERR bad-request") && strcmp(rep, "ERR clock"))
+			M.pending = 0;
 	} else if (!strncmp(rep, "PQHB ", 5)) {
 		M.hb++;
 	}
@@ -254,8 +317,11 @@ static void op_kem_init(const uint8_t *p, size_t n)
 #define F_STALE_EK  0x40  /* name an encapsulation key the device did not make */
 #define F_SIGN_RAW  0x80  /* the added text alone is the whole body */
 
-static void op_kem_fin(const uint8_t *p, size_t n)
+static void op_kem_fin(uint8_t sel, const uint8_t *p, size_t n)
 {
+	static const unsigned lifetimes[4] = {3600, 1, 86400, 40};
+	const unsigned variant = sel & 7u, life = lifetimes[(sel >> 3) & 3u];
+	const unsigned long long issued = 1795000000ull;
 	static uint8_t body[CRED_MAX + 512], cred[CRED_MAX + 512 + SIG_LEN + 1];
 	static uint8_t msg[sizeof(CRED_LABEL) + CRED_MAX + 512], s[SIG_LEN];
 	static char line[2 * (KEM_CT_LEN + CRED_MAX + 512 + SIG_LEN + 1) + 32];
@@ -263,7 +329,8 @@ static void op_kem_fin(const uint8_t *p, size_t n)
 	uint8_t flags = n ? p[0] : 0, coins[32] = {0}, ct[KEM_CT_LEN], k[32], h_ct[32], h_ek[32], stale[32], rnd[32] = {0};
 	const uint8_t *extra = n > 33 ? p + 33 : p;
 	size_t extra_n = n > 33 ? n - 33 : 0, bl = 0, cl, ctl = KEM_CT_LEN;
-	int pending = M.pending, expect;
+	int pending = M.pending, expect, bound;
+	uint64_t lifetime;
 	char *o, *rep;
 
 	if (n > 1) memcpy(coins, p + 1, n - 1 < 32 ? n - 1 : 32);
@@ -288,7 +355,19 @@ static void op_kem_fin(const uint8_t *p, size_t n)
 		if (extra[i] == '\n' && !(flags & F_NEWLINE)) continue;
 		body[bl++] = extra[i];
 	}
-	if (!(flags & F_SIGN_RAW)) { body[bl++] = '"'; body[bl++] = '}'; }
+	if (!(flags & F_SIGN_RAW)) {
+		/* the validity, last in the body: "issued" ends at a comma, "expires" at the closing brace */
+		body[bl++] = '"';
+		const unsigned long long from = variant == 5 ? issued * 10 : issued; /* 5: eleven digits, same lifetime */
+
+		if (variant != 1) bl += (size_t)sprintf((char *)body + bl, ",\"issued\":%llu", from);
+		if (variant == 4) bl += (size_t)sprintf((char *)body + bl, ",\"expires\":%llu", from + life);
+		if (variant == 6) bl += (size_t)sprintf((char *)body + bl, ",\"expires\":\"%llu\"", from + life);
+		else if (variant != 2)
+			bl += (size_t)sprintf((char *)body + bl, ",\"expires\":%llu",
+					      from + (variant == 3 ? 0 : variant == 7 ? 86401 : life));
+		body[bl++] = '}';
+	}
 	/* the gateway's signature over "aegis-credential-v1\0" || body; cred = body || '\n' || signature */
 	memcpy(msg, CRED_LABEL, sizeof(CRED_LABEL));
 	memcpy(msg + sizeof(CRED_LABEL), body, bl);
@@ -307,19 +386,25 @@ static void op_kem_fin(const uint8_t *p, size_t n)
 	if ((size_t)(o - line) > AEGIS_LINE_MAX) return; /* the partition would refuse it before the protocol code */
 	rep = call((const uint8_t *)line, (size_t)(o - line));
 
-	expect = pending && ctl == KEM_CT_LEN && cl <= CRED_MAX && !memchr(body, '\n', bl) && !(flags & F_BAD_SIG) &&
-		 contains(body, bl, "kem_ct_sha3_256", h_ct) && contains(body, bl, "kem_ek_sha3_256", h_ek) &&
-		 contains(body, bl, "endpoint_pq_pk_sha256", dev_pk_sha256);
+	lifetime = model_lifetime(body, bl);
+	bound = pending && !fz_clock_fail && ctl == KEM_CT_LEN && cl <= CRED_MAX && !memchr(body, '\n', bl) &&
+		!(flags & F_BAD_SIG) && contains(body, bl, "kem_ct_sha3_256", h_ct) &&
+		contains(body, bl, "kem_ek_sha3_256", h_ek) && contains(body, bl, "endpoint_pq_pk_sha256", dev_pk_sha256);
+	expect = bound && lifetime != 0;
 	if (!pending) {
 		if (strcmp(rep, "ERR cred no-exchange")) DIE("PQKEMFIN without an exchange: %.40s", rep);
+	} else if (fz_clock_fail) {
+		if (strcmp(rep, "ERR clock")) DIE("PQKEMFIN without a clock: %.40s", rep);
+		/* refused before the exchange was used: it stays pending */
 	} else if (ctl != KEM_CT_LEN || cl > CRED_MAX) {
 		if (strcmp(rep, "ERR bad-request")) DIE("bad lengths: %.40s", rep);
-		/* refused before the exchange was used: it stays pending */
+		/* the same */
 	} else {
 		M.pending = 0;
 		if (expect != !strncmp(rep, "PQKEMOK ", 8))
 			DIE("credential %s, but the model says %s: %.60s", expect ? "refused" : "accepted",
 			    expect ? "valid" : "invalid", rep);
+		if (bound && !lifetime && strcmp(rep, "ERR cred validity")) DIE("no lifetime: %.40s", rep);
 	}
 	if (expect) {
 		uint8_t got[32], tag[32], h_cred[32];
@@ -334,6 +419,9 @@ static void op_kem_fin(const uint8_t *p, size_t n)
 		      (size_t)32);
 		memcpy(M.cred_hash, h_cred, 32);
 		M.session = 1;
+		M.expired = 0;
+		M.start = fz_now;
+		M.limit = lifetime + lifetime / 16;
 		M.hb = 0;
 	}
 	free(rep);
@@ -341,23 +429,26 @@ static void op_kem_fin(const uint8_t *p, size_t n)
 
 static void op_hb(const uint8_t *p, size_t n)
 {
-	uint8_t nonce[32] = {0}, ctr[8], tag[32], got[32], st[256];
-	char line[5 + 64 + 1], *rep, *f[8];
+	uint8_t nonce[32] = {0}, ctr[8], tag[32], got[32], st[320];
+	char line[5 + 64 + 1], *rep, *f[8], want[320];
 	struct aegis_kmac km;
-	size_t sl = strlen(status_text);
+	size_t sl;
 
 	memcpy(nonce, p, n < 32 ? n : 32);
 	memcpy(line, "PQHB ", 5);
 	hexs(nonce, 32, line + 5);
 	rep = call((const uint8_t *)line, strlen(line));
+	/* the status under the MAC: the platform's text, then the seconds the session has left */
+	sl = (size_t)snprintf(want, sizeof(want), "%s;ttl=%llu", status_text,
+			      M.session ? (unsigned long long)(M.limit - (fz_now - M.start)) : 0ull);
 	if (!M.session) {
-		if (strcmp(rep, "ERR pq no-session")) DIE("PQHB without a session: %.40s", rep);
-	} else if (sl >= 96) {
+		if (strcmp(rep, model_no_session())) DIE("PQHB without a session: %.40s", rep);
+	} else if (strlen(status_text) >= 96) {
 		if (strcmp(rep, "ERR status")) DIE("long status: %.40s", rep);
 	} else {
 		M.hb++;
 		if (fields(rep, f, 8) != 5 || strcmp(f[0], "PQHB") || strcmp(f[4], "END") ||
-		    unhexs(f[1], strlen(f[1]), st, sl) || memcmp(st, status_text, sl) ||
+		    unhexs(f[1], strlen(f[1]), st, sl) || memcmp(st, want, sl) ||
 		    unhexs(f[2], strlen(f[2]), ctr, 8) || unhexs(f[3], strlen(f[3]), got, 32))
 			DIE("PQHB reply");
 		for (int i = 0; i < 8; i++) {
@@ -366,7 +457,7 @@ static void op_hb(const uint8_t *p, size_t n)
 		aegis_kmac256_init(&km, M.session_key, 32, (const uint8_t *)"aegis-hb-v2", 11);
 		aegis_kmac256_update(&km, nonce, 32);
 		aegis_kmac256_update(&km, ctr, 8);
-		aegis_kmac256_update(&km, (const uint8_t *)status_text, sl);
+		aegis_kmac256_update(&km, (const uint8_t *)want, sl);
 		aegis_kmac256_final(&km, tag, 32);
 		if (memcmp(tag, got, 32)) DIE("heartbeat tag");
 	}
@@ -403,7 +494,7 @@ static void op_session(void)
 
 	rep = call((const uint8_t *)"PQSESSION", 9);
 	if (!M.session) {
-		if (strcmp(rep, "ERR pq no-session")) DIE("PQSESSION without a session");
+		if (strcmp(rep, model_no_session())) DIE("PQSESSION without a session: %.40s", rep);
 	} else {
 		if (fields(rep, f, 5) != 4 || unhexs(f[1], strlen(f[1]), got, 32) || unhexs(f[2], strlen(f[2]), h, 32))
 			DIE("PQSESSION reply");
@@ -436,14 +527,17 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
 	/* a fresh device state for every input (the file's own statics; the key stays) */
 	kem_pending = 0; session_ready = 0; hb_counter = 0; kem_counter = 0;
+	session_expired = 0; session_start = session_limit = 0;
 	memset(session_key, 0, sizeof(session_key));
 	memset(&M, 0, sizeof(M));
+	fz_now = 1000;
+	fz_clock_fail = 0;
 	rng_state = 0x9e3779b97f4a7c15ull;
 	rng_skip = rng_fail = 0;
-	strcpy(status_text, "requests=1;stack=na;fw=rw612-tfm-0.2.1");
+	strcpy(status_text, "requests=1;stack=na;clk=ref;fw=rw612-tfm-0.2.2");
 
 	while (i + 3 <= size && ops++ < 24) {
-		uint8_t op = data[i] & 7;
+		uint8_t op = data[i] & 7, sel = data[i] >> 3;
 		size_t n = (size_t)data[i + 1] | (size_t)data[i + 2] << 8;
 		const uint8_t *p = data + i + 3;
 
@@ -452,11 +546,20 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		switch (op) {
 		case 0: op_raw(p, n); break;
 		case 1: op_kem_init(p, n); break;
-		case 2: op_kem_fin(p, n); break;
+		case 2: op_kem_fin(sel, p, n); break;
 		case 3: op_hb(p, n); break;
 		case 4: op_chal(p, n); break;
 		case 5: op_session(); break;
-		case 6: rng_skip = n ? p[0] & 3 : 0; rng_fail = n > 1 ? p[1] & 3 : 1; break;
+		case 6: {
+			uint64_t d = 0;
+
+			for (size_t j = 0; j < 4 && j < n; j++) d |= (uint64_t)p[j] << (8 * j);
+			if (sel == 1) fz_now += d;
+			else if (sel == 2) fz_clock_fail = n ? p[0] & 1 : 1;
+			else if (sel == 3) fz_now -= d < fz_now ? d : fz_now;
+			else { rng_skip = n ? p[0] & 3 : 0; rng_fail = n > 1 ? p[1] & 3 : 1; }
+			break;
+		}
 		case 7: {
 			/* the partition's status is never empty ("requests=..."), so neither is this one */
 			size_t l = n < sizeof(status_text) - 1 ? n : sizeof(status_text) - 1;

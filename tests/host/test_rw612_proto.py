@@ -1,10 +1,12 @@
 """The RW612 prover's protocol code (endpoints/rw612/prover/src/aegis_proto.c, the same C file as in the firmware),
 built for the PC and run against the gateway's own code (fleet.py): attestation with device-key trust, ML-KEM
 provisioning with the credential checks, KMAC256 heartbeats, the session query, and the refusals (a changed
-image, a wrong pinned key, a credential from another key, for another exchange or for another endpoint).
+image, a wrong pinned key, a credential from another key, for another exchange or for another endpoint), and the
+session's end on the endpoint's own clock (docs/endpoint-expiry.md), which the tests move through a file.
 Needs gcc and the mldsa-native / mlkem-native v2.0.0 trees (MLDSA_NATIVE_DIR, MLKEM_NATIVE_DIR)."""
 import hashlib
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -62,6 +64,7 @@ class Rw612Proto(unittest.TestCase):
             f.write(os.urandom(150001))   # not a multiple of 64: exercises the SHA-256 padding
         cls.seed, cls.root = os.urandom(32).hex(), os.urandom(32).hex()
         cls.procs = []
+        cls.clock = os.path.join(cls.d, "clock")       # seconds added to the endpoint's session clock, or "fail"
         cls.port, cls.fp = cls.start(cls.seed)
         with socket.create_connection(("127.0.0.1", cls.port), timeout=5) as s:
             s.sendall(b"PQKEY\n")
@@ -77,7 +80,7 @@ class Rw612Proto(unittest.TestCase):
     def start(cls, seed):
         port = free_port()
         pr = subprocess.Popen([cls.exe, str(port), seed, cls.root, os.path.join(cls.d, "gw.pub"), cls.image],
-                              stdout=subprocess.PIPE, text=True)
+                              stdout=subprocess.PIPE, text=True, env=dict(os.environ, AEGIS_TEST_CLOCK=cls.clock))
         cls.procs.append(pr)
         line = pr.stdout.readline().split()
         assert line[0] == "READY", line
@@ -88,6 +91,13 @@ class Rw612Proto(unittest.TestCase):
         for pr in cls.procs:
             pr.kill()
             pr.wait()
+
+    def set_clock(self, text):
+        with open(self.clock, "w") as f:
+            f.write(str(text))
+
+    def ask(self, line):
+        return fleet._exchange("127.0.0.1", self.port, line, 10).strip()
 
     def ep(self, **kw):
         with open(self.image, "rb") as f:
@@ -140,11 +150,15 @@ class Rw612Proto(unittest.TestCase):
         for n in (1, 2, 3):
             status, ctr = fleet.heartbeat(self.ep(), r["session_key"], timeout=10)
             self.assertEqual(ctr, n)
-            self.assertTrue(status.startswith(b"uptime_s=") and status.endswith(b";fw=rw612-0.1.0"), status)
+            # the platform's text, then the seconds the session has left: an hour and a sixteenth, less a second or two
+            m = re.fullmatch(rb"uptime_s=\d+;link=1;fw=rw612-0\.1\.0;ttl=(\d+)", status)
+            self.assertTrue(m and 3820 <= int(m.group(1)) <= 3825, status)
         with self.assertRaises(ValueError):
             fleet.heartbeat(self.ep(heartbeat_mac="sha3-256"), r["session_key"], timeout=10)
 
-    def kem_raw(self, sign_key, bind_ct=True, pk=None):
+    def kem_raw(self, sign_key, bind_ct=True, pk=None, validity=None, edit=None):
+        """Run the exchange by hand to send a credential the gateway code would never make. validity replaces the
+        "issued" and "expires" fields; edit changes the signed body's text."""
         nonce = os.urandom(32)
         p = fleet._exchange("127.0.0.1", self.port, "PQKEMINIT " + nonce.hex(), 10).split()
         ek = bytes.fromhex(p[2])
@@ -153,8 +167,12 @@ class Rw612Proto(unittest.TestCase):
         body = {"v": 1, "type": "credential", "endpoint": "frdm-rw612",
                 "endpoint_pq_pk_sha256": hashlib.sha256(pk or self.pk).hexdigest(),
                 "kem_ct_sha3_256": fleet._sha3(ct if bind_ct else b"other").hex(),
-                "kem_ek_sha3_256": fleet._sha3(ek).hex(), "expires": 4102444800}
-        cred = wire.canonical(body) + b"\n" + mldsa.sign(sign_key, fleet.CRED_LABEL, wire.canonical(body))
+                "kem_ek_sha3_256": fleet._sha3(ek).hex()}
+        body.update({"issued": 4102441200, "expires": 4102444800} if validity is None else validity)
+        text = wire.canonical(body)
+        if edit:
+            text = edit(text)
+        cred = text + b"\n" + mldsa.sign(sign_key, fleet.CRED_LABEL, text)
         return fleet._exchange("127.0.0.1", self.port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), 10)
 
     def test_6_forged_credentials_refused_and_session_kept(self):
@@ -181,6 +199,76 @@ class Rw612Proto(unittest.TestCase):
         self.assertIn("ERR cred other-key", fleet._exchange("127.0.0.1", self.port, rec["fin"], 10))
         sid, _ = fleet.query_session(self.ep())
         self.assertEqual(sid, r["session_id"], "a refused exchange must not replace the session")
+
+    def test_8_session_ends_on_the_endpoints_clock(self):
+        """The credential lasts an hour (fleet.CRED_LIFETIME_S); the endpoint ends the session 3825 s (an hour and a
+        sixteenth) after the PQKEMFIN on its own clock, whether or not the gateway is still there."""
+        self.set_clock(0)
+        ep = self.ep()
+        r = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20)
+        self.assertEqual(r["body"]["expires"] - r["body"]["issued"], 3600)
+        fleet.heartbeat(ep, r["session_key"], timeout=10)
+        self.set_clock(3600 + 225 - 4)                      # before the end: still answered, a few seconds left
+        status, ctr = fleet.heartbeat(ep, r["session_key"], timeout=10)
+        self.assertEqual(ctr, 2)
+        self.assertTrue(1 <= int(status.rsplit(b";ttl=", 1)[1]) <= 4, status)
+        self.assertEqual(fleet.query_session(ep)[0], r["session_id"])
+        self.set_clock(3600 + 225)                          # the end: refused, and the session is gone
+        with self.assertRaises(ValueError):
+            fleet.heartbeat(ep, r["session_key"], timeout=10)
+        self.assertEqual(self.ask("PQHB " + "00" * 32), "ERR pq expired")
+        self.assertEqual(self.ask("PQSESSION"), "ERR pq expired")
+        self.set_clock(0)                                   # it does not come back with the clock
+        self.assertEqual(self.ask("PQHB " + "00" * 32), "ERR pq expired")
+        self.set_clock(3600 + 225)
+        self.assertTrue(fleet.attest(ep, None, self.d, timeout=10)["admitted"])   # attestation needs no session
+        r2 = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20)        # what the gateway does next
+        status, ctr = fleet.heartbeat(ep, r2["session_key"], timeout=10)
+        self.assertEqual(ctr, 1)
+        self.assertNotEqual(r2["session_id"], r["session_id"])
+
+    def test_9_no_session_without_a_clock(self):
+        """A clock that fails or runs backwards cannot measure a lifetime: the session ends, and none starts."""
+        self.set_clock(4000)
+        ep = self.ep()
+        r = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20)
+        fleet.heartbeat(ep, r["session_key"], timeout=10)
+        self.set_clock(3990)                                # ten seconds back
+        self.assertEqual(self.ask("PQHB " + "00" * 32), "ERR pq expired")
+        r = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20)
+        self.set_clock("fail")
+        self.assertEqual(self.ask("PQSESSION"), "ERR pq expired")
+        with self.assertRaises(ValueError) as e:
+            fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20)
+        self.assertIn("ERR clock", str(e.exception))
+        self.assertTrue(fleet.attest(ep, None, self.d, timeout=10)["admitted"])
+        self.set_clock(3990)
+        r = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20)
+        self.assertEqual(fleet.heartbeat(ep, r["session_key"], timeout=10)[1], 1)
+
+    def test_A_credential_must_carry_a_lifetime(self):
+        """ "issued" and "expires" once each, 1 to 10 digits, a lifetime of 1 s to a day; anything else is refused and
+        the session in place is kept. The shortest lifetime ends after a second."""
+        self.set_clock(8000)
+        ep = self.ep()
+        r = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20)
+        t = 4102444800
+        for validity in ({"expires": t}, {"issued": t}, {}, {"issued": t, "expires": t}, {"issued": t, "expires": t - 1},
+                         {"issued": t, "expires": t + 86401}, {"issued": str(t), "expires": t + 60},
+                         {"issued": t, "expires": float(t + 60)}, {"issued": -5, "expires": 60},
+                         {"issued": t * 10, "expires": t * 10 + 60},
+                         {"issued": t, "expires": t + 60, "x": {"expires": t + 60}}):
+            self.assertEqual(self.kem_raw(self.gw_sk, validity=validity).strip(), "ERR cred validity", validity)
+        # the same field twice in the signed text
+        twice = lambda text: text[:-1] + b',"expires":%d}' % (t + 3600)  # noqa: E731
+        self.assertEqual(self.kem_raw(self.gw_sk, edit=twice).strip(), "ERR cred validity")
+        self.assertEqual(fleet.query_session(ep)[0], r["session_id"], "a refused credential must not replace the session")
+        fleet.heartbeat(ep, r["session_key"], timeout=10)
+        self.assertTrue(self.kem_raw(self.gw_sk, validity={"issued": t, "expires": t + 86400}).startswith("PQKEMOK "))
+        self.assertTrue(self.kem_raw(self.gw_sk, validity={"issued": 0, "expires": 1}).startswith("PQKEMOK "))
+        self.assertTrue(self.ask("PQSESSION").startswith("PQSESSION "))
+        self.set_clock(8001)
+        self.assertEqual(self.ask("PQSESSION"), "ERR pq expired")
 
     def test_7_malformed_requests(self):
         for line in ("", "PQCHAL zz", "PQCHAL " + "00" * 31, "PQCHAL " + "0" * 63, "HELLO", "PQKEY extra",
@@ -291,7 +379,7 @@ class Rw612TfmProfile(unittest.TestCase):
         r = fleet.provision(self.ep(self.port_tfm), self.d, self.gw_sk, "gid", {}, timeout=20)
         status, ctr = fleet.heartbeat(self.ep(self.port_tfm), r["session_key"], timeout=10)
         self.assertEqual(ctr, 1)
-        self.assertEqual(status, b"requests=0;stack=na;fw=rw612-tfm-0.2.1")
+        self.assertRegex(status, rb"^requests=0;stack=na;fw=rw612-tfm-0\.2\.2;ttl=382[345]$")
 
 
 if __name__ == "__main__":

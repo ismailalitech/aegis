@@ -9,6 +9,11 @@ The same line protocol as the STM32 prover, TCP 7444, one request per connection
   PQHB <nonce>             -> PQHB <status> <counter> <tag> END           KMAC256 over the session
   PQSESSION                -> PQSESSION <session id> <credential hash> END
 
+A session ends on this endpoint's own clock (docs/endpoint-expiry.md): the credential's lifetime ("expires" minus
+"issued", as signed by the gateway) plus a sixteenth after the accepted PQKEMFIN, the session key is dropped; PQHB and
+PQSESSION then answer "ERR pq expired" until the gateway provisions again. The clock is the kernel's CLOCK_BOOTTIME
+(monotonic, counting suspended time; CLOCK_MONOTONIC where it is missing): software trust, like the key.
+
 What this endpoint is, and is not: the Zynq-7000 has no PUF, and its hardware keys are in eFUSEs that can be written
 once, which this project does not touch. So the ML-DSA-65 key is generated at first start and kept in a file
 (readable by root), and the measurements are SHA-256 hashes of the boot files and of this program, computed by the
@@ -37,7 +42,7 @@ import kmac  # noqa: E402
 import mldsa  # noqa: E402
 import mlkem  # noqa: E402
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 PROFILE = "aegis-linux-software-v1"
 QUOTE_LABEL = b"aegis-endpoint-quote-v1"
 KEM_INIT_LABEL = b"aegis-kem-init-v1"
@@ -46,6 +51,12 @@ CRED_LABEL = b"aegis-credential-v1"
 C_PROFILE, C_SWC, C_CHALLENGE, C_INSTANCE = -75000, -75006, -75008, -75009
 SWC_TYPE, SWC_VALUE, SWC_VERSION, SWC_SIGNER, SWC_DESC = 1, 2, 4, 5, 6
 T0 = time.monotonic()
+CRED_LIFETIME_MAX = 86400     # seconds; as the device provers (aegis_proto.h)
+
+
+def monotonic_s():
+    """Whole seconds from a clock that only advances and that setting the date does not move."""
+    return int(time.clock_gettime(getattr(time, "CLOCK_BOOTTIME", time.CLOCK_MONOTONIC)))
 
 
 def sha3(*parts):
@@ -94,10 +105,30 @@ class Prover:
         self.hb_mac = a.heartbeat_mac
         self.instance = b"\x02" + hashlib.sha256(self.pk).digest()   # 0x02: not a PSA IAK-based instance ID
         self.kem = None            # (nonce, decapsulation key) between PQKEMINIT and PQKEMFIN
-        self.session = None        # (session key, credential)
+        self.session = None        # (session key, credential, clock at PQKEMFIN, seconds it may live)
+        self.expired = False       # the last session ended by the clock: "ERR pq expired" until the next one
+        self.clock = monotonic_s   # the tests replace it
+        self.now = None            # this request's clock reading; None: the clock failed
         self.hb = 0
 
+    def sweep(self):
+        """Read the clock once per request and end a session that has outlived its credential, or whose age the clock
+        cannot give (it failed, or shows less than at the session's start)."""
+        try:
+            self.now = int(self.clock())
+        except Exception:  # noqa: BLE001
+            self.now = None
+        if self.session:
+            _, _, start, limit = self.session
+            if self.now is None or self.now < start or self.now - start >= limit:
+                self.session = None
+                self.expired = True
+
+    def no_session(self):
+        return "ERR pq expired" if self.expired else "ERR pq no-session"
+
     def handle(self, line):
+        self.sweep()               # before anything else, whatever the request
         p = line.split()
         if not p:
             return "ERR empty"
@@ -132,14 +163,15 @@ class Prover:
                 return self.kem_finish(bytes.fromhex(p[1]), bytes.fromhex(p[2]))
             if cmd == "PQHB" and len(p) == 2:
                 if not self.session:
-                    return "ERR pq no-session"
+                    return self.no_session()
                 nonce = bytes.fromhex(p[1])
                 if len(nonce) != 32:
                     return "ERR bad-request"
                 self.hb += 1
                 ctr = self.hb.to_bytes(8, "little")
-                status = ("uptime_s=%d;link=1;fw=linux-%s" % (time.monotonic() - T0, VERSION)).encode()
-                key = self.session[0]
+                key, _, start, limit = self.session
+                status = ("uptime_s=%d;link=1;fw=linux-%s;ttl=%d" % (time.monotonic() - T0, VERSION,
+                                                                    limit - (self.now - start))).encode()
                 if self.hb_mac == "kmac256":
                     tag = kmac.kmac256(key, nonce + ctr + status, 32, b"aegis-hb-v2")
                 else:
@@ -147,8 +179,8 @@ class Prover:
                 return "PQHB %s %s %s END" % (status.hex(), ctr.hex(), tag.hex())
             if cmd == "PQSESSION" and len(p) == 1:
                 if not self.session:
-                    return "ERR pq no-session"
-                key, cred = self.session
+                    return self.no_session()
+                key, cred = self.session[:2]
                 return "PQSESSION %s %s END" % (sha3(b"aegis-session-id-v1", key).hex(), sha3(cred).hex())
         except ValueError:
             return "ERR bad-request"
@@ -156,10 +188,12 @@ class Prover:
 
     def kem_finish(self, ct, cred):
         """Accept the gateway's credential only if it is signed by the pinned gateway key, names this endpoint's key and
-        this exchange's ciphertext, and has not expired; only then replace the session (an aborted or forged exchange
-        leaves an established session alone)."""
+        this exchange's ciphertext, carries a lifetime, and has not expired; only then replace the session (an aborted
+        or forged exchange leaves an established session alone)."""
         if not self.kem:
             return "ERR cred no-exchange"
+        if self.now is None:
+            return "ERR clock"      # a session's end could not be measured: none starts
         nonce, dk, ek = self.kem
         self.kem = None
         body, sep, sig = cred.partition(b"\n")
@@ -169,17 +203,25 @@ class Prover:
             b = json.loads(body)
         except ValueError:
             return "ERR cred format"
+        if not isinstance(b, dict):
+            return "ERR cred format"
         if b.get("kem_ct_sha3_256") != sha3(ct).hex():
             return "ERR cred other-exchange"
         if b.get("endpoint_pq_pk_sha256") != hashlib.sha256(self.pk).hexdigest():
             return "ERR cred other-endpoint"
         if b.get("kem_ek_sha3_256") != sha3(ek).hex():      # this exchange's key, not an earlier one
             return "ERR cred other-key"
-        if time.time() > 1.7e9 and b.get("expires", 0) < time.time():    # only with a set clock (no RTC battery)
+        issued, expires = b.get("issued"), b.get("expires")
+        if type(issued) is not int or type(expires) is not int or not 0 < expires - issued <= CRED_LIFETIME_MAX \
+                or issued < 0:
+            return "ERR cred validity"
+        if time.time() > 1.7e9 and expires < time.time():    # only with a set clock (no RTC battery)
             return "ERR cred expired"
         k = mlkem.decaps(ct, dk)
         tag = sha3(b"aegis-confirm-v1", k, nonce, sha3(ct), sha3(cred))
-        self.session = (sha3(b"aegis-session-v1", k, nonce, sha3(ct)), cred)
+        lifetime = expires - issued
+        self.session = (sha3(b"aegis-session-v1", k, nonce, sha3(ct)), cred, self.now, lifetime + lifetime // 16)
+        self.expired = False
         self.hb = 0
         return "PQKEMOK %s END" % tag.hex()
 

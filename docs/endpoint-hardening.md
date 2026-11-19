@@ -82,4 +82,6 @@ To deploy only change 1, use `tfm-s-v2.3.0-aegis-pq-hb-hedged.hex` (SPE `3bcce95
 
 ## Not done
 
-- **Credential expiry on the endpoint.** The gateway enforces it; the endpoint has no trusted clock to do the same.
+- **Credential expiry on the endpoint.** The gateway enforces it. Since 19 November 2026 the endpoints' secure sides
+  have a clock of their own and end the session themselves: built and tested on the PC, not yet on the boards
+  ([endpoint-expiry.md](endpoint-expiry.md)).

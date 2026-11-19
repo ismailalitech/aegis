@@ -29,10 +29,12 @@ typedef struct {
 	uint32_t millis;
 } TEE_Time;
 typedef struct stub_session *TEE_TASessionHandle;
+typedef struct stub_propset *TEE_PropSetHandle;
 
 #define TEE_HANDLE_NULL NULL
 #define TEE_NUM_PARAMS 4
 #define TEE_TIMEOUT_INFINITE 0xffffffffu
+#define TEE_PROPSET_TEE_IMPLEMENTATION ((TEE_PropSetHandle)0xFFFFFFFD)
 
 #define TEE_SUCCESS               0x00000000u
 #define TEE_ERROR_GENERIC         0xffff0000u
@@ -50,6 +52,7 @@ typedef struct stub_session *TEE_TASessionHandle;
 
 void TEE_GenerateRandom(void *buf, size_t n);
 void TEE_GetSystemTime(TEE_Time *t);
+TEE_Result TEE_GetPropertyAsU32(TEE_PropSetHandle set, const char *name, uint32_t *value);
 void TEE_MemFill(void *buf, uint32_t x, size_t n);
 TEE_Result TEE_OpenTASession(const TEE_UUID *dest, uint32_t timeout, uint32_t pt, TEE_Param params[TEE_NUM_PARAMS],
 			     TEE_TASessionHandle *sess, uint32_t *origin);

@@ -52,8 +52,21 @@ static uint32_t dev_uptime(void)
 	return (uint32_t)(k_uptime_get() / 1000);
 }
 
+/* The session clock: Zephyr's uptime, 64 bits of milliseconds counted by the kernel from the RW612's OS timer. This
+ * prover is one image with no secure side, so the clock is as trusted as the rest of the firmware ("device-key"). */
+static int dev_monotonic(uint64_t *now)
+{
+	int64_t ms = k_uptime_get();
+
+	if (ms < 0) {
+		return -1;
+	}
+	*now = (uint64_t)ms / 1000u;
+	return 0;
+}
+
 static const struct aegis_proto_platform platform = {
-	.random = dev_random, .measure = dev_measure, .uptime_s = dev_uptime};
+	.random = dev_random, .measure = dev_measure, .uptime_s = dev_uptime, .monotonic_s = dev_monotonic};
 
 static K_SEM_DEFINE(got_ip, 0, 1);
 static struct net_mgmt_event_callback mgmt_cb;

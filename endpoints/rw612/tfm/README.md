@@ -103,3 +103,15 @@ At initialisation the partition fills its own stack (`tfm_sp_aegis_pq_stack`, 32
 pattern, and the heartbeat status reports the high-water mark: `stack=19368/32768` on the board after the key
 derivation in ELS, quotes, ML-KEM exchanges and heartbeats (59 %, 13 KB to spare). TF-M sets the stack limit register
 to the stack's base, so an overflow would fault rather than write into another partition.
+
+## The session's end (0.2.2, built; not yet on the board)
+
+The partition ends a session itself, the credential's lifetime plus a sixteenth after the `PQKEMFIN`, on the secure
+SysTick (`docs/endpoint-expiry.md`). The non-secure image is unchanged, byte for byte, so only `SPE` changes in the
+gateway policy. The heartbeat status becomes `requests=..;stack=../32768;clk=ref;fw=rw612-tfm-0.2.2;ttl=<seconds
+left>`:
+- `clk=ref`: the SysTick function clock (main clock / 256), the intended one; `clk=cpu`: the fallback to the processor
+  clock, which a long flash erase can slow; `clk=none`: no clock, and then no session starts (`ERR clock`).
+- `ttl` must fall by the gateway's cycle time from one heartbeat to the next.
+
+The secure console prints the choice at start, for example `[Aegis] session clock: ref, 1015625 Hz` (260 MHz / 256).

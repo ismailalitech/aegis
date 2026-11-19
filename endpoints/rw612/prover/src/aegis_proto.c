@@ -7,8 +7,11 @@
  *   PQCHAL <32-byte hex>     -> PQTOKEN <len> <claims> <len> <sig> END     CBOR claims, ML-DSA-65 signature
  *   PQKEMINIT <nonce>        -> PQKEMEK <len> <ek> <len> <sig> END          ML-KEM-768 key for this exchange, signed
  *   PQKEMFIN <ct> <cred>     -> PQKEMOK <tag> END | ERR cred <reason>       credential checked, then the session
- *   PQHB <nonce>             -> PQHB <status> <counter> <tag> END           KMAC256 over the session
+ *   PQHB <nonce>             -> PQHB <status> <counter> <tag> END           KMAC256 over the session; the status is the
+ *                                                                           platform's text plus ";ttl=<seconds left>"
  *   PQSESSION                -> PQSESSION <session id> <credential hash> END
+ * PQHB and PQSESSION answer "ERR pq no-session" before the first session and after a restart, and "ERR pq expired"
+ * once a session has ended on this side's clock, until the next one starts.
  *
  * The constructions are the STM32 partition's (endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c):
  *   quote signature  ML-DSA-65 (pure, empty context, hedged) over "aegis-endpoint-quote-v1\0" || claims
@@ -16,7 +19,12 @@
  *                    fresh = 32 bytes from the platform RNG
  *   credential       "<canonical JSON>\n<ML-DSA-65 signature by the pinned gateway key over
  *                    "aegis-credential-v1\0" || JSON>"; the JSON must name SHA3-256(ct), SHA3-256(ek) of the pending
- *                    exchange and SHA-256(this pk)
+ *                    exchange and SHA-256(this pk), and carry "issued" and "expires" (seconds), whose difference
+ *                    is the credential's lifetime
+ *   session end      every request first reads the platform's monotonic clock (aegis_proto.h); a session older than
+ *                    its lifetime plus a sixteenth, or a clock that fails or runs backwards, wipes the session key
+ *                    (docs/endpoint-expiry.md). The start is this side's clock at the accepted PQKEMFIN: the
+ *                    credential's times are only subtracted, never compared with a clock.
  *   session          SHA3-256("aegis-session-v1" || K || nonce || SHA3-256(ct))
  *   confirm tag      SHA3-256("aegis-confirm-v1" || K || nonce || SHA3-256(ct) || SHA3-256(credential))
  *   heartbeat        KMAC256(session, nonce || counter || status, 256, "aegis-hb-v2")
@@ -40,6 +48,7 @@
 #define SIG_LEN     MLDSA_BYTES(65)
 #define CRED_MAX    6144u
 #define CLAIMS_MAX  AEGIS_CLAIMS_MAX
+#define AEGIS_STATUS_MAX 96u /* the platform's status text, with its terminator */
 
 /* PSA claim numbers (common/psa_token.py), so the gateway's measurement check applies unchanged */
 #define C_PROFILE   (-75000)
@@ -65,6 +74,10 @@ static uint32_t kem_counter;
 static uint8_t cred[CRED_MAX];
 static uint8_t session_key[32], cred_hash[32];
 static int session_ready;
+static int session_expired;                 /* the last session ended by the clock: "ERR pq expired" until the next */
+static uint64_t session_start, session_limit; /* the clock at PQKEMFIN, and how many seconds the session may live */
+static uint64_t now_s;                      /* this request's clock reading */
+static int clock_ok;
 static uint64_t hb_counter;
 static const struct aegis_proto_platform *plat;
 
@@ -347,15 +360,82 @@ static int names(const uint8_t *body, size_t n, const char *key, const uint8_t v
 	return 0;
 }
 
+/* The value of "<key>":<1 to 10 decimal digits> in the body, which must hold that key exactly once, the digits
+ * followed by ',' or '}' (canonical JSON). Returns 0 if not so. */
+static int number_of(const uint8_t *body, size_t n, const char *key, uint64_t *v)
+{
+	char want[24];
+	size_t k = strlen(key), w = k + 3, at = 0, d;
+	int found = 0;
+
+	if (w > sizeof(want)) return 0;
+	want[0] = '"';
+	memcpy(want + 1, key, k);
+	memcpy(want + 1 + k, "\":", 2);
+	for (size_t i = 0; i + w <= n; i++) {
+		if (memcmp(body + i, want, w) == 0) {
+			if (found) return 0;
+			found = 1;
+			at = i + w;
+		}
+	}
+	if (!found) return 0;
+	*v = 0;
+	for (d = 0; at + d < n && body[at + d] >= '0' && body[at + d] <= '9'; d++) {
+		if (d == 10) return 0;
+		*v = *v * 10u + (uint64_t)(body[at + d] - '0');
+	}
+	return d >= 1 && at + d < n && (body[at + d] == ',' || body[at + d] == '}');
+}
+
+/* The credential's lifetime in seconds: "expires" - "issued", from 1 to AEGIS_CRED_LIFETIME_MAX. Returns 0 if the
+ * body does not carry one. The two times are the gateway's; this side has no wall clock to compare them with. */
+static uint32_t cred_lifetime(const uint8_t *body, size_t n)
+{
+	uint64_t issued, expires;
+
+	if (!number_of(body, n, "issued", &issued) || !number_of(body, n, "expires", &expires)) return 0;
+	if (expires <= issued || expires - issued > AEGIS_CRED_LIFETIME_MAX) return 0;
+	return (uint32_t)(expires - issued);
+}
+
+static void session_end(void)
+{
+	wipe(session_key, sizeof(session_key));
+	wipe(cred_hash, sizeof(cred_hash));
+	session_ready = 0;
+	session_expired = 1;
+}
+
+/* Read the clock once per request, and end a session that has outlived its credential. A clock that fails or shows
+ * less than at the session's start cannot measure the lifetime: the session ends too. */
+static void session_sweep(void)
+{
+	now_s = 0;
+	clock_ok = plat->monotonic_s != NULL && plat->monotonic_s(&now_s) == 0;
+	if (session_ready && (!clock_ok || now_s < session_start || now_s - session_start >= session_limit)) {
+		session_end();
+	}
+}
+
+static int no_session(char *out, size_t cap)
+{
+	return snprintf(out, cap, "%s", session_expired ? "ERR pq expired" : "ERR pq no-session");
+}
+
 static int kem_finish(const char *ct_hex, const char *cred_hex, char *out, size_t cap)
 {
 	uint8_t k[32], h_ct[32], tag[32];
 	long ct_len, cred_len;
 	size_t body_len = 0;
+	uint32_t lifetime;
 	struct sha3 h;
 
 	if (!kem_pending) {
 		return snprintf(out, cap, "ERR cred no-exchange");
+	}
+	if (!clock_ok) {
+		return snprintf(out, cap, "ERR clock"); /* a session's end could not be measured: none starts */
 	}
 	ct_len = get_hex(ct_hex, kem_ct, sizeof(kem_ct));
 	cred_len = get_hex(cred_hex, cred, sizeof(cred));
@@ -389,6 +469,11 @@ static int kem_finish(const char *ct_hex, const char *cred_hex, char *out, size_
 			return snprintf(out, cap, "ERR cred other-key");
 		}
 	}
+	lifetime = cred_lifetime(cred, body_len);
+	if (lifetime == 0) {
+		wipe(kem_dk, sizeof(kem_dk));
+		return snprintf(out, cap, "ERR cred validity");
+	}
 	if (aegis_mlkem_dec(k, kem_ct, kem_dk) != 0) {
 		wipe(kem_dk, sizeof(kem_dk));
 		return snprintf(out, cap, "ERR kem");
@@ -410,6 +495,9 @@ static int kem_finish(const char *ct_hex, const char *cred_hex, char *out, size_
 	sha3_final(&h, tag);
 	wipe(k, sizeof(k));
 	session_ready = 1;
+	session_expired = 0;
+	session_start = now_s;
+	session_limit = AEGIS_SESSION_LIMIT(lifetime);
 	hb_counter = 0;
 	memcpy(out, "PQKEMOK ", 8);
 	memcpy(put_hex(out + 8, tag, 32), " END", 5);
@@ -422,6 +510,7 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 	int n = 0;
 	char *o;
 
+	session_sweep(); /* before anything else, whatever the request */
 	for (char *t = strtok_r(line, " \t\r\n", &save); t; t = strtok_r(NULL, " \t\r\n", &save)) {
 		if (n == 4) return snprintf(out, cap, "ERR bad-request");
 		tok[n++] = t;
@@ -500,21 +589,23 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 	}
 	if (!strcmp(tok[0], "PQHB") && n == 2) {
 		uint8_t nonce[32], ctr[8], tag[32];
-		char status[96];
+		char status[AEGIS_STATUS_MAX + sizeof(";ttl=4294967295")];
 		struct aegis_kmac km;
 		int sl;
 
-		if (!session_ready) return snprintf(out, cap, "ERR pq no-session");
+		if (!session_ready) return no_session(out, cap);
 		if (get_hex(tok[1], nonce, 32) != 32) return snprintf(out, cap, "ERR bad-request");
-		hb_counter++;
-		for (int i = 0; i < 8; i++) ctr[i] = (uint8_t)(hb_counter >> (8 * i));
 		if (plat->status) {
-			sl = plat->status(status, sizeof(status));
+			sl = plat->status(status, AEGIS_STATUS_MAX);
 		} else {
-			sl = snprintf(status, sizeof(status), "uptime_s=%u;link=1;fw=%s-%s", (unsigned)plat->uptime_s(),
+			sl = snprintf(status, AEGIS_STATUS_MAX, "uptime_s=%u;link=1;fw=%s-%s", (unsigned)plat->uptime_s(),
 				      AEGIS_DEVICE_FW, AEGIS_DEVICE_VERSION);
 		}
-		if (sl < 0 || (size_t)sl >= sizeof(status)) return snprintf(out, cap, "ERR status");
+		if (sl < 0 || (size_t)sl >= AEGIS_STATUS_MAX) return snprintf(out, cap, "ERR status");
+		/* the seconds this session has left on this side's clock, under the MAC like the rest */
+		sl += sprintf(status + sl, ";ttl=%u", (unsigned)(session_limit - (now_s - session_start)));
+		hb_counter++; /* only for a heartbeat that is answered */
+		for (int i = 0; i < 8; i++) ctr[i] = (uint8_t)(hb_counter >> (8 * i));
 		aegis_kmac256_init(&km, session_key, 32, (const uint8_t *)"aegis-hb-v2", 11);
 		aegis_kmac256_update(&km, nonce, 32);
 		aegis_kmac256_update(&km, ctr, 8);
@@ -532,7 +623,7 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		uint8_t id[32];
 		struct sha3 h;
 
-		if (!session_ready) return snprintf(out, cap, "ERR pq no-session");
+		if (!session_ready) return no_session(out, cap);
 		sha3_init(&h);
 		sha3_update(&h, "aegis-session-id-v1", 19);
 		sha3_update(&h, session_key, 32);

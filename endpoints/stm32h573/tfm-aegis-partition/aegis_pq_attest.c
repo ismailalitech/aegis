@@ -36,20 +36,34 @@
  *                      otherwise PSA_ERROR_INVALID_SIGNATURE and no session (a refused exchange leaves an
  *                      established session alone). A KEM_INIT with valid arguments cancels the pending
  *                      exchange first, so a refused one leaves nothing pending.
+ *                      The body must also carry "issued" and "expires" (seconds, each once, 1 to 10 digits): their
+ *                      difference, from 1 to 86400, is the credential's lifetime; otherwise
+ *                      PSA_ERROR_NOT_PERMITTED. Without a session clock (below): PSA_ERROR_HARDWARE_FAILURE, the
+ *                      exchange stays pending.
  *   type 5 SESSION:    out[0] <- SHA3-256("aegis-session-id-v1" || session) || SHA3-256(credential)
  *   type 6 HEARTBEAT:  in[0] = 32-byte gateway nonce, in[1] = up to 128 bytes of NS status data, which must not
- *                      contain "sstack=" (that key is the partition's)
+ *                      contain "sstack=" or "ttl=" (those keys are the partition's)
  *                      status = data || ";sstack=<used>/<size>" (the high-water mark of this partition's stack, in
  *                               bytes; ";sstack=na" if the stack could not be filled at initialisation)
+ *                               || ";ttl=<seconds the session has left on this side's clock>"
  *                      out[0] <- counter (8 bytes LE, increases every call)
  *                                || KMAC256(K = session, X = nonce || counter || status, L = 256,
  *                                           S = "aegis-hb-v2")   (NIST SP 800-185, aegis_kmac.c)
- *                      out[1] <- status (at most HB_STATUS_MAX = 147 bytes; a smaller nonzero out[1] is refused with
- *                                PSA_ERROR_BUFFER_TOO_SMALL). The non-secure side shows this text, as MACed.
+ *                      out[1] <- status (at most HB_STATUS_MAX = 162 bytes; a nonzero out[1] smaller than the
+ *                                status is refused with PSA_ERROR_BUFFER_TOO_SMALL). The non-secure side shows this
+ *                                text, as MACed.
  *                      Without out[1] (out_size[1] == 0: provers up to 0.5.0) status = data, as before.
  *                      AEGIS_HB_KMAC=0 builds the first version instead:
  *                                SHA3-256("aegis-hb-v1" || session || nonce || counter || status)
  *                      A light, symmetric proof of the session between full attestations.
+ *
+ * The session ends on this side's clock (docs/endpoint-expiry.md). Every message first reads the session clock; a
+ * session older than its credential's lifetime plus a sixteenth is wiped, as is one whose age the clock can no
+ * longer give. SESSION and HEARTBEAT answer PSA_ERROR_BAD_STATE before the first session and after a reset, and
+ * PSA_ERROR_DOES_NOT_EXIST once a session has ended that way, until the next one starts.
+ * The session clock is the RTC, clocked by the LSI (the internal 32 kHz oscillator) and run as a 32-bit binary
+ * counter at 250 Hz ("the session clock" below): it keeps counting whatever the non-secure image does to the
+ * system clock or to the power mode, and the partition makes it and its oscillator secure.
  * The Non-Secure world can ask for quotes and run provisioning but never sees the seed, the
  * secret keys, K or the session key.
  */
@@ -112,8 +126,28 @@ extern uint8_t tfm_sp_aegis_pq_stack[];
 #define STACK_FILL          0xA5u
 #define HB_DATA_MAX         128u
 #define HB_SSTACK_MAX       (sizeof(";sstack=65535/65535") - 1u)
-#define HB_STATUS_MAX       (HB_DATA_MAX + HB_SSTACK_MAX)
+#define HB_TTL_MAX          (sizeof(";ttl=4294967295") - 1u)
+#define HB_STATUS_MAX       (HB_DATA_MAX + HB_SSTACK_MAX + HB_TTL_MAX)
 static int stack_filled;
+
+/* The session's end (docs/endpoint-expiry.md): the credential's lifetime, "expires" - "issued", at most a day, plus a
+ * sixteenth: the LSI is an RC oscillator, good to a few per cent, and the session must not end here before the
+ * gateway's own expiry. */
+#define CRED_LIFETIME_MAX   86400u
+#define SCLK_HZ             250u /* the session clock's counts per second: LSI 32 kHz / 128 */
+#define SCLK_PREDIV_A       127u
+/* polls before a flag is given up: far beyond the 2 RTC clock periods a flag takes, or the 4 ms of one count */
+#if !defined(SCLK_WAIT)
+#define SCLK_WAIT           4000000u
+#endif
+/* PC tests (tests/fuzz/stm32): lets the stand-in registers react between two accesses */
+#if !defined(AEGIS_TEST_HW_STEP)
+#define AEGIS_TEST_HW_STEP() ((void)0)
+#endif
+static int sclk_ok;          /* the counter was started here and has not been found changed since */
+static uint32_t sclk_epoch;  /* the times the 32-bit counter was seen to have passed zero (once in 198 days) */
+static uint64_t now_ticks;   /* this message's clock reading: epoch << 32 | counts in the epoch */
+static int clock_ok;
 
 static uint8_t prov_root[32];
 static uint8_t kem_ek[KEM_EK_LEN];
@@ -126,6 +160,8 @@ static uint8_t cred[CRED_MAX];
 static uint8_t session_key[32];
 static uint8_t cred_hash[32];
 static int session_ready;
+static int session_expired;  /* the last session ended by the clock */
+static uint64_t session_start, session_limit; /* the clock at KEM_FINISH; the counts the session may live */
 static const uint8_t gateway_pk[MLDSA_PUBLICKEYBYTES(65)] = AEGIS_GATEWAY_PK;
 
 /* ---- SHA3-256 (FIPS 202), small and simple -------------------------------------------- */
@@ -311,11 +347,168 @@ static size_t sstack_field(char out[HB_SSTACK_MAX])
 	return k + put_uint(out + k, AEGIS_PQ_STACK_SIZE);
 }
 
+/* ---- the session clock ---------------------------------------------------------------------------------------
+ * The RTC in binary mode: RTC_SSR is then a free-running 32-bit down-counter clocked by the RTC clock divided by
+ * PREDIV_A + 1. With the LSI (32 kHz) and 128 that is 250 counts a second and a wrap every 198 days.
+ *
+ * Why this counter: it runs from its own oscillator, in every power mode, whatever the system clock does. TF-M's
+ * platform code leaves the clock tree (RCC), the power controller and the timers to the non-secure image and locks
+ * the peripheral security settings before a partition runs, so a timer on the system clock could be slowed or
+ * stopped from there, and SysTick and the cycle counter stop in Stop mode (the cycle counter is also writable
+ * from the non-secure side). The RTC and the LSI have their own security bits, set here at every start:
+ *   RTC_SECCFGR.SEC, RTC_PRIVCFGR.PRIV   the RTC's registers writable by secure privileged code only; with the RTC
+ *                                        secure, its clock selection, enable and the backup-domain reset in RCC_BDCR
+ *                                        are secure too
+ *   RCC_SECCFGR.LSISEC                   the LSI's enable bit secure
+ * TF-M's BL2 already starts the RTC on the LSI at every boot (calendar mode); this only changes the mode.
+ *
+ * Every reading checks that all of this is still as set here. If not, or if the counter does not count at start,
+ * there is no clock: the session ends and none starts (PSA_ERROR_HARDWARE_FAILURE at KEM_FINISH).
+ * What the non-secure image cannot do is stop or set it; a debugger can (DBGMCU can freeze the RTC while the core is
+ * halted), and a reset of the backup domain, which needs the secure side or a power loss, restarts it. */
+static int sclk_wait(volatile uint32_t *reg, uint32_t mask, uint32_t want)
+{
+	for (uint32_t i = 0; i < SCLK_WAIT; i++) {
+		AEGIS_TEST_HW_STEP();
+		if ((*reg & mask) == want) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/* The counter, read until two readings agree (it is in another clock domain). */
+static uint32_t sclk_count(void)
+{
+	uint32_t a = RTC->SSR, b = RTC->SSR;
+
+	for (int i = 0; i < 4 && a != b; i++) {
+		a = b;
+		b = RTC->SSR;
+	}
+	(void)RTC->DR; /* reading RTC_SSR holds the calendar's shadow registers until the date is read */
+	return b;
+}
+
+static int sclk_config_ok(void)
+{
+	const uint32_t bdcr = RCC_BDCR_LSION | RCC_BDCR_LSIRDY | RCC_BDCR_RTCEN | RCC_BDCR_RTCSEL;
+
+	RCC->APB3ENR |= RCC_APB3ENR_RTCAPBEN; /* the RTC's register clock, whatever happened to it */
+	(void)RCC->APB3ENR;
+	return (RCC->BDCR & bdcr) == (RCC_BDCR_LSION | RCC_BDCR_LSIRDY | RCC_BDCR_RTCEN | RCC_BDCR_RTCSEL_1) &&
+	       (RCC->SECCFGR & RCC_SECCFGR_LSISEC) != 0u && (RTC->SECCFGR & RTC_SECCFGR_SEC) != 0u &&
+	       (RTC->PRIVCFGR & RTC_PRIVCFGR_PRIV) != 0u &&
+	       (RTC->ICSR & (RTC_ICSR_BIN | RTC_ICSR_BCDU | RTC_ICSR_INIT | RTC_ICSR_INITF)) == RTC_ICSR_BIN_0 &&
+	       (RTC->PRER & RTC_PRER_PREDIV_A) == (SCLK_PREDIV_A << RTC_PRER_PREDIV_A_Pos);
+}
+
+static void sclk_start(void)
+{
+	uint32_t first;
+
+	sclk_ok = 0;
+	sclk_epoch = 0;
+	RCC->APB3ENR |= RCC_APB3ENR_RTCAPBEN;
+	(void)RCC->APB3ENR;
+	PWR->DBPCR |= PWR_DBPCR_DBP; /* write access to the backup domain (RCC_BDCR, the RTC) */
+	RCC->BDCR |= RCC_BDCR_LSION;
+	if (!sclk_wait(&RCC->BDCR, RCC_BDCR_LSIRDY, RCC_BDCR_LSIRDY)) {
+		return;
+	}
+	if ((RCC->BDCR & RCC_BDCR_RTCSEL) == 0u) {
+		RCC->BDCR |= RCC_BDCR_RTCSEL_1; /* no RTC clock chosen yet: the LSI, as BL2 chooses */
+	}
+	if ((RCC->BDCR & RCC_BDCR_RTCSEL) != RCC_BDCR_RTCSEL_1) {
+		return; /* another source can only be replaced by resetting the backup domain: not done here */
+	}
+	RCC->BDCR |= RCC_BDCR_RTCEN;
+	/* the sequence of the HAL's HAL_RTC_Init: unlock, initialisation mode, prescaler and mode, leave, wait for the
+	 * shadow registers, lock */
+	RTC->WPR = 0xCAu;
+	RTC->WPR = 0x53u;
+	RTC->ICSR |= RTC_ICSR_INIT;
+	if (sclk_wait(&RTC->ICSR, RTC_ICSR_INITF, RTC_ICSR_INITF)) {
+		RTC->PRER = (SCLK_PREDIV_A << RTC_PRER_PREDIV_A_Pos) | 249u;
+		RTC->ICSR = (RTC->ICSR & ~(RTC_ICSR_BIN | RTC_ICSR_BCDU)) | RTC_ICSR_BIN_0;
+	}
+	RTC->ICSR &= ~RTC_ICSR_INIT;
+	RTC->ICSR &= ~RTC_ICSR_RSF;
+	(void)sclk_wait(&RTC->ICSR, RTC_ICSR_RSF | RTC_ICSR_INITF, RTC_ICSR_RSF);
+	RTC->WPR = 0xFFu;
+	RTC->SCR = RTC_SCR_CSSRUF;
+	RTC->SECCFGR = RTC_SECCFGR_SEC;
+	RTC->PRIVCFGR = RTC_PRIVCFGR_PRIV;
+	RCC->SECCFGR |= RCC_SECCFGR_LSISEC;
+	if (!sclk_config_ok()) {
+		return;
+	}
+	first = sclk_count(); /* it must count: one count takes 4 ms */
+	for (uint32_t i = 0; i < SCLK_WAIT; i++) {
+		AEGIS_TEST_HW_STEP();
+		if (sclk_count() != first) {
+			sclk_ok = 1;
+			return;
+		}
+	}
+}
+
+/* The clock now, in counts: the wraps seen in the upper word. Nonzero if there is no clock (any more). */
+static int sclk_now(uint64_t *ticks)
+{
+	uint32_t count;
+
+	AEGIS_TEST_HW_STEP();
+	if (!sclk_ok || !sclk_config_ok()) {
+		sclk_ok = 0;
+		return -1;
+	}
+	for (int i = 0; i < 2; i++) {
+		if ((RTC->SR & RTC_SR_SSRUF) != 0u) { /* the counter passed zero since the last look */
+			PWR->DBPCR |= PWR_DBPCR_DBP;
+			RTC->SCR = RTC_SCR_CSSRUF;
+			sclk_epoch++;
+			if (!sclk_wait(&RTC->SR, RTC_SR_SSRUF, 0u)) {
+				break; /* the flag does not clear */
+			}
+		}
+		count = 0xFFFFFFFFu - sclk_count();
+		if ((RTC->SR & RTC_SR_SSRUF) == 0u) {
+			*ticks = (uint64_t)sclk_epoch << 32 | count;
+			return 0;
+		}
+	}
+	sclk_ok = 0; /* a flag that stays, or a second wrap within one reading: not a clock */
+	return -1;
+}
+
+static void session_end(void)
+{
+	wipe(session_key, sizeof(session_key));
+	wipe(cred_hash, sizeof(cred_hash));
+	session_ready = 0;
+	session_expired = 1;
+}
+
+/* Read the clock once per message, and end a session that has outlived its credential, or whose age the clock cannot
+ * give: no clock, a reading below the session's start, or a wrap of the counter in between (the flag says that it
+ * wrapped, not how often, so a session does not survive one). */
+static void session_sweep(void)
+{
+	now_ticks = 0;
+	clock_ok = sclk_now(&now_ticks) == 0;
+	if (session_ready && (!clock_ok || now_ticks < session_start || (now_ticks >> 32) != (session_start >> 32) ||
+			      now_ticks - session_start >= session_limit)) {
+		session_end();
+	}
+}
+
 psa_status_t aegis_pq_init(void)
 {
 	uint8_t seed[32];
 
 	stack_fill(); /* first, so the key generation below counts towards the high-water mark */
+	sclk_start();
 	if (derive_from_dhuk(seed_label, seed) != 0 || derive_from_dhuk(prov_label, prov_root) != 0) {
 		wipe(seed, sizeof(seed));
 		return PSA_SUCCESS; /* service stays up and answers PSA_ERROR_BAD_STATE */
@@ -470,12 +663,66 @@ static int names(const uint8_t *body, size_t n, const char *key, const uint8_t v
 	return 0;
 }
 
+/* The value of "<key>":<1 to 10 decimal digits> in the body, which must hold that key exactly once, the digits
+ * followed by ',' or '}' (canonical JSON). Returns 0 if not so. */
+static int number_of(const uint8_t *body, size_t n, const char *key, uint64_t *v)
+{
+	char want[24];
+	size_t k = strlen(key), w = k + 3, at = 0, d, i;
+	int found = 0;
+
+	if (w > sizeof(want)) {
+		return 0;
+	}
+	want[0] = '"';
+	memcpy(want + 1, key, k);
+	want[k + 1] = '"';
+	want[k + 2] = ':';
+	for (i = 0; i + w <= n; i++) {
+		if (memcmp(body + i, want, w) == 0) {
+			if (found) {
+				return 0;
+			}
+			found = 1;
+			at = i + w;
+		}
+	}
+	if (!found) {
+		return 0;
+	}
+	*v = 0;
+	for (d = 0; at + d < n && body[at + d] >= '0' && body[at + d] <= '9'; d++) {
+		if (d == 10) {
+			return 0;
+		}
+		*v = *v * 10u + (uint64_t)(body[at + d] - '0');
+	}
+	return d >= 1 && at + d < n && (body[at + d] == ',' || body[at + d] == '}');
+}
+
+/* The credential's lifetime in seconds, "expires" - "issued", from 1 to CRED_LIFETIME_MAX; 0 if the body carries
+ * none. The two times are the gateway's: they are subtracted, never compared with a clock of this side. */
+static uint32_t cred_lifetime(const uint8_t *body, size_t n)
+{
+	uint64_t issued, expires;
+
+	if (!number_of(body, n, "issued", &issued) || !number_of(body, n, "expires", &expires)) {
+		return 0;
+	}
+	if (expires <= issued || expires - issued > CRED_LIFETIME_MAX) {
+		return 0;
+	}
+	return (uint32_t)(expires - issued);
+}
+
 /* Credential = body || '\n' || ML-DSA-65 signature by the pinned gateway key over
  * "aegis-credential-v1\0" || body (pure ML-DSA, empty context). The body must name SHA3-256(ct) in
  * "kem_ct_sha3_256" and SHA3-256(ek) of the pending exchange in "kem_ek_sha3_256": without the second, an old
  * KEM_FINISH replayed after a new KEM_INIT passed the check, decapsulated to an unrelated key and replaced a
- * working session (found on the RW612 by review, 2026-11-18; the gateway names both). */
-static int check_credential(const uint8_t *c, size_t len, const uint8_t h_ct[32])
+ * working session (found on the RW612 by review, 2026-11-18; the gateway names both).
+ * Returns PSA_SUCCESS and the lifetime the body carries, PSA_ERROR_INVALID_SIGNATURE, or PSA_ERROR_NOT_PERMITTED for
+ * a signed and bound credential without a lifetime. */
+static psa_status_t check_credential(const uint8_t *c, size_t len, const uint8_t h_ct[32], uint32_t *lifetime)
 {
 	static const char lbl[] = "aegis-credential-v1";
 	const uint8_t pre[2] = {0, 0};
@@ -485,19 +732,20 @@ static int check_credential(const uint8_t *c, size_t len, const uint8_t h_ct[32]
 	while (body_len < len && c[body_len] != '\n') body_len++;
 	if (body_len == len || len - body_len - 1 != MLDSA_BYTES(65) ||
 	    sizeof(lbl) + body_len > sizeof(signed_msg)) {
-		return -1;
+		return PSA_ERROR_INVALID_SIGNATURE;
 	}
 	memcpy(signed_msg, lbl, sizeof(lbl));
 	memcpy(signed_msg + sizeof(lbl), c, body_len);
 	if (aegis_mldsa_verify_internal(c + body_len + 1, signed_msg, sizeof(lbl) + body_len, pre, sizeof(pre),
 					gateway_pk, 0) != 0) {
-		return -1;
+		return PSA_ERROR_INVALID_SIGNATURE;
 	}
 	sha3_256(kem_ek, KEM_EK_LEN, h_ek);
 	if (!names(c, body_len, "kem_ct_sha3_256", h_ct) || !names(c, body_len, "kem_ek_sha3_256", h_ek)) {
-		return -1;
+		return PSA_ERROR_INVALID_SIGNATURE;
 	}
-	return 0;
+	*lifetime = cred_lifetime(c, body_len);
+	return *lifetime ? PSA_SUCCESS : PSA_ERROR_NOT_PERMITTED;
 }
 
 static psa_status_t do_kem_finish(const psa_msg_t *msg)
@@ -505,10 +753,15 @@ static psa_status_t do_kem_finish(const psa_msg_t *msg)
 	static const char l_sess[] = "aegis-session-v1", l_conf[] = "aegis-confirm-v1";
 	uint8_t k[32], h_ct[32], tag[32];
 	size_t cred_len = msg->in_size[1];
+	uint32_t lifetime = 0;
+	psa_status_t st;
 	struct sha3 h;
 
 	if (!kem_pending) {
 		return PSA_ERROR_BAD_STATE;
+	}
+	if (!clock_ok) {
+		return PSA_ERROR_HARDWARE_FAILURE; /* a session's end could not be measured: none starts */
 	}
 	if (msg->in_size[0] != KEM_CT_LEN || cred_len == 0 || cred_len > CRED_MAX || msg->out_size[0] < 32) {
 		return PSA_ERROR_INVALID_ARGUMENT;
@@ -519,9 +772,10 @@ static psa_status_t do_kem_finish(const psa_msg_t *msg)
 	}
 	kem_pending = 0;
 	sha3_256(kem_ct, KEM_CT_LEN, h_ct);
-	if (check_credential(cred, cred_len, h_ct) != 0) {
+	st = check_credential(cred, cred_len, h_ct, &lifetime);
+	if (st != PSA_SUCCESS) {
 		wipe(kem_dk, sizeof(kem_dk));
-		return PSA_ERROR_INVALID_SIGNATURE;
+		return st;
 	}
 	if (aegis_mlkem_dec(k, kem_ct, kem_dk) != 0) {
 		wipe(kem_dk, sizeof(kem_dk));
@@ -544,22 +798,40 @@ static psa_status_t do_kem_finish(const psa_msg_t *msg)
 	sha3_final(&h, tag);
 	wipe(k, sizeof(k));
 	session_ready = 1;
+	session_expired = 0;
+	session_start = now_ticks;
+	session_limit = ((uint64_t)lifetime + lifetime / 16u) * SCLK_HZ;
 	psa_write(msg->handle, 0, tag, 32);
 	return PSA_SUCCESS;
 }
 
 static uint64_t hb_counter;
 
-static int has_sstack_key(const uint8_t *d, size_t n)
+static int has_key(const uint8_t *d, size_t n, const char *key)
 {
-	static const char key[] = "sstack=";
+	size_t k = strlen(key);
 
-	for (size_t i = 0; i + sizeof(key) - 1 <= n; i++) {
-		if (memcmp(d + i, key, sizeof(key) - 1) == 0) {
+	for (size_t i = 0; i + k <= n; i++) {
+		if (memcmp(d + i, key, k) == 0) {
 			return 1;
 		}
 	}
 	return 0;
+}
+
+/* SESSION and HEARTBEAT without a session: was there never one (since reset), or did the clock end it? */
+static psa_status_t no_session(void)
+{
+	return session_expired ? PSA_ERROR_DOES_NOT_EXIST : PSA_ERROR_BAD_STATE;
+}
+
+/* ";ttl=<seconds left>", rounded up; at most HB_TTL_MAX bytes */
+static size_t ttl_field(char out[HB_TTL_MAX])
+{
+	uint64_t left = session_limit - (now_ticks - session_start);
+	size_t k = put_text(out, ";ttl=");
+
+	return k + put_uint(out + k, (unsigned)((left + SCLK_HZ - 1u) / SCLK_HZ));
 }
 
 static psa_status_t do_heartbeat(const psa_msg_t *msg)
@@ -576,7 +848,7 @@ static psa_status_t do_heartbeat(const psa_msg_t *msg)
 	int give_status = msg->out_size[1] != 0;
 
 	if (!session_ready) {
-		return PSA_ERROR_BAD_STATE;
+		return no_session();
 	}
 	if (msg->in_size[0] != 32 || dlen > HB_DATA_MAX || msg->out_size[0] < sizeof(out)) {
 		return PSA_ERROR_INVALID_ARGUMENT;
@@ -584,13 +856,15 @@ static psa_status_t do_heartbeat(const psa_msg_t *msg)
 	if (psa_read(msg->handle, 0, nonce, 32) != 32 || (dlen && psa_read(msg->handle, 1, status, dlen) != dlen)) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
-	/* the non-secure side must not be able to put its own stack figure under the MAC, with or without out[1] */
-	if (has_sstack_key(status, dlen)) {
+	/* the non-secure side must not be able to put its own stack figure or lifetime under the MAC, with or without
+	 * out[1] */
+	if (has_key(status, dlen, "sstack=") || has_key(status, dlen, "ttl=")) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
 	slen = dlen;
 	if (give_status) {
-		slen += sstack_field((char *)status + dlen);
+		slen += sstack_field((char *)status + slen);
+		slen += ttl_field((char *)status + slen);
 		if (msg->out_size[1] < slen) {
 			return PSA_ERROR_BUFFER_TOO_SMALL;
 		}
@@ -627,7 +901,7 @@ static psa_status_t do_session(const psa_msg_t *msg)
 	struct sha3 h;
 
 	if (!session_ready) {
-		return PSA_ERROR_BAD_STATE;
+		return no_session();
 	}
 	if (msg->out_size[0] < sizeof(out)) {
 		return PSA_ERROR_BUFFER_TOO_SMALL;
@@ -643,6 +917,7 @@ static psa_status_t do_session(const psa_msg_t *msg)
 
 psa_status_t aegis_pq_service_sfn(const psa_msg_t *msg)
 {
+	session_sweep(); /* before anything else, whatever the message */
 	if (!key_ready) {
 		return PSA_ERROR_BAD_STATE;
 	}
