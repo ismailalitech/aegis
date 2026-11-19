@@ -5,7 +5,14 @@
   aegisd.py show   [--state DIR]          print the identity record
   aegisd.py serve  [--state DIR] [--port 7443]
 
-Hardware facts come from the PolarFire system controller through the
+  --platform polarfire | linux | auto (default: polarfire on the board, linux anywhere else)
+
+On an ordinary Linux server or VM (--platform linux) there is no system controller: the identity names the host by
+a hash of /etc/machine-id, and the quote carries what the running system reports about itself (this code's hash,
+the kernel, the OS release). That is software trust: the key is a file and the measurements come from the system
+being measured. A key held by a TPM or HSM is the next step and is not in this file yet.
+
+On the PolarFire, hardware facts come from the PolarFire system controller through the
 read-only tool aegis_sysserv.py (serial number, Microchip device certificate,
 design info, design digests, security locks). The identity key is ML-DSA-65,
 generated in software from the kernel random pool and stored in DIR with mode
@@ -50,6 +57,49 @@ class HardwareSource:
             return self.ss.call(name)
 
 
+class LinuxHostSource:
+    """An ordinary Linux server or VM: no system controller. Everything here is reported by the running system
+    about itself, and the identity and quote say so ("platform": "linux-host")."""
+
+    platform = "linux-host"
+    key_storage = "software, Linux file mode 0600 (no TPM or HSM backend yet)"
+
+    def __init__(self, machine_id_path="/etc/machine-id", os_release_path="/etc/os-release"):
+        self.machine_id_path, self.os_release_path = machine_id_path, os_release_path
+
+    def host_id(self):
+        """SHA-256 of the machine ID, so the ID itself (which systemd asks to keep private) is not published."""
+        with open(self.machine_id_path, "rb") as f:
+            mid = f.read().strip()
+        if not mid:
+            raise ValueError("%s is empty" % self.machine_id_path)
+        return hashlib.sha256(b"aegis-host-id-v1\0" + mid).hexdigest()
+
+    def identity_facts(self):
+        return {"platform": self.platform, "dsn": self.host_id()[:32]}
+
+    def measurements(self):
+        m = {"platform": self.platform, "host_id_sha256": self.host_id(), "machine": os.uname().machine}
+        try:
+            m["os_release_sha256"] = file_sha256(self.os_release_path)
+        except OSError:
+            pass
+        return m
+
+
+def pick_platform(name="auto"):
+    """polarfire: the system controller's device exists, or this is a RISC-V machine (the module is loaded on
+    demand). Anything else is an ordinary Linux host."""
+    if name == "auto":
+        import aegis_sysserv
+        name = "polarfire" if (os.path.exists(aegis_sysserv.DEVICE) or os.uname().machine == "riscv64") else "linux"
+    if name == "polarfire":
+        return HardwareSource()
+    if name == "linux":
+        return LinuxHostSource()
+    raise ValueError("unknown platform %r" % name)
+
+
 def device_cert_der(raw):
     n = int.from_bytes(raw[2:4], "big") + 4
     if raw[0] != 0x30 or raw[1] != 0x82 or n > len(raw):
@@ -81,20 +131,25 @@ def init_identity(state, hw, force=False):
     skf = os.path.join(state, "identity.sk")
     if os.path.exists(skf) and not force:
         raise SystemExit("identity exists in %s (use --force to replace)" % state)
-    cert = device_cert_der(hw.read("device_cert"))
     pk, sk = mldsa.keypair()
-    body = {
-        "v": 1,
-        "type": "identity",
-        "dsn": hw.read("serial").hex(),
-        "device_cert_sha256": hashlib.sha256(cert).hexdigest(),
-        "design_info": hw.read("design_info").hex(),
-        "pk_alg": "ML-DSA-65",
-        "pk": pk.hex(),
-        "key_storage": "software, Linux file mode 0600 (no hardware key service on MPFS095T non-S)",
-    }
-    rec = {"body": body, "sig": mldsa.sign(sk, wire.LABEL_IDENTITY, wire.canonical(body)).hex(),
-           "device_cert": cert.hex()}
+    if hasattr(hw, "identity_facts"):       # a host without a system controller (LinuxHostSource)
+        body = {"v": 1, "type": "identity", **hw.identity_facts(), "pk_alg": "ML-DSA-65", "pk": pk.hex(),
+                "key_storage": hw.key_storage}
+        rec = {"body": body, "sig": mldsa.sign(sk, wire.LABEL_IDENTITY, wire.canonical(body)).hex()}
+    else:
+        cert = device_cert_der(hw.read("device_cert"))
+        body = {
+            "v": 1,
+            "type": "identity",
+            "dsn": hw.read("serial").hex(),
+            "device_cert_sha256": hashlib.sha256(cert).hexdigest(),
+            "design_info": hw.read("design_info").hex(),
+            "pk_alg": "ML-DSA-65",
+            "pk": pk.hex(),
+            "key_storage": "software, Linux file mode 0600 (no hardware key service on MPFS095T non-S)",
+        }
+        rec = {"body": body, "sig": mldsa.sign(sk, wire.LABEL_IDENTITY, wire.canonical(body)).hex(),
+               "device_cert": cert.hex()}
     fd = os.open(skf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(sk)
@@ -112,13 +167,16 @@ def load_identity(state):
 
 
 def measurements(hw):
-    m = {
-        "design_info": hw.read("design_info").hex(),
-        "usercode": hw.read("usercode").hex(),
-        "security_locks": hw.read("security").hex(),
-        "design_digests_sha256": hashlib.sha256(hw.read("digest")).hexdigest(),
-        "aegisd_code_sha256": own_code_sha256(),
-    }
+    if hasattr(hw, "measurements"):
+        m = dict(hw.measurements(), aegisd_code_sha256=own_code_sha256())
+    else:
+        m = {
+            "design_info": hw.read("design_info").hex(),
+            "usercode": hw.read("usercode").hex(),
+            "security_locks": hw.read("security").hex(),
+            "design_digests_sha256": hashlib.sha256(hw.read("digest")).hexdigest(),
+            "aegisd_code_sha256": own_code_sha256(),
+        }
     try:
         m["kernel"] = os.uname().release
         with open("/proc/sys/kernel/random/boot_id") as f:
@@ -203,13 +261,14 @@ def main(argv=None):
     ap.add_argument("--state", default=DEFAULT_STATE)
     ap.add_argument("--port", type=int, default=7443)
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--platform", choices=["auto", "polarfire", "linux"], default="auto")
     a = ap.parse_args(argv)
     if a.cmd == "show":
         rec, _ = load_identity(a.state)
         body = dict(rec["body"], pk=rec["body"]["pk"][:32] + "...")
         print(json.dumps(body, indent=1))
         return 0
-    hw = HardwareSource()
+    hw = pick_platform(a.platform)
     if a.cmd == "init":
         rec = init_identity(a.state, hw, a.force)
         print("identity created, sha256", wire.digest(rec["body"]))
