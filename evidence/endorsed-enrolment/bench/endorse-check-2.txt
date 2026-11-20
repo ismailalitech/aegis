@@ -1,0 +1,138 @@
+{
+ "endpoint": "frdm-rw612",
+ "other": "stm32h573-dk",
+ "trusted_endorsers": [
+  "bench-pc"
+ ],
+ "E1_as_enrolled": {
+  "admitted": true,
+  "enrolment": "endorsed",
+  "reasons": [],
+  "endpoint_asked": true,
+  "as_expected": true
+ },
+ "E1_endorsement": {
+  "endorser_name": "bench-pc",
+  "endorser_pk_sha256": "5e8dcbb64e8ec3b8337c1c61ce8292f41b7f690f4b29c83be661c026aefc4aa7",
+  "record_sha256": "530596f0ac678a743dfb5279a2493e7ed6dd3041e68cb9d6c392bc2220259ae5",
+  "device_pk_sha256": "219414c54e7bbf34c7b60f3a35731603124dcda4f424fb267caccdd65835e87d",
+  "device_state": "development",
+  "issued": 1795177193
+ },
+ "E2_no_record": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: no endorsement record (/tmp/aegis-endorsement-check-qjlzbed0/none.json)"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E3_substituted_key": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the pinned key (sha256 29b953e6571dbd36...) is not the endorsed key (219414c54e7bbf34...): substituted key"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E4_substituted_key_and_its_record": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the record endorses device 'stm32h573-dk', not 'frdm-rw612'"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E5_substituted_key_at_its_device": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the pinned key (sha256 29b953e6571dbd36...) is not the endorsed key (219414c54e7bbf34...): substituted key"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E5_substituted_key_and_record_at_its_device": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the record endorses device 'stm32h573-dk', not 'frdm-rw612'"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E6_another_device_answers": {
+  "admitted": false,
+  "enrolment": "endorsed",
+  "reasons": [
+   "ML-DSA-65 quote signature invalid (the device that answered does not hold the endorsed key)"
+  ],
+  "endpoint_asked": true,
+  "as_expected": true
+ },
+ "E7_altered_measurement": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E7_altered_device_state": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E7_altered_expiry": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E8_untrusted_endorser": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: signed by a key that is not a trusted endorser of this policy (3828df12e1662f50..., calls itself 'bench-pc')"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E8_no_trusted_endorsers": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the policy lists no trusted endorsers (\"endorsers\")"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E9_control_trust_on_first_use": {
+  "admitted": false,
+  "enrolment": "trust-on-first-use",
+  "reasons": [
+   "claims are not a map"
+  ],
+  "same_firmware_on_both": false,
+  "as_expected": "not applicable: the two entries differ in family or reference, so the swap fails on those"
+ },
+ "E10_as_enrolled_again": {
+  "admitted": true,
+  "enrolment": "endorsed",
+  "reasons": [],
+  "endpoint_asked": true,
+  "as_expected": true
+ },
+ "ok": true
+}
