@@ -85,6 +85,7 @@ With the boards, copy `bench.env.example` to `bench.env` and set your addresses.
     sudo tests/host/test_enforcement.sh   # the enforcement rules in network namespaces
     tests/fuzz/run.sh                     # fuzz the RW612 partition's protocol code (STM32=1: the STM32 partition)
     tools/bench_watch.py --gateway <addr> # log when the gateway or an endpoint goes quiet (--once: one check)
+    tools/soak.py run --gateway <addr>    # the 24-hour soak (docs/soak-and-watchdogs.md; selftest: no hardware)
 
 The verifier also runs on an ordinary Linux host instead of the gateway (`fleet.py --platform linux`, observe-only,
 attestation without credentials on the current images): `docs/pc-verifier.md`.
