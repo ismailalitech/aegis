@@ -59,6 +59,12 @@ class Refused(ValueError):
     """The bytes are not this log, whole and in order. The text says why."""
 
 
+class KeyMismatch(RuntimeError):
+    """The secret key the writer was given does not sign for the public key the log was opened with (the verifier's
+    identity was made again while it ran). Nothing is written: a batch under a key that is not its kid's would make
+    every later writer begin a new log."""
+
+
 class _Torn(Exception):
     """A segment ends in the middle of a record (the process died while it wrote): offset of the last whole one."""
 
@@ -508,8 +514,9 @@ class Log:
         when the last promise is about to lapse even with nothing queued. Without it (one run, a command) the last
         promise in the log is repeated unchanged, and nothing is written with nothing queued. last: the writer that
         promised ends its log here; the batch promises nothing. force: do not wait for min_interval_s. Raises
-        OSError, RuntimeError or ValueError if the key cannot be used or the directory written; what was queued
-        stays queued."""
+        OSError, RuntimeError or ValueError if the key cannot be used or the directory written (KeyMismatch if the
+        secret key is not the public key's: each batch is checked before it is appended); what was queued stays
+        queued."""
         now = int(time.time() if now is None else now)
         promise = promise and not last
         heartbeat = promise and self.checkpoint_s > 0
@@ -548,8 +555,14 @@ class Log:
                         else None
                 rec = make_batch(sk, self.pk, self._log_id, tail.batch + 1 if tail else 1,
                                  tail.head if tail else GENESIS, tail.next_entry if tail else 1, take, now, due)
+                try:
+                    b = open_batch(rec, self.pk)    # signed by the key it names, or it is not written
+                except (Refused, cose.Refused) as e:
+                    raise KeyMismatch("the secret key does not sign for the verifier key this log was opened with "
+                                      "(sha256 %s...): was the identity made again? nothing is written; restart "
+                                      "the verifier (%s)" % (hashlib.sha256(self.pk).hexdigest()[:16], e)) from None
                 self._append(rec)
-                self._tail = open_batch(rec)
+                self._tail = b
                 del self.pending[:len(take)]
                 written.append(self._tail)
                 if not self.pending:

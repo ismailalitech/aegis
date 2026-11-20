@@ -444,6 +444,24 @@ class Log(unittest.TestCase):
         gap = ev[-1]
         self.assertEqual((gap["event"], gap["details"]["dropped"]), ("gap", 7))
 
+    def test_a_secret_key_that_is_not_the_log_s_key_writes_nothing(self):
+        """The identity made again while the loop runs: the writer still holds the old public key and now loads the
+        new secret key. No batch is written (a batch whose kid is not its signer's would make every later flush begin
+        another log); the entries wait, and the right key writes them."""
+        lg = self.fill(2)
+        before = [(n, os.path.getsize(p)) for n, p in audit.segments(self.d)]
+        lg._load_sk = lambda: XSK
+        lg.add("refuse", "dev", {}, T0 + 10)
+        for t in (T0 + 10, T0 + 40, T0 + 70):
+            with self.assertRaises(audit.KeyMismatch) as c:
+                lg.flush(t)
+            self.assertIn("identity made again", str(c.exception))
+        self.assertEqual([(n, os.path.getsize(p)) for n, p in audit.segments(self.d)], before)   # no new segment
+        lg._load_sk = lambda: VSK
+        b, = lg.flush(T0 + 100)
+        self.assertEqual((b.batch, [e["event"] for e in b.entries]), (3, ["refuse"]))
+        self.assertEqual(audit.verify(self.d, [VPK])["logs"][0]["last_batch"], 3)
+
     def test_entries_wait_for_the_interval_and_are_not_lost(self):
         lg = self.log(min_interval_s=300, checkpoint_s=0)
         lg.add("start", None, {}, T0)
@@ -781,6 +799,24 @@ class Trail(Fleet):
         os.rename(os.path.join(self.state, "identity.sk.away"), os.path.join(self.state, "identity.sk"))
         self.assertEqual(len(self.cycle(trail)[1]), 1)
         self.assertEqual(self.events()[1:], [("start", None), ("admit", "good"), ("refuse", "legacy")])
+
+    def test_an_identity_made_again_while_the_loop_runs_writes_nothing_and_is_said(self):
+        trail = self.trail()
+        self.cycle(trail)
+        before = [(n, os.path.getsize(p)) for n, p in audit.segments(self.audit_dir)]
+        with open(os.path.join(self.state, "identity.json"), "w") as f:      # aegisd.py init, again
+            json.dump({"body": {"v": 1, "type": "identity", "pk": XPK.hex()}}, f)
+        with open(os.path.join(self.state, "identity.sk"), "wb") as f:
+            f.write(XSK)
+        self.good.mode = "tampered"
+        res, written = self.cycle(trail)
+        self.assertEqual(([v["admitted"] for v in res], written), ([False, False], []))
+        self.assertIn("could NOT be written (KeyMismatch", self.said)
+        self.assertIn("identity made again", self.said)
+        for _ in range(3):
+            self.assertEqual(self.cycle(trail)[1], [])
+        self.assertEqual([(n, os.path.getsize(p)) for n, p in audit.segments(self.audit_dir)], before)
+        self.assertEqual(audit.verify(self.audit_dir, [VPK])["logs"][0]["last_batch"], 1)
 
     def test_once_logs_a_run_and_the_audit_command_checks_and_anchors_the_log(self):
         rc, out = self.fleet("once", self.pol)
