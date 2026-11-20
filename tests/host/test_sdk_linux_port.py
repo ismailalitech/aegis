@@ -201,6 +201,33 @@ class SdkLinuxPort(unittest.TestCase):
         self.assertEqual(r.returncode, 3)
         self.assertIn("no identity key", r.stderr)
 
+    def refused_at_start(self, state):
+        cmd = [self.exe, "--state", state, "--gateway-pk", os.path.join(self.d, "gw.pub"), "--port", str(free_port())]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("no identity key", r.stderr)
+
+    def test_6b_a_state_directory_others_can_write_is_refused(self):
+        """Whoever can write the directory can put other secrets there: an existing one must be the user's own and
+        writable by nobody else. One that others can only read is accepted (the secrets in it are 0600)."""
+        state = os.path.join(self.d, "state6")
+        self.start(state=state)
+        os.chmod(state, 0o755)
+        self.start(state=state)
+        for mode in (0o770, 0o707, 0o777):
+            os.chmod(state, mode)
+            self.refused_at_start(state)
+        os.chmod(state, 0o700)
+        self.start(state=state)
+
+    def test_6c_a_secret_that_is_a_link_is_refused(self):
+        state = os.path.join(self.d, "state7")
+        self.start(state=state)
+        seed = os.path.join(state, "identity.seed")
+        os.rename(seed, os.path.join(self.d, "seed-elsewhere"))
+        os.symlink(os.path.join(self.d, "seed-elsewhere"), seed)
+        self.refused_at_start(state)
+
     def test_7_a_file_that_cannot_be_read_refuses_the_quote(self):
         gone = os.path.join(self.d, "gone.bin")
         with open(gone, "wb") as f:

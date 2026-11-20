@@ -437,8 +437,9 @@ static const struct aegis_platform platform = {
 
 psa_status_t aegis_pq_init(void)
 {
-	/* seed and exchange root are made in the work buffer, which the core does not use before its first
-	 * operation: nothing of them on the stack, which the key generation below goes deep into */
+	/* seed and exchange root are made in the work buffer, which the core does not write before its first
+	 * operation (aegis_sdk.h says so of struct aegis_config.work): nothing of them on the stack, which the key
+	 * generation below goes deep into */
 	uint8_t *seed = work, *root = work + 32;
 	const struct aegis_config cfg = {
 		.platform = &platform,

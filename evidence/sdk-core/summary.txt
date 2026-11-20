@@ -1,37 +1,63 @@
-# Prover SDK (WP9): what was run on the build PC, 20 November 2026. No board, programmer or gateway was used.
+# Prover SDK (WP9): what was run on the build PC, 20 November 2026, after the fixes of the review of PR #38.
+# No board, programmer or gateway was used for anything in this file.
 # Source: this commit (sdk/, the ports under endpoints/, tests/fuzz). Reference for "before": commit eb82532
-# (the STM32 partition's own protocol code, SPE 3183f74a on both boards; the RW612's aegis_proto.c).
+# (the STM32 partition's own protocol code, SPE 3183f74a; the RW612's aegis_proto.c).
 
 ## Host tests
-.venv/bin/python -m unittest discover -s tests/host      220 tests, OK (3 skipped: pycryptodome not installed; two need this machine's TPM)
+.venv/bin/python -m unittest discover -s tests/host      224 tests, OK (3 skipped: pycryptodome not installed; two need this machine's TPM)
 .venv/bin/python tests/redteam/fuzz_host.py 2000         "broken": []
 endpoints/zynqmp/optee/tests/run.sh                      Aegis TA on the PC: all checks passed
 
 ## The same answers as before, byte for byte (tools/sdk_golden.py; a fixed random generator)
-seeds, STM32 partition   30 of 30 traces equal (vectors/sdk-golden/stm32-partition.json)
+seeds, STM32 partition   31 of 31 traces equal (vectors/sdk-golden/stm32-partition.json)
 seeds, line protocol     18 of 18 traces equal (vectors/sdk-golden/line-protocol.json)
-tools/sdk_golden.py diff --kind stm32 --corpus <fuzz corpus>   stm32: 704 inputs through eb82532 and today's code, 0 differ
-tools/sdk_golden.py diff --kind line  --corpus <fuzz corpus>   line: 478 inputs through eb82532 and today's code, 0 differ
+tools/sdk_golden.py diff --kind stm32 --corpus <fuzz corpus>   stm32: 714 inputs through eb82532 and today's code, 0 differ
+tools/sdk_golden.py diff --kind line  --corpus <fuzz corpus>   line: 309 inputs through eb82532 and today's code, 0 differ
 (the line comparison takes the corpus files in the first input format; the old harness does not know the others)
+What the review's fixes refuse and the code before did not (a generator that repeats its last output or gives 32
+equal bytes other than zeros, secrets of zeros at start, evidence longer than its room) is in none of these inputs:
+no answer to an input the old harnesses can express has changed.
 
-## Fuzzing (libFuzzer, ASan, UBSan, clang 18; 200 s, 4 workers each; the oracle is the harness's own model)
-tests/fuzz/run.sh 200 4            the SDK's core, both transports, every configuration   57395 runs, corpus 1009, no finding
-STM32=1 tests/fuzz/run.sh 200 4    the STM32 port on stand-ins for TF-M                   55298 runs, corpus 704, no finding
+## Fuzzing (libFuzzer, ASan, UBSan, clang 18; 150 s, 4 workers each; the oracle is the harness's own model)
+tests/fuzz/run.sh 150 4            the SDK's core, both transports, every configuration   43830 runs, corpus 849, no finding
+STM32=1 tests/fuzz/run.sh 150 4    the STM32 port on stand-ins for TF-M                   44182 runs, corpus 714, no finding
+(before the fixes: 200 s each, 57395 and 55298 runs, no finding; 704 and 478 corpus inputs through old and new, 0 differ)
 
-## STM32H573 secure image (endpoints/stm32h573/tfm-aegis-partition/build_tfm.sh, OUT=~/aegis-tools/tfm-aegis-build-sdk)
-tfm_s_signed.bin sha256 0659154dce122f50065b3b7ae485ec14acd1ff38997cc592f63104f7dbc4ada4
-tfm_s_signed.hex sha256 3f023b7c0a3f92f735335a7997a68f488228f98015cf698ba78f73ba737f442c
+## The core's contracts at their boundaries (tests/host/test_sdk_core_contract.py, sdk/tests/core_contract_check.c)
+Each line is one change made to a copy of sdk/src/aegis_proto.c; the check program was built against the copy, with
+ASan/UBSan and plain with -O2, and must fail. All 15 are caught by both builds.
+  the evidence's reported length not held to its room (n <= cap)        caught   (also by the seed sdk-evidence-length-*, without a sanitizer)
+  an evidence length of zero accepted                                   caught
+  ";ttl=" appended without room in the status buffer                    caught   (also by the seed sdk-heartbeat-one-short, without a sanitizer)
+  a status longer than its buffer accepted                              caught
+  the credential's body not held to the work buffer                     caught
+  the caller's ciphertext decapsulated, not the copy                    caught
+  the caller's ciphertext hashed, not the copy                          caught
+  the credential's hash taken from the caller's memory                  caught
+  the claims made from the caller's challenge, not the copy             caught
+  the caller's nonce compared with the quote's challenge, not the copy  caught
+  a draw equal to the one before it accepted for an exchange key        caught
+  32 equal bytes other than zeros accepted for an exchange key          caught
+  a seed or root of zeros accepted at start                             caught
+  a measurement without a label encoded                                 caught
+  a description read up to its terminator, not its end                  caught
+
+## STM32H573 secure image (endpoints/stm32h573/tfm-aegis-partition/build_tfm.sh, OUT=~/aegis-tools/tfm-aegis-build-sdk2)
+tfm_s_signed.bin sha256 54e695654a44eb4e745f1c24201037669a0c73162f7ed6ba1f073c36558998bd
+tfm_s_signed.hex sha256 f4620c85dc3774221159df4c1c3863da9b564b44d29e385123371bc92f359637
 "version": "2.3.0",
-"measurement_value": "b876213a373511d04f6045d42c1d7402eecf25b94fe9f4cb87448af7667bba8e",
+"measurement_value": "9de7616732cfde9504dd448e8d8075de4a2a95163998228395ad37973ee60979",
 "signer_id": "e30466f6b8470c1f29070b17f1e2d3e94d445e3f608087fdc711e4382bb538b6"
-the commit before, rebuilt the same way in another directory: measurement 3183f74a02e5f7bedb20fa38d22a556a2ce6c57afa928c1d4f4c3bebe5c5ece4 (the image on the boards: the build is reproducible)
+the commit before the SDK, rebuilt the same way in another directory: measurement 3183f74a02e5f7bedb20fa38d22a556a2ce6c57afa928c1d4f4c3bebe5c5ece4 (the image the boards ran: the build is reproducible)
+the build of this source before the review's fixes (-sdk): measurement b876213a373511d04f6045d42c1d7402eecf25b94fe9f4cb87448af7667bba8e
 
-## Stack (tools/stack_estimate.py: GCC -fstack-usage frames along the image's call graph)
-before (eb82532): deepest path 18712 bytes; the boards report sstack=18880/26624
-aegis_pq_service_sfn: 18728 bytes
+## Stack (tools/stack_estimate.py: GCC -fstack-usage frames along the image's call graph; an estimate, not a bound)
+before the SDK (eb82532): deepest path 18712 bytes, and the boards report sstack=18880/26624 (168 more)
+before the review's fixes (-sdk): 18728 bytes
+aegis_pq_service_sfn: 18704 bytes
       40  aegis_pq_service_sfn
       56  aegis_prover_quote
-      80  sign_work
+      56  sign_work
     1480  aegis_mldsa_signature_internal
    15520  mld_attempt_signature_generation
      128  aegis_mldsa_polyvec_matrix_pointwise_montgomery_yvec_lazy
@@ -40,9 +66,9 @@ aegis_pq_service_sfn: 18728 bytes
       32  keccak_absorb
      280  mld_keccakf1600_permute_c
 
-aegis_pq_init: 16368 bytes
+aegis_pq_init: 16384 bytes
       40  aegis_pq_init   [static,ignoring_inline_asm]
-      24  aegis_prover_init
+      40  aegis_prover_init
    11584  aegis_mldsa_keypair_internal
     3176~  mld_compute_pack_t0_t1.isra.0
      120  aegis_mldsa_polyvec_matrix_pointwise_montgomery_row_lazy
@@ -52,13 +78,15 @@ aegis_pq_init: 16368 bytes
      280  mld_keccakf1600_permute_c
 
 
-sizes (text data bss), before and now:
+sizes (text data bss): before the SDK, -sdk, -sdk2
 165752 220 111924
 168888 220 111444
+169304 220 111476
 
-## RW612 TF-M images (west build --sysbuild endpoints/rw612/tfm/prover_ns, into ~/aegis-tools/rw-tfm/prover-sdk; 0 warnings)
-aegis_s.bin   sha256 ce6e5121bef6a3a4a5bd10df24ba06f64072e3d1954703b1d791779b4b031081   (0.3.1)
+## RW612 TF-M images (west build --sysbuild endpoints/rw612/tfm/prover_ns, into ~/aegis-tools/rw-tfm/prover-sdk2; 0 warnings)
+aegis_s.bin   sha256 c312218ba4a6b1a5bddcb17a7a56bf1d57de33d79a0da846e040ad99459cd636   (0.3.2)
 prover_ns.bin sha256 9af83bab97f8dfcf4a16491a36d218a306ccaef83d93a593491885ed84dd58b5   (byte for byte 0.2.2's)
-SPE   b48d2ecf2f36e52f9f708e6b7b65a5b85b35ce0fdbc12f0f23c9e191ecfa486f
+SPE   c8d0f01223ca59f9223fdee4df675f2eaae3a190ed4b2ef11b0e1816b7d242f7
 NSPE  24979a1f03fa24d4c038de11f8da9e7dd0e5b656683783b072b140fd8925694c
-secure RAM 161796 B of 192 KB (176924 B for 0.3.0)
+secure RAM 161828 B of 192 KB (176924 B for 0.3.0)
+0.3.1, before the review's fixes: SPE b48d2ecf2f36e52f9f708e6b7b65a5b85b35ce0fdbc12f0f23c9e191ecfa486f

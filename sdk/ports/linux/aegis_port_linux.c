@@ -163,34 +163,51 @@ int aegis_linux_add_measure(struct aegis_linux *l, char *spec)
 	return 0;
 }
 
-/* One 32-byte secret of the state directory: read it, or at the first start make it from the kernel's generator.
- * Written to a new file that only the owner can read and then renamed, so a half-written secret is never used; a
- * file that others can read, or of another length, is refused rather than trusted. */
-static int secret(const char *dir, const char *name, uint8_t out[AEGIS_SEED_LEN])
+/* One 32-byte secret of the state directory (dir is open on it): read it, or at the first start make it from the
+ * kernel's generator. Written to a new file that only the owner can read and then renamed, so a half-written secret
+ * is never used. A file that is not this user's own, that anyone else can read or write, that is a link or of
+ * another length is refused rather than trusted. */
+static int secret(int dir, const char *name, uint8_t out[AEGIS_SEED_LEN])
 {
-	char path[600], tmp[608];
+	char tmp[64];
 	struct stat st;
 	int fd, ok;
 
-	if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path)) return -1;
-	snprintf(tmp, sizeof(tmp), "%s.new", path);
-	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (snprintf(tmp, sizeof(tmp), "%s.new", name) >= (int)sizeof(tmp)) return -1;
+	fd = openat(dir, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
 	if (fd < 0 && errno == ENOENT) {
 		if (getrandom(out, AEGIS_SEED_LEN, 0) != (ssize_t)AEGIS_SEED_LEN) return -1;
-		(void)unlink(tmp);
-		fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+		(void)unlinkat(dir, tmp, 0);
+		fd = openat(dir, tmp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
 		if (fd < 0) return -1;
 		ok = write(fd, out, AEGIS_SEED_LEN) == (ssize_t)AEGIS_SEED_LEN && fsync(fd) == 0;
 		ok = close(fd) == 0 && ok;
 		aegis_wipe(out, AEGIS_SEED_LEN); /* what is used is what is read back below */
-		if (!ok || rename(tmp, path) != 0) return -1;
-		fd = open(path, O_RDONLY | O_CLOEXEC);
+		if (!ok || renameat(dir, tmp, dir, name) != 0) return -1;
+		fd = openat(dir, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
 	}
 	if (fd < 0) return -1;
-	ok = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && (st.st_mode & 077) == 0 && st.st_size == (off_t)AEGIS_SEED_LEN &&
-	     read(fd, out, AEGIS_SEED_LEN) == (ssize_t)AEGIS_SEED_LEN;
+	ok = fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_uid == geteuid() && (st.st_mode & 077) == 0 &&
+	     st.st_size == (off_t)AEGIS_SEED_LEN && read(fd, out, AEGIS_SEED_LEN) == (ssize_t)AEGIS_SEED_LEN;
 	close(fd);
 	return ok ? 0 : -1;
+}
+
+/* The state directory, made 0700 at the first start. One that exists must be this user's own and writable by
+ * nobody else: whoever can write it can replace the secrets in it. Returns it open, or -1. */
+static int state_dir_open(const char *path)
+{
+	struct stat st;
+	int fd;
+
+	if (mkdir(path, 0700) != 0 && errno != EEXIST) return -1;
+	fd = open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+	if (fd < 0) return -1;
+	if (fstat(fd, &st) != 0 || !S_ISDIR(st.st_mode) || st.st_uid != geteuid() || (st.st_mode & 022) != 0) {
+		close(fd);
+		return -1;
+	}
+	return fd;
 }
 
 int aegis_linux_start(struct aegis_linux *l, const char *state_dir, const uint8_t *verifier_pk)
@@ -204,12 +221,13 @@ int aegis_linux_start(struct aegis_linux *l, const char *state_dir, const uint8_
 		.work = l->work,
 		.work_len = sizeof(l->work),
 	};
-	int rc = AEGIS_ERR_IDENTITY;
+	int rc = AEGIS_ERR_IDENTITY, dir = state_dir_open(state_dir);
 
-	if (mkdir(state_dir, 0700) != 0 && errno != EEXIST) return rc;
-	if (secret(state_dir, "identity.seed", seed) == 0 && secret(state_dir, "exchange.root", root) == 0) {
+	if (dir < 0) return rc;
+	if (secret(dir, "identity.seed", seed) == 0 && secret(dir, "exchange.root", root) == 0) {
 		rc = AEGIS_PROVER_INIT(&l->prover, &cfg);
 	}
+	close(dir);
 	aegis_wipe(seed, sizeof(seed)); /* the core has made the key pair and copied the root */
 	aegis_wipe(root, sizeof(root));
 	return rc;

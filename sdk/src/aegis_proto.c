@@ -87,6 +87,12 @@
 #define AEGIS_INLINE static inline
 #endif
 
+/* Tests (sdk/tests/core_contract_check.c) define this to overwrite the caller's buffers at the points where an
+ * operation has taken its inputs: from there on it must not read them again. */
+#if !defined(AEGIS_TEST_INPUTS_TAKEN)
+#define AEGIS_TEST_INPUTS_TAKEN() ((void)0)
+#endif
+
 #define KEM_EK_LEN  MLKEM_PUBLICKEYBYTES(768)
 #define KEM_DK_LEN  MLKEM_SECRETKEYBYTES(768)
 #define KEM_CT_LEN  MLKEM_CIPHERTEXTBYTES(768)
@@ -111,6 +117,7 @@ static const char T_QUOTE[] = "aegis-transcript-v2/quote";
 static const char T_KEM_INIT[] = "aegis-transcript-v2/kem-init";
 static const char T_KEM_FIN[] = "aegis-transcript-v2/kem-fin";
 static const char CRED_LABEL[] = "aegis-credential-v1";
+static const char RNG_LABEL[] = "aegis-rng-last-draw"; /* never on the wire: the hash a draw is remembered by */
 
 _Static_assert(sizeof(QUOTE_LABEL) == AEGIS_WORK_QUOTE_HEAD && sizeof(CRED_LABEL) == AEGIS_WORK_CRED_HEAD &&
 	       sizeof(KEM_LABEL) + 32 + KEM_EK_LEN == AEGIS_WORK_MIN, "work buffer heads");
@@ -131,14 +138,23 @@ static uint64_t krol(uint64_t x, unsigned n)
 	return n ? (x << n) | (x >> (64u - n)) : x;
 }
 
+/* Overwrite n bytes with zeros in a way the compiler does not remove. */
+void aegis_wipe(void *p, size_t n)
+{
+	volatile uint8_t *v = p;
+
+	while (n--) *v++ = 0;
+}
+#define wipe aegis_wipe
+
 static void keccak_f(uint64_t a[25])
 {
-	for (int r = 0; r < 24; r++) {
-		uint64_t c[5], b[25];
+	uint64_t c[5], b[25], d;
 
+	for (int r = 0; r < 24; r++) {
 		for (int x = 0; x < 5; x++) c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
 		for (int x = 0; x < 5; x++) {
-			uint64_t d = c[(x + 4) % 5] ^ krol(c[(x + 1) % 5], 1);
+			d = c[(x + 4) % 5] ^ krol(c[(x + 1) % 5], 1);
 
 			for (int y = 0; y < 5; y++) a[x + 5 * y] ^= d;
 		}
@@ -149,6 +165,10 @@ static void keccak_f(uint64_t a[25])
 				a[x + 5 * y] = b[x + 5 * y] ^ (~b[(x + 1) % 5 + 5 * y] & b[(x + 2) % 5 + 5 * y]);
 		a[0] ^= KRC[r];
 	}
+	/* copies of the state, which several of the protocol's hashes make from a secret: not left on the stack */
+	wipe(b, sizeof(b));
+	wipe(c, sizeof(c));
+	wipe(&d, sizeof(d));
 }
 
 struct sha3 {
@@ -182,18 +202,10 @@ static void sha3_final(struct sha3 *h, uint8_t out[32])
 	for (int i = 0; i < 32; i++) out[i] = (uint8_t)(h->a[i / 8] >> (8 * (i % 8)));
 }
 
-void aegis_wipe(void *p, size_t n)
-{
-	volatile uint8_t *v = p;
-
-	while (n--) *v++ = 0;
-}
-#define wipe aegis_wipe
-
 /* SHA3-256(label || a || b || c || d): every hash of the protocol. Every caller passes fields of fixed lengths (but
  * for one last field), and no label is the beginning of another, so the results cannot be taken for one another.
- * A function of its own, so that the hash state is off the stack again before the callers' deep parts; the state is
- * wiped, since several of these hashes take a secret. */
+ * A function of its own, so that the hash state is off the stack again before the callers' deep parts. Several of
+ * these hashes take a secret: the state is wiped here, and the permutation wipes its own copies of it (keccak_f). */
 static AEGIS_NOINLINE void hash_parts(uint8_t out[32], const char *label, const uint8_t *a, size_t an, const uint8_t *b,
 				      size_t bn, const uint8_t *c, size_t cn, const uint8_t *d, size_t dn)
 {
@@ -302,10 +314,13 @@ static void cbor_head(struct cbor *c, unsigned major, uint64_t v)
 	} else if (v < 0x10000) {
 		h[0] = (uint8_t)(major | 25); h[1] = (uint8_t)(v >> 8); h[2] = (uint8_t)v;
 		n = 3;
-	} else {
+	} else if (v <= 0xFFFFFFFFu) {
 		h[0] = (uint8_t)(major | 26);
 		for (int i = 3; i >= 0; i--) h[4 - i] = (uint8_t)(v >> (8 * i));
 		n = 5;
+	} else {
+		c->p = NULL; /* nothing here is that long: refused rather than written with its upper half cut off */
+		return;
 	}
 	cbor_raw(c, h, n);
 }
@@ -322,15 +337,31 @@ static void cbor_bytes(struct cbor *c, const uint8_t *b, size_t n)
 	cbor_raw(c, b, n);
 }
 
-static void cbor_text(struct cbor *c, const char *s)
+static void cbor_text_n(struct cbor *c, const char *s, size_t n)
 {
-	size_t n = strlen(s);
-
 	cbor_head(c, 3, n);
 	cbor_raw(c, s, n);
 }
 
+static void cbor_text(struct cbor *c, const char *s)
+{
+	cbor_text_n(c, s, strlen(s));
+}
+
 /* ---- start ------------------------------------------------------------------------------------ */
+
+static int all_equal(const uint8_t *b, size_t n)
+{
+	uint8_t diff = 0;
+
+	for (size_t i = 1; i < n; i++) diff |= (uint8_t)(b[i] ^ b[0]);
+	return diff == 0;
+}
+
+static int all_zero(const uint8_t *b, size_t n)
+{
+	return b[0] == 0 && all_equal(b, n);
+}
 
 int aegis_prover_init(struct aegis_prover *p, size_t prover_size, uint32_t api_version, const struct aegis_config *cfg)
 {
@@ -348,6 +379,13 @@ int aegis_prover_init(struct aegis_prover *p, size_t prover_size, uint32_t api_v
 	    (pl->identity_sign == NULL) == (cfg->identity_seed == NULL) || cfg->verifier_pk == NULL ||
 	    cfg->exchange_root == NULL || cfg->work == NULL || cfg->work_len < AEGIS_WORK_MIN) {
 		return AEGIS_ERR_ARGUMENT;
+	}
+	/* Seed and root may lie in the work buffer (the STM32 port derives them there): both are read here, and the
+	 * work buffer is not written before the first operation. All zeros is what a derivation that failed without
+	 * saying so leaves behind: no key is made from it. */
+	if (all_zero(cfg->exchange_root, AEGIS_SEED_LEN) ||
+	    (cfg->identity_seed != NULL && all_zero(cfg->identity_seed, AEGIS_SEED_LEN))) {
+		return AEGIS_ERR_IDENTITY;
 	}
 	p->plat = pl;
 	p->verifier_pk = cfg->verifier_pk;
@@ -419,21 +457,34 @@ static int sign_work(struct aegis_prover *p, size_t n)
 {
 	const struct aegis_platform *pl = p->plat;
 	const uint8_t pre[2] = {0, 0};
-	uint8_t rnd[32] = {0};
-	int rc;
 
 	if (pl->identity_sign != NULL) {
 		return pl->identity_sign(pl->user, p->work, n, p->sig) == 0 ? AEGIS_OK : AEGIS_ERR_SIGN;
 	}
-#if !(defined(AEGIS_DETERMINISTIC_SIGNING) && AEGIS_DETERMINISTIC_SIGNING)
-	if (pl->random(pl->user, rnd, sizeof(rnd)) != 0) {
-		wipe(rnd, sizeof(rnd));
-		return AEGIS_ERR_SIGN_RNG;
+#if defined(AEGIS_DETERMINISTIC_SIGNING) && AEGIS_DETERMINISTIC_SIGNING
+	{
+		static const uint8_t rnd[32];
+
+		return aegis_mldsa_signature_internal(p->sig, p->work, n, pre, sizeof(pre), rnd, p->sk, 0) == 0
+			       ? AEGIS_OK : AEGIS_ERR_SIGN;
+	}
+#else
+	{
+		/* The draw goes into the context, not onto the stack under the signature; afterwards its hash stays there
+		 * as the generator's last output, which the next exchange key's draw is compared with (kem_coins). */
+		int rc;
+
+		p->rng_have = 0;
+		if (pl->random(pl->user, p->rng_last, sizeof(p->rng_last)) != 0) {
+			wipe(p->rng_last, sizeof(p->rng_last));
+			return AEGIS_ERR_SIGN_RNG;
+		}
+		rc = aegis_mldsa_signature_internal(p->sig, p->work, n, pre, sizeof(pre), p->rng_last, p->sk, 0);
+		hash_parts(p->rng_last, RNG_LABEL, p->rng_last, sizeof(p->rng_last), NULL, 0, NULL, 0, NULL, 0);
+		p->rng_have = 1;
+		return rc == 0 ? AEGIS_OK : AEGIS_ERR_SIGN;
 	}
 #endif
-	rc = aegis_mldsa_signature_internal(p->sig, p->work, n, pre, sizeof(pre), rnd, p->sk, 0);
-	wipe(rnd, sizeof(rnd));
-	return rc == 0 ? AEGIS_OK : AEGIS_ERR_SIGN;
 }
 
 /* The Aegis claims for a challenge, from the platform's measurements: a CBOR map of profile, challenge, instance
@@ -460,13 +511,17 @@ static AEGIS_NOINLINE int make_claims(struct aegis_prover *p, const uint8_t chal
 	cbor_bytes(&c, inst, sizeof(inst));
 	cbor_int(&c, C_SWC);
 	cbor_head(&c, 4, n);
-	for (size_t i = 0; i < n; i++) {
+	for (size_t i = 0; i < n && c.p != NULL; i++) {
+		size_t dl = 0;
+
+		if (m[i].label == NULL) return AEGIS_ERR_EVIDENCE;
+		while (dl < sizeof(m[i].desc) && m[i].desc[dl] != '\0') dl++; /* never read beyond the description */
 		cbor_head(&c, 5, 5);
 		cbor_int(&c, 1); cbor_text(&c, m[i].label);
 		cbor_int(&c, 2); cbor_bytes(&c, m[i].value, 32);
 		cbor_int(&c, 4); cbor_text(&c, pl->version);
 		cbor_int(&c, 5); cbor_bytes(&c, zero, 32);
-		cbor_int(&c, 6); cbor_text(&c, m[i].desc);
+		cbor_int(&c, 6); cbor_text_n(&c, m[i].desc, dl);
 	}
 	if (c.p == NULL) return AEGIS_ERR_EVIDENCE; /* more than fits the work buffer or the caller's reply */
 	*len = (size_t)(c.p - out);
@@ -474,14 +529,12 @@ static AEGIS_NOINLINE int make_claims(struct aegis_prover *p, const uint8_t chal
 }
 
 /* The quote just signed becomes the one an exchange can continue. */
-static AEGIS_NOINLINE void quote_keep(struct aegis_prover *p, const uint8_t challenge[32], const uint8_t *evidence,
-				      size_t n)
+static AEGIS_NOINLINE void quote_keep(struct aegis_prover *p, const uint8_t *evidence, size_t n)
 {
 	uint8_t h[32];
 
 	sha3_256(evidence, n, h);
-	hash_parts(p->quote_t1, T_QUOTE, challenge, 32, h, 32, NULL, 0, NULL, 0);
-	memcpy(p->quote_ch, challenge, 32);
+	hash_parts(p->quote_t1, T_QUOTE, p->quote_ch, 32, h, 32, NULL, 0, NULL, 0);
 	p->quote_ready = 1;
 }
 
@@ -495,17 +548,22 @@ AEGIS_INLINE int quote(struct aegis_prover *p, const uint8_t challenge[32], size
 	int rc;
 
 	p->quote_ready = 0; /* only a quote that was signed can be continued, and only the last one */
+	/* The challenge is read once, into the context: the evidence, the transcript and the comparison at the next
+	 * exchange all use that copy, whatever happens to the caller's afterwards. */
+	memcpy(p->quote_ch, challenge, 32);
+	AEGIS_TEST_INPUTS_TAKEN();
 	if (cap > max) cap = max;
 	if (pl->evidence != NULL) {
-		rc = pl->evidence(pl->user, challenge, e, cap, &n) == 0 && n != 0 && n <= cap ? AEGIS_OK : AEGIS_ERR_EVIDENCE;
+		/* what the platform says it wrote must be what fits: a length beyond cap is refused, never signed */
+		rc = pl->evidence(pl->user, p->quote_ch, e, cap, &n) == 0 && n != 0 && n <= cap ? AEGIS_OK : AEGIS_ERR_EVIDENCE;
 	} else {
-		rc = make_claims(p, challenge, e, cap, &n);
+		rc = make_claims(p, p->quote_ch, e, cap, &n);
 	}
 	if (rc != AEGIS_OK) return rc;
 	memcpy(p->work, QUOTE_LABEL, sizeof(QUOTE_LABEL)); /* the label and its terminator, then the evidence */
 	rc = sign_work(p, sizeof(QUOTE_LABEL) + n);
 	if (rc != AEGIS_OK) return rc;
-	quote_keep(p, challenge, e, n);
+	quote_keep(p, e, n);
 	*evidence = e;
 	*len = n;
 	return AEGIS_OK;
@@ -523,19 +581,31 @@ AEGIS_INLINE int quote(struct aegis_prover *p, const uint8_t challenge[32], size
  * reports success and writes nothing must not bring that back.
  *
  * The inputs have fixed lengths, so their boundaries cannot move; the root is used for nothing else, and the last
- * byte separates the two halves. */
-static AEGIS_NOINLINE int kem_coins(struct aegis_prover *p, const uint8_t nonce[32], uint8_t coins[64])
+ * byte separates the two halves.
+ *
+ * What a broken generator typically gives is refused too: 32 equal bytes (all zeros among them), and the very bytes
+ * of its last draw (a generator that stands still; the last draw is a signature's or the exchange before this
+ * one's, remembered in the context by its hash). A generator that starts again with the same output after a reset cannot be seen from
+ * here: that is the platform's to exclude (aegis_sdk.h). */
+static AEGIS_NOINLINE int kem_coins(struct aegis_prover *p, uint8_t coins[64])
 {
 	const struct aegis_platform *pl = p->plat;
-	uint8_t fresh[32] = {0}, c[5], any = 0;
+	uint8_t fresh[32] = {0}, c[5], h[32];
+	int bad;
 
 	if (pl->random(pl->user, fresh, sizeof(fresh)) != 0) {
 		wipe(fresh, sizeof(fresh));
 		return AEGIS_ERR_RNG;
 	}
-	for (size_t i = 0; i < sizeof(fresh); i++) any |= fresh[i];
-	if (!any) return AEGIS_ERR_RNG;
-	memcpy(p->kem_nonce, nonce, 32);
+	/* remembered as a hash: the bytes themselves are part of this exchange's key and are not kept */
+	hash_parts(h, RNG_LABEL, fresh, sizeof(fresh), NULL, 0, NULL, 0, NULL, 0);
+	bad = all_equal(fresh, sizeof(fresh)) || (p->rng_have && memcmp(h, p->rng_last, sizeof(h)) == 0);
+	memcpy(p->rng_last, h, sizeof(h));
+	p->rng_have = 1;
+	if (bad) {
+		wipe(fresh, sizeof(fresh));
+		return AEGIS_ERR_RNG;
+	}
 	p->kem_counter++; /* counts the key pairs made since the start */
 	c[0] = (uint8_t)p->kem_counter; c[1] = (uint8_t)(p->kem_counter >> 8);
 	c[2] = (uint8_t)(p->kem_counter >> 16); c[3] = (uint8_t)(p->kem_counter >> 24);
@@ -548,10 +618,10 @@ static AEGIS_NOINLINE int kem_coins(struct aegis_prover *p, const uint8_t nonce[
 }
 
 /* The exchange's key pair. A function of its own: the coins are off the stack again before the signature. */
-static AEGIS_NOINLINE int kem_make_key(struct aegis_prover *p, const uint8_t nonce[32])
+static AEGIS_NOINLINE int kem_make_key(struct aegis_prover *p)
 {
 	uint8_t coins[64];
-	int rc = kem_coins(p, nonce, coins);
+	int rc = kem_coins(p, coins);
 
 	if (rc == AEGIS_OK && aegis_mlkem_keypair_derand(p->kem_ek, p->kem_dk, coins) != 0) {
 		wipe(p->kem_dk, sizeof(p->kem_dk));
@@ -590,9 +660,11 @@ AEGIS_INLINE int kem_init(struct aegis_prover *p, const uint8_t nonce[32])
 	/* The nonce names the quote this exchange continues: the challenge of the last one signed. That quote is used
 	 * up here, whether or not the exchange completes. Any other nonce: the unbound exchange. (Both values are
 	 * public, so the comparison need not take constant time.) */
-	p->kem_bound = p->quote_ready && memcmp(nonce, p->quote_ch, 32) == 0;
+	memcpy(p->kem_nonce, nonce, 32); /* read once: the comparison, the key and the signature use this copy */
+	AEGIS_TEST_INPUTS_TAKEN();
+	p->kem_bound = p->quote_ready && memcmp(p->kem_nonce, p->quote_ch, 32) == 0;
 	if (p->kem_bound) p->quote_ready = 0;
-	rc = kem_make_key(p, nonce); /* no fresh randomness: no key, rather than one that can be made again */
+	rc = kem_make_key(p); /* no fresh randomness: no key, rather than one that can be made again */
 	if (rc != AEGIS_OK) return rc;
 	rc = sign_work(p, kem_init_message(p));
 	if (rc != AEGIS_OK) {
@@ -662,37 +734,54 @@ static uint32_t cred_lifetime(const uint8_t *body, size_t n)
 	return (uint32_t)(expires - issued);
 }
 
-/* Credential = body || '\n' || ML-DSA-65 signature by the pinned verifier key over "aegis-credential-v1\0" || body
- * (pure ML-DSA, empty context). The body must name SHA3-256(ct), this device's key and SHA3-256(ek) of the pending
+/* Take the credential in: body || '\n' || ML-DSA-65 signature. The caller's bytes are read here, once, and never
+ * again: the body goes into the work buffer behind the label it is verified under, the signature into the context
+ * (in the place of the last signature made, which has been given out). Everything after this (the verification, the
+ * names, the lifetime, the credential's hash) is done on these copies, so that what is accepted is what was
+ * verified even if the caller's memory changes meanwhile. The first newline must be the one before the signature.
+ * Gives the body's length. */
+static int cred_take(struct aegis_prover *p, const uint8_t *cred, size_t cred_len, size_t *body_len)
+{
+	uint8_t *body = p->work + sizeof(CRED_LABEL);
+	uint8_t newlines = 0, separator;
+	size_t n;
+
+	if (cred_len < SIG_LEN + 1) return AEGIS_ERR_CRED_SIGNATURE;
+	n = cred_len - SIG_LEN - 1;
+	/* the body must fit the work buffer behind the label: a longer one than this port takes is refused */
+	if (n > p->work_len - sizeof(CRED_LABEL)) return AEGIS_ERR_CRED_SIGNATURE;
+	memcpy(p->work, CRED_LABEL, sizeof(CRED_LABEL));
+	memcpy(body, cred, n);
+	separator = cred[n];
+	memcpy(p->sig, cred + n + 1, SIG_LEN);
+	for (size_t i = 0; i < n; i++) newlines |= (uint8_t)(body[i] == '\n');
+	*body_len = n;
+	return !newlines && separator == '\n' ? AEGIS_OK : AEGIS_ERR_CRED_SIGNATURE;
+}
+
+/* The credential taken in by cred_take: signed by the pinned verifier key over "aegis-credential-v1\0" || body (pure
+ * ML-DSA, empty context). The body must name SHA3-256(ct), this device's key and SHA3-256(ek) of the pending
  * exchange: without the last, an old credential replayed after a new exchange passed the check, decapsulated to an
  * unrelated key and replaced a working session (review 2026-11-18). For an exchange that continues a quote it must
  * name T2 as well: the verifier signed for that quote and this key. Gives the lifetime the body carries. */
-static int check_credential(struct aegis_prover *p, const uint8_t *cred, size_t cred_len, const uint8_t h_ct[32],
+static int check_credential(struct aegis_prover *p, size_t body_len, const uint8_t h_ct[32], const uint8_t h_ek[32],
 			    uint32_t *lifetime)
 {
 	const uint8_t pre[2] = {0, 0};
-	uint8_t h_ek[32];
-	size_t body_len = 0;
+	const uint8_t *body = p->work + sizeof(CRED_LABEL);
 
-	while (body_len < cred_len && cred[body_len] != '\n') body_len++;
-	if (body_len == cred_len || cred_len - body_len - 1 != SIG_LEN || sizeof(CRED_LABEL) + body_len > p->work_len) {
+	if (aegis_mldsa_verify_internal(p->sig, p->work, sizeof(CRED_LABEL) + body_len, pre, sizeof(pre), p->verifier_pk,
+					0) != 0) {
 		return AEGIS_ERR_CRED_SIGNATURE;
 	}
-	memcpy(p->work, CRED_LABEL, sizeof(CRED_LABEL));
-	memcpy(p->work + sizeof(CRED_LABEL), cred, body_len);
-	if (aegis_mldsa_verify_internal(cred + body_len + 1, p->work, sizeof(CRED_LABEL) + body_len, pre, sizeof(pre),
-					p->verifier_pk, 0) != 0) {
-		return AEGIS_ERR_CRED_SIGNATURE;
-	}
-	if (!names(cred, body_len, "kem_ct_sha3_256", h_ct)) return AEGIS_ERR_CRED_OTHER_EXCHANGE;
+	if (!names(body, body_len, "kem_ct_sha3_256", h_ct)) return AEGIS_ERR_CRED_OTHER_EXCHANGE;
 	if (!(p->plat->compat & AEGIS_COMPAT_CRED_WITHOUT_ENDPOINT) &&
-	    !names(cred, body_len, "endpoint_pq_pk_sha256", p->pk_sha256)) {
+	    !names(body, body_len, "endpoint_pq_pk_sha256", p->pk_sha256)) {
 		return AEGIS_ERR_CRED_OTHER_ENDPOINT;
 	}
-	sha3_256(p->kem_ek, KEM_EK_LEN, h_ek);
-	if (!names(cred, body_len, "kem_ek_sha3_256", h_ek)) return AEGIS_ERR_CRED_OTHER_KEY;
-	if (p->kem_bound && !names(cred, body_len, "transcript_sha3_256", p->kem_t2)) return AEGIS_ERR_CRED_OTHER_TRANSCRIPT;
-	*lifetime = cred_lifetime(cred, body_len);
+	if (!names(body, body_len, "kem_ek_sha3_256", h_ek)) return AEGIS_ERR_CRED_OTHER_KEY;
+	if (p->kem_bound && !names(body, body_len, "transcript_sha3_256", p->kem_t2)) return AEGIS_ERR_CRED_OTHER_TRANSCRIPT;
+	*lifetime = cred_lifetime(body, body_len);
 	return *lifetime ? AEGIS_OK : AEGIS_ERR_CRED_VALIDITY;
 }
 
@@ -705,22 +794,33 @@ static int kem_state(const struct aegis_prover *p)
 
 static int kem_finish(struct aegis_prover *p, const uint8_t *ct, const uint8_t *cred, size_t cred_len, uint8_t tag[32])
 {
-	uint8_t k[32], h_ct[32];
+	static const uint8_t newline[1] = {'\n'};
+	uint8_t k[32], h_ct[32], h_ek[32];
+	uint8_t *own_ct = p->kem_ek; /* see below */
+	size_t body_len = 0;
 	uint32_t lifetime = 0;
 	int rc = kem_state(p);
 
 	if (rc != AEGIS_OK) return rc;
 	if (cred_len == 0 || cred_len > AEGIS_CRED_MAX) return AEGIS_ERR_BAD_REQUEST;
 	p->kem_pending = 0;
-	sha3_256(ct, KEM_CT_LEN, h_ct);
-	rc = check_credential(p, cred, cred_len, h_ct, &lifetime);
-	if (rc == AEGIS_OK && aegis_mlkem_dec(k, ct, p->kem_dk) != 0) rc = AEGIS_ERR_KEM;
+	/* The caller's ciphertext and credential are read once, here. The ciphertext is hashed and then decapsulated:
+	 * both must see the same bytes, so it is copied into the context first, into the place of the exchange's
+	 * encapsulation key, of which only the hash is needed from here on (the exchange is over either way). */
+	sha3_256(p->kem_ek, KEM_EK_LEN, h_ek);
+	memcpy(own_ct, ct, KEM_CT_LEN);
+	rc = cred_take(p, cred, cred_len, &body_len);
+	AEGIS_TEST_INPUTS_TAKEN();
+	sha3_256(own_ct, KEM_CT_LEN, h_ct);
+	if (rc == AEGIS_OK) rc = check_credential(p, body_len, h_ct, h_ek, &lifetime);
+	if (rc == AEGIS_OK && aegis_mlkem_dec(k, own_ct, p->kem_dk) != 0) rc = AEGIS_ERR_KEM;
 	wipe(p->kem_dk, sizeof(p->kem_dk));
 	if (rc != AEGIS_OK) {
 		wipe(k, sizeof(k));
 		return rc;
 	}
-	sha3_256(cred, cred_len, p->cred_hash);
+	/* SHA3-256 of the credential as it was verified: body, newline, signature */
+	hash_parts(p->cred_hash, "", p->work + sizeof(CRED_LABEL), body_len, newline, 1, p->sig, SIG_LEN, NULL, 0);
 	if (p->kem_bound) {
 		/* T3 takes h_ct's place: the ciphertext's hash is in it, and is not used again */
 		hash_parts(h_ct, T_KEM_FIN, p->kem_t2, 32, h_ct, 32, p->cred_hash, 32, NULL, 0);

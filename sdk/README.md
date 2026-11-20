@@ -53,8 +53,11 @@ The ports to chips live with their build systems:
                                     optionally the identity key and a status text       <- you write this
 ```
 
-The core never touches the network and never blocks. It is a function from one request to one reply. You carry the
-bytes; that part of the device can be untrusted, because everything it carries is signed, MACed or public.
+The core never touches the network and never waits for anything by itself: it is a function from one request to one
+reply, and returns when your platform functions have (a generator or a clock that blocks is time spent inside the
+call). You carry the bytes; that part of the device can be untrusted, because everything it carries is signed, MACed
+or public. What it must not be able to do is change a request while the core works on it: see "What must stay in
+the secure world".
 
 There are two ways to call it, with the same state machine behind both:
 
@@ -95,16 +98,19 @@ What it costs on a Cortex-M33 (GCC 14, `-Os`, the STM32H573 partition):
 
 | | |
 |---|---|
-| Context (`struct aegis_prover`) | 13216 bytes of RAM: both identity keys, one signature, one ML-KEM key pair, the session |
+| Context (`struct aegis_prover`) | 13232 bytes of RAM: both identity keys, one signature, one ML-KEM key pair, the session |
 | Work buffer | 1234 bytes at least (`AEGIS_WORK_MIN`); 2854 for every credential the protocol allows (`AEGIS_WORK_LEN`) |
-| Stack, quote or exchange start (ML-DSA-65 signature) | 18.7 KB below the transport's entry; the core's own frames are 136 bytes of it |
+| Stack, quote or exchange start (ML-DSA-65 signature) | 18.7 KB below the transport's entry; the core's own frames are 112 bytes of it |
 | Stack, exchange finish (ML-KEM decapsulation) | 18.4 KB |
 | Stack, start (ML-DSA-65 key generation) | 16.4 KB |
-| Stack, heartbeat | 0.8 KB |
+| Stack, heartbeat | 0.7 KB |
 
 The stack is mldsa-native's and mlkem-native's; `tools/stack_estimate.py <TF-M build>` recomputes the figures from
-GCC's `-fstack-usage` output and the image's call graph. Give the thread or partition that calls the core 24 KB or
-more, and watch the high-water mark (the TF-M ports report it in every heartbeat).
+GCC's `-fstack-usage` output and the image's call graph. They are an estimate, not a proven upper bound: the frames
+of whatever enters the core, interrupts taken on the same stack and calls through pointers that the script does not
+list are not in them (on the STM32 boards the measured high-water mark is 168 bytes above the estimate). Give the
+thread or partition that calls the core 24 KB or more, and watch the high-water mark (the TF-M ports report it in
+every heartbeat).
 
 ## The platform layer
 
@@ -114,22 +120,23 @@ default: no randomness means no signature, no clock means no session, no measure
 
 | Member | Required | Contract | Security requirement |
 |---|---|---|---|
-| `random(user, out, n)` | yes | Fill `n` bytes (the core asks for 32 at a time). | From the chip's TRNG or a DRBG seeded from it, read inside the secure world. It must not produce the same bytes again after a reset: the bytes go into each exchange's ML-KEM key, and a repeated key lets a recorded exchange be replayed (`tests/host/test_reset_replay_check.py`). A failure refuses the request; 32 zero bytes for an exchange key do too. |
+| `random(user, out, n)` | yes | Fill `n` bytes (the core asks for 32 at a time). | From the chip's TRNG or a DRBG seeded from it, read inside the secure world. It must not produce the same bytes again after a reset: the bytes go into each exchange's ML-KEM key, and a repeated key lets a recorded exchange be replayed (`tests/host/test_reset_replay_check.py`). A failure refuses the request. For an exchange key the core also refuses 32 equal bytes and the bytes of the draw before; that catches a generator that is plainly stuck and is no health test: the quality of the bytes is yours to ensure. |
 | `clock(user, &now)`, `clock_hz` | yes | A count that only advances, `clock_hz` counts a second, any origin. Read at every request. | Nothing outside the secure world can set, slow or stop it: not the non-secure image, not a power mode it can enter. Return nonzero whenever you can no longer say so (the clock source changed, a wrap may have been missed); the session then ends and none starts. Without such a counter the device cannot end a session by itself. |
 | `measurements(user, &list, &count)`, `profile`, `version` | one of these two | Point `*list` at your array of `struct aegis_measurement` (label, 32-byte digest, description), valid until the next call. The core encodes them as CBOR claims with `profile` and `version`. | Taken by code that the measured code cannot change: the boot stage before it, or the secure world before the non-secure image runs. A port that hashes storage when asked (the single-image prover, the PC port) reports what is stored, not what was started, and its `profile` should say so. The verifier's policy keys on `profile`. |
-| `evidence(user, challenge, out, cap, &len)` | one of these two | Write your platform's own token for this challenge (at most `cap` bytes). The core signs it unchanged. | As above, for whatever produced the token (TF-M's initial attestation service on the STM32). |
+| `evidence(user, challenge, out, cap, &len)` | one of these two | Write your platform's own token for this challenge (at most `cap` bytes) and report its length. The core signs it unchanged; a length of 0 or above `cap` refuses the quote. | As above, for whatever produced the token (TF-M's initial attestation service on the STM32). |
 | `identity_public_key`, `identity_sign` | no, both or neither | The key lives in the platform: give the public key, and sign with pure ML-DSA-65, empty context, hedged (FIPS 204 `ML-DSA.Sign`). | The secret key never leaves the element that holds it. Leave both `NULL` to let the core hold the key (next table). |
 | `status(user, buf, cap)` | no | A short status text for heartbeats in the line transport (`key=value;key=value`), terminated, shorter than `cap`. | It is MACed, not secret. Never let a less trusted party choose a `ttl=` key in it: the core appends the real one. |
 | `compat` | no | 0. The two `AEGIS_COMPAT_*` flags keep the STM32 image in the field byte-compatible. | |
+| the structure itself | | The core keeps a pointer to it, not a copy. | In memory only the secure world can write, unchanged while the context lives: make it `const`. Whoever can change a function pointer in it runs code in the secure world. |
 
 And what you hand to `aegis_prover_init` in `struct aegis_config`:
 
 | Member | Contract | Security requirement |
 |---|---|---|
-| `identity_seed` | 32 bytes; the core derives the ML-DSA-65 key pair from it at every start (the same pair each time). `NULL` when the platform holds the key. | Device-unique, derived from a hardware secret that only the secure world can use (the STM32's DHUK through SAES, the RW612's ELS die key, OP-TEE's hardware unique key from the PUF). Never stored in the clear, never visible to the non-secure side. The core does not keep it; wipe your copy (`aegis_wipe`). |
+| `identity_seed` | 32 bytes; the core derives the ML-DSA-65 key pair from it at every start (the same pair each time). `NULL` when the platform holds the key. 32 zero bytes are refused, here and for the root: that is what a derivation that failed leaves. | Device-unique, derived from a hardware secret that only the secure world can use (the STM32's DHUK through SAES, the RW612's ELS die key, OP-TEE's hardware unique key from the PUF). Never stored in the clear, never visible to the non-secure side. The core does not keep it; wipe your copy (`aegis_wipe`). |
 | `exchange_root` | 32 bytes, mixed into every exchange's ML-KEM key with fresh randomness. | A second secret from the same hardware key, with its own derivation label. It is defence in depth for a weak generator, not a substitute for one. |
-| `verifier_pk` | The verifier's ML-DSA-65 public key, 1952 bytes. Not copied. | Part of the measured, signed image (ROM). Only credentials under this key start a session; whoever can change it owns the device's sessions. |
-| `work`, `work_len` | The work buffer, in secure RAM. | |
+| `verifier_pk` | The verifier's ML-DSA-65 public key, 1952 bytes. Not copied: the core keeps the pointer. | `const`, part of the measured, signed image (ROM), writable by nothing outside the secure world. Only credentials under this key start a session; whoever can change it owns the device's sessions. |
+| `work`, `work_len` | The work buffer, in secure RAM. The core first writes it at its first operation, so a port short of stack may derive seed and root in it, pass them from there and wipe them after `aegis_prover_init` (the STM32 port does). | |
 
 ### State and persistence
 
@@ -192,8 +199,17 @@ established session alone.
   measurements, the pinned verifier key.
 - Debug access. A debugger can stop the clock and read the keys; ship with it closed.
 
-What may be outside: the transport, including the buffers the request and the reply travel in (the ports copy the
-request into secure memory before the core reads it).
+- **Every input, for as long as a call lasts.** A line, a challenge, a nonce, a ciphertext, a credential and a
+  status text must be in memory that only the caller can write while the core works on them. If the non-secure side
+  could change a credential between the check of its signature and the use of its content (a message buffer that
+  stays mapped, shared memory with a trusted application, a peripheral writing by DMA), it could get a session the
+  verifier never authorised. So a transport copies each request into the secure world before it calls the core;
+  every port here does (`psa_read`, a copy out of the shared memory reference). The binary operations take their
+  inputs once and work on their own copies from then on, as a second line of defence
+  (`tests/host/test_sdk_core_contract.py` overwrites the caller's buffers in mid-operation); the line transport
+  parses the line where it stands and relies on the rule.
+
+What may be outside: the transport and the buffers the request arrives in and the reply leaves from.
 
 ## Limits
 
@@ -237,6 +253,7 @@ Nothing of these is in version 1; the seams are marked in `src/aegis_proto.c`.
 |---|---|
 | The gateway's code against the core on the PC | `tests/host/test_rw612_proto.py` and the tests that import it |
 | The same answers as before the SDK, byte for byte, for a fixed generator | `tests/host/test_sdk_golden.py` against `vectors/sdk-golden/`; `tools/sdk_golden.py` records them from the commit before the SDK and compares whole fuzz corpora (`evidence/sdk-core/summary.txt`) |
+| The core's contracts at their exact boundaries: inputs read once, the credential against the work buffer, the evidence's reported length, a status buffer one byte short, a generator that repeats | `tests/host/test_sdk_core_contract.py` (`sdk/tests/core_contract_check.c`), with and without sanitizers |
 | One fuzz harness on the core, both transports, every configuration, with an independent model of the protocol | `tests/fuzz/fuzz_sdk_core.c`, `tests/fuzz/run.sh`; seeds of all families in `tests/fuzz/seeds` |
 | The STM32 port's own code (PSA messages, the RTC, the stack mark) on PC stand-ins | `tests/fuzz/stm32`, `STM32=1 tests/fuzz/run.sh`, `tests/host/test_stm32_partition.py` |
 | The OP-TEE port on a stand-in for OP-TEE | `endpoints/zynqmp/optee/tests/run.sh` |

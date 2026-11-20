@@ -46,7 +46,9 @@
  *      session clock instead: 1 forward by the payload's seconds (32 bits), 2 it fails or works again, 3 backwards.
  *      With the prefix also: payload byte 1, bit 2 makes the failing draws report success and write zero bytes;
  *      4 a reset (the device's protocol state as after a start; the random generator goes on), 5 the clock forward
- *      by the payload's counts, 6 the platform gives no evidence the next N times
+ *      by the payload's counts, 6 the platform gives no evidence the next N times (payload byte 0, bits 0-1: N;
+ *      bits 2-3, with a token: 0 it fails, 1 it reports one byte more than the room it has, which must be refused
+ *      and never signed, 2 it fills the room exactly, which is accepted, 3 it reports a length of zero)
  *   7  set the platform's status text (from the payload; never empty, as on the board)
  * The binary front (bit 0 set), with the STM32 harness's operations, as far as they are the core's:
  *   0  a raw message: type, two input sizes, two output sizes, then the input bytes. What that family's transport
@@ -140,6 +142,10 @@ static uint64_t rng_state;
 static unsigned rng_skip, rng_fail; /* after rng_skip good draws, the next rng_fail draws fail */
 static int rng_zero;                /* the failing draws report success and write zero bytes */
 static unsigned ev_fail;            /* the platform gives no evidence the next ev_fail times */
+/* ... or, with a token (bit 4), does one of these instead: 1 reports one byte more than the room it was given (it
+ * must not be believed), 2 fills the room exactly (the longest evidence there is: accepted), 3 reports nothing */
+static unsigned ev_mode;
+static size_t ev_len;               /* the length of the last token given */
 static char status_text[256];
 
 static int fz_random(uint8_t *out, size_t n)
@@ -189,16 +195,26 @@ static int fz_measurements(void *user, const struct aegis_measurement **list, si
 /* the platform's own token: a stand-in that carries the challenge */
 static int fz_evidence(void *user, const uint8_t challenge[32], uint8_t *out, size_t cap, size_t *len)
 {
+	size_t n = FZ_TOKEN_LEN;
+	unsigned mode = 4; /* an honest token */
+
 	(void)user;
+	if (cap < FZ_TOKEN_LEN) return -1;
 	if (ev_fail) {
 		ev_fail--;
-		return -1;
+		mode = ev_mode;
 	}
-	if (cap < FZ_TOKEN_LEN) return -1;
-	memset(out, 0xa7, FZ_TOKEN_LEN);
+	if (mode == 0) return -1;
+	if (mode == 3) {
+		*len = 0;
+		return 0;
+	}
+	if (mode == 2) n = cap;
+	memset(out, 0xa7, n);
 	memcpy(out, "FZTOKEN", 7);
 	memcpy(out + 8, challenge, 32);
-	*len = FZ_TOKEN_LEN;
+	ev_len = n;
+	*len = mode == 1 ? cap + 1 : n; /* 1: a lie, one byte more than there is room for */
 	return 0;
 }
 
@@ -378,10 +394,11 @@ static size_t u16(const uint8_t *p, size_t n, size_t i) { return i + 1 < n ? (si
 
 static int dev_verify(const char *label, const uint8_t *m, size_t n, const uint8_t *s)
 {
-	static uint8_t buf[64 + KEM_EK_LEN + EV_MAX];
+	static uint8_t buf[64 + KEM_EK_LEN + AEGIS_WORK_CRED]; /* the longest evidence fills a work buffer */
 	const uint8_t pre[2] = {0, 0};
 	size_t l = strlen(label) + 1;
 
+	if (l + n > sizeof(buf)) DIE("%zu signed bytes", n);
 	memcpy(buf, label, l);
 	memcpy(buf + l, m, n);
 	return aegis_mldsa_verify_internal(s, buf, l + n, pre, 2, dev_pk, 0);
@@ -463,7 +480,7 @@ static int model_kem_init_result(void)
 /* and a quote: the platform's evidence, then one draw for the signature */
 static int model_quote_result(void)
 {
-	if (ev_fail) return AEGIS_ERR_EVIDENCE;
+	if (ev_fail && !(C.token && ev_mode == 2)) return AEGIS_ERR_EVIDENCE; /* 2: the longest token, an honest one */
 	if (rng_next(0) == 1) return C.platkey ? AEGIS_ERR_SIGN : AEGIS_ERR_SIGN_RNG;
 	return AEGIS_OK;
 }
@@ -641,6 +658,7 @@ static void device_reset(void)
 {
 	P->kem_pending = 0; P->session_ready = 0; P->hb_counter = 0; P->kem_counter = 0;
 	P->kem_bound = 0;
+	P->rng_have = 0; /* the generator's last output is not known after a start */
 #if !defined(FZ_QUOTE_OUTLIVES_RESET)
 	P->quote_ready = 0; /* RAM: a quote does not outlive a reset. The control build keeps it, to show the model sees it */
 #endif
@@ -832,7 +850,9 @@ static void l_hb(const uint8_t *p, size_t n)
 static void check_evidence(const uint8_t ch[32], const uint8_t *ev, size_t len)
 {
 	if (C.token) {
-		if (len != FZ_TOKEN_LEN || memcmp(ev, "FZTOKEN", 7) || memcmp(ev + 8, ch, 32)) DIE("the platform's token was changed");
+		if (len != ev_len || memcmp(ev, "FZTOKEN", 7) || memcmp(ev + 8, ch, 32)) DIE("the platform's token was changed");
+		for (size_t i = 40; i < len; i++)
+			if (ev[i] != 0xa7) DIE("the platform's token was changed at byte %zu of %zu", i, len);
 	} else {
 		if (!memmem(ev, len, ch, 32)) DIE("challenge not in the claims");
 		if (!memmem(ev, len, PROFILE, sizeof(PROFILE) - 1)) DIE("profile not in the claims");
@@ -842,7 +862,7 @@ static void check_evidence(const uint8_t ch[32], const uint8_t *ev, size_t len)
 
 static void l_chal(const uint8_t *p, size_t n)
 {
-	static uint8_t ev[EV_MAX], sig[SIG_LEN];
+	static uint8_t ev[AEGIS_WORK_CRED], sig[SIG_LEN]; /* the longest evidence fills a work buffer */
 	uint8_t ch[32] = {0};
 	char line[7 + 64 + 1], *rep, *f[8];
 	const int want = model_quote_result();
@@ -857,7 +877,7 @@ static void l_chal(const uint8_t *p, size_t n)
 		model_quote(0, ch, NULL, 0);
 	} else {
 		if (fields(rep, f, 8) != 6 || strcmp(f[0], "PQTOKEN") || sscanf(f[1], "%u", &len) != 1 ||
-		    len > EV_MAX || unhexs(f[2], strlen(f[2]), ev, len) || unhexs(f[4], strlen(f[4]), sig, SIG_LEN) ||
+		    len > sizeof(ev) || unhexs(f[2], strlen(f[2]), ev, len) || unhexs(f[4], strlen(f[4]), sig, SIG_LEN) ||
 		    strcmp(f[5], "END"))
 			DIE("PQTOKEN reply");
 		model_quote(1, ch, ev, len);
@@ -915,7 +935,10 @@ static void line_op(uint8_t op, uint8_t sel, const uint8_t *p, size_t n)
 		else if (sel == 3) fz_now -= d * C.hz < fz_now ? d * C.hz : fz_now;
 		else if (C.magic && sel == 4) device_reset();
 		else if (C.magic && sel == 5) fz_now += d;
-		else if (C.magic && sel == 6) ev_fail = n ? p[0] & 3 : 1;
+		else if (C.magic && sel == 6) {
+			ev_fail = n ? p[0] & 3 : 1;
+			ev_mode = n ? (p[0] >> 2) & 3 : 0;
+		}
 		else set_rng(p, n, C.magic);
 		break;
 	}
@@ -1202,6 +1225,7 @@ static void binary_op(uint8_t op, uint8_t sel, const uint8_t *p, size_t n)
 			fz_now = 0xFFFFFFFFu - (uint32_t)(u16(p, n, 2) | u16(p, n, 4) << 16);
 		} else if (sel == 6) {
 			ev_fail = n ? p[0] & 3 : 1;
+			ev_mode = n ? (p[0] >> 2) & 3 : 0;
 		} else if (sel == 7) {
 			fz_clock_fail = n ? p[0] & 1 : 1;
 		} else {
@@ -1370,6 +1394,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	rng_skip = rng_fail = 0;
 	rng_zero = 0;
 	ev_fail = 0;
+	ev_mode = 0;
 	strcpy(status_text, "requests=1;stack=na;clk=ref;fw=rw612-tfm-0.2.2");
 
 	while (i + 3 <= size && ops++ < 24) {

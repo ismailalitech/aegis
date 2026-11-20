@@ -832,6 +832,7 @@ static void reset(unsigned hw_flags, unsigned rtcsel, uint32_t count)
 {
 	core.kem_pending = 0; core.session_ready = 0; core.session_expired = 0; core.hb_counter = 0; core.kem_counter = 0;
 	core.kem_bound = 0;
+	core.rng_have = 0; /* the generator's last output is not known after a reset */
 #if !defined(FZ_QUOTE_OUTLIVES_RESET)
 	core.quote_ready = 0; /* RAM: a quote does not outlive a reset. The control build keeps it, to show the model sees it */
 #endif

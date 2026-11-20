@@ -107,9 +107,19 @@ new code to the recorded traces for a fixed generator (30 STM32 seeds, 18 line-p
 comparison ran over the fuzzers' corpora (704 STM32 inputs and 478 line-protocol inputs after 200 s of fuzzing
 each: none differs, `evidence/sdk-core/summary.txt`). Two habits of the STM32 partition differ from the other devices and are kept behind
 compatibility flags of the core: its heartbeat counter runs from boot across sessions, and it does not require the
-credential to name the device's key (it requires the exchange's ML-KEM key, which no other device has). One thing
-changed for the other families: a random draw of 32 zero bytes for an exchange's key is now refused everywhere
-(`ERR rng`), as the STM32 partition already did.
+credential to name the device's key (it requires the exchange's ML-KEM key, which no other device has). What is
+refused now and was not before, on every family, none of it reachable with a working device and a valid request:
+a random draw for an exchange's key of 32 equal bytes (the STM32 partition refused zeros only, the others nothing)
+or equal to the generator's draw before it (`ERR rng`); a seed or an exchange root of zeros at start; a platform
+that gives no measurement, one without a label, or evidence longer than it has room for (`ERR evidence`).
+
+**Inputs are read once.** Whatever a caller passes to the core must be in memory nothing less trusted can write
+during the call; every port copies a request into the secure world first. As a second line of defence the binary
+operations copy what they check before they check it (the credential's body and signature, the ciphertext, the
+challenge, the nonce) and never go back to the caller's memory, so a credential that passed is the credential that
+is used (`tests/host/test_sdk_core_contract.py`, which overwrites the caller's buffers in mid-operation, and holds
+the other boundaries a careless change would move: the credential against the work buffer, the length a platform
+reports for its evidence, a heartbeat status buffer one byte short).
 
 **State.** The core needs no persistent storage, and a port must not give it any: the session and the quote an
 exchange may continue live in the context, which `aegis_prover_init` wipes at every start.
@@ -119,12 +129,13 @@ lies; a key that depends on the measured code is the remedy, and belongs in the 
 and the trust each endpoint claims. Endorsed enrolment and an EAT/COSE encoding are later work; `sdk/README.md`
 names the functions they attach to.
 
-What was built from this source (none of it is on a board; the boards run the images of "One transcript" below):
+What was built from this source (after the review of 20 November 2026; the builds before its fixes were `-sdk`,
+SPE b876213a, and RW612 0.3.1, SPE b48d2ecf):
 
 | Device | Image | State |
 |---|---|---|
-| STM32H573 (TF-M) | `...-freshkem-transcript-sdk`, SPE b876213a, the same MCUboot version (2.3.0) and signer as the image on the boards | built with `build_tfm.sh`; held to the answers of SPE 3183f74a byte for byte on the PC; deepest stack path by GCC's figures 18728 bytes (`tools/stack_estimate.py`; 18712 for the image on the boards, which report `sstack=18880/26624`, so about 18896 is expected); 480 bytes less secure RAM, 3.1 KB more flash |
-| RW612 (TF-M) | secure image 0.3.1, SPE b48d2ecf; the non-secure image is byte for byte 0.2.2's (NSPE 24979a1f) | built; secure RAM 176924 to 161796 bytes of 192 KB (the core no longer copies the credential, the claims and the gateway's key) |
+| STM32H573 (TF-M) | `...-freshkem-transcript-sdk2`, SPE 9de76167, the same MCUboot version (2.3.0) and signer as the image before the SDK | built with `build_tfm.sh`; held to the answers of SPE 3183f74a byte for byte on the PC; deepest stack path by GCC's figures 18704 bytes (`tools/stack_estimate.py`; 18712 for SPE 3183f74a, which reports `sstack=18880/26624`, so about 18872 is expected); 448 bytes less secure RAM, 3.6 KB more flash than that image |
+| RW612 (TF-M) | secure image 0.3.2, SPE c8d0f012; the non-secure image is byte for byte 0.2.2's (NSPE 24979a1f) | built; secure RAM 176924 to 161828 bytes of 192 KB (the core no longer copies the credential, the claims and the gateway's key) |
 | RW612 (single image) | | source only (no Zephyr workspace on the build PC) |
 | ZynqMP (OP-TEE TA) | | source; `optee/tests/run.sh` runs the TA with the core on a stand-in for OP-TEE (also in CI); no `.ta` built on this PC |
 | Linux | `sdk/ports/linux`, a prover in C with the Python prover's command line, profile and measurements | PC-tested with the gateway's code (`tests/host/test_sdk_linux_port.py`); the bench's Linux endpoints keep the Python prover |

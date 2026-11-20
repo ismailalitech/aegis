@@ -60,6 +60,8 @@ def sdk_seeds():
     line_reset, line_ticks, line_no_evidence = op(6, sel=4), (lambda n: op(6, u32(n), sel=5)), op(6, b"\x01", sel=6)
     line_seconds = lambda n: op(6, u32(n), sel=1)   # noqa: E731
     bin_no_evidence = op(6, b"\x01", sel=6)
+    # the next n quotes get a token of the given kind: 1 one byte beyond the room, 2 exactly the room, 3 no length
+    bin_evidence = line_evidence = lambda n, mode: op(6, bytes([n | mode << 2]), sel=6)   # noqa: E731
     ct = bytes(1088)
     return {
         # the identity key held by the platform: the same exchange, and a signature the platform cannot make
@@ -92,7 +94,20 @@ def sdk_seeds():
                                  + QUOTE(C3) + INIT(C3) + fin() + SESSION),
         "sdk-no-evidence-token": (BINARY | TOKEN, QUOTE(C1) + bin_no_evidence + QUOTE(C2) + INIT(C1) + INIT(C2) + fin()
                                   + SESSION + QUOTE(C3) + INIT(C3) + fin() + SESSION),
-        # heartbeat status buffers: room, none (the status as given), exactly enough, too small; then raw ones
+        # a token whose length the platform reports wrongly or at the limit: one byte beyond the room (refused, and
+        # the quote before it is gone), exactly the room (accepted and continued), nothing (refused)
+        "sdk-evidence-length-binary": (BINARY | TOKEN, QUOTE(C1) + bin_evidence(1, 1) + QUOTE(C2) + INIT(C1) + INIT(C2)
+                                       + bin_evidence(1, 2) + QUOTE(C3) + INIT(C3) + fin() + SESSION
+                                       + bin_evidence(1, 3) + QUOTE(C1) + INIT(C1) + QUOTE(C2) + INIT(C2) + fin()),
+        "sdk-evidence-length-small-work": (BINARY | TOKEN | SMALL_WORK, bin_evidence(1, 2) + QUOTE(C1) + INIT(C1) + fin()
+                                           + SESSION + bin_evidence(2, 1) + QUOTE(C2) + QUOTE(C3) + QUOTE(C1)
+                                           + INIT(C1) + fin() + SESSION),
+        "sdk-evidence-length-line": (TOKEN, line_evidence(1, 1) + QUOTE(C1) + INIT(C1) + line_evidence(1, 2) + QUOTE(C2)
+                                     + INIT(C2) + fin() + SESSION + line_evidence(1, 3) + QUOTE(C3) + INIT(C3)),
+        # heartbeat status buffers: room, none (the status as given), exactly enough, too small (one byte short of
+        # the text with its ";ttl=3825", and by more); then raw ones
+        "sdk-heartbeat-one-short": (BINARY, EXCHANGE + op(3, bytes(32) + b"g" * 7, sel=3) + op(3, bytes(32) + b"g" * 6, sel=3)
+                                    + op(3, bytes(32) + b"h" * 10, sel=3) + op(3, bytes(32) + b"g" * 7, sel=2) + SESSION),
         "sdk-heartbeat-buffers": (BINARY, HB + EXCHANGE + op(3, bytes(32) + b"a=1", sel=1) + op(3, bytes(32) + b"a=1", sel=2)
                                   + op(3, bytes(32) + b"a=1", sel=3) + op(3, bytes(32) + b"b" * 40, sel=3)
                                   + op(3, bytes(32) + b"c" * 30, sel=18) + raw(6, bytes(32), b"ttl=9;x", 40, 0)

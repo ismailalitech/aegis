@@ -132,15 +132,17 @@ the gateway policy: `tools/rw612_tfm_reference.py` gives SPE `76f89751c178c99d08
 for this build (`aegis_s.bin`, sha256 `8f7a0197...`; NSPE stays `24979a1f...`). The heartbeat status says
 `fw=rw612-tfm-0.3.0`. On the board: `tests/board/transcript_swap_check.py`.
 
-## On the Prover SDK's core (0.3.1, built; not on the board)
+## On the Prover SDK's core (0.3.2)
 
 The partition's protocol code is the Prover SDK's core (`sdk/src/aegis_proto.c`), and `aegis_pq/aegis_pq.c` is
 its port to this chip (`sdk/README.md`). The lines, the claims and the status text are as in 0.3.0, except for the
-version they name; one refusal is new: a random draw of 32 zero bytes for an exchange's ML-KEM key answers
-`ERR rng`. The core keeps no copy of the credential, the claims or the gateway's key any more, so the secure image
-uses 161796 bytes of its 192 KB of RAM (176924 before).
+version they name. Refusals that are new, none of them reachable with a working chip: a random draw for an
+exchange's ML-KEM key of 32 equal bytes, or equal to the draw before it, answers `ERR rng`; a seed or root of zeros
+from ELS makes no key. The core keeps no copy of the credential, the claims or the gateway's key any more, so the
+secure image uses 161828 bytes of its 192 KB of RAM (176924 before).
 
 The non-secure image is again unchanged, byte for byte (`prover_ns.bin`, sha256 `9af83bab...`):
-`tools/rw612_tfm_reference.py` gives SPE `b48d2ecf2f36e52f9f708e6b7b65a5b85b35ce0fdbc12f0f23c9e191ecfa486f` for
-this build (`aegis_s.bin`, sha256 `ce6e5121...`; NSPE stays `24979a1f...`). The heartbeat status says
-`fw=rw612-tfm-0.3.1`.
+`tools/rw612_tfm_reference.py` gives SPE `c8d0f01223ca59f9223fdee4df675f2eaae3a190ed4b2ef11b0e1816b7d242f7` for
+this build (`aegis_s.bin`, sha256 `c312218b...`; NSPE stays `24979a1f...`). The heartbeat status says
+`fw=rw612-tfm-0.3.2`. (0.3.1, SPE `b48d2ecf...`, was the same before the fixes of the review: inputs read once,
+the generator's repeated output refused.)

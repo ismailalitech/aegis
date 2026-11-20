@@ -53,10 +53,14 @@ static int host_measurements(void *user, const struct aegis_measurement **list, 
 	for (size_t i = 0; i < h->images; i++) {
 		FILE *f = fopen(h->image[i].path, "rb");
 		size_t n;
+		int whole;
 
 		if (f == NULL) return -1; /* nothing to report: the quote is refused, not signed with a made-up value */
 		n = fread(img, 1, sizeof(img), f);
+		/* all of it or nothing: a read error, or a file longer than the buffer, is not hashed as far as it got */
+		whole = !ferror(f) && (n < sizeof(img) || fgetc(f) == EOF);
 		fclose(f);
+		if (!whole) return -1;
 		h->meas[i].label = h->image[i].label;
 		aegis_sha256(img, n, h->meas[i].value);
 		snprintf(h->meas[i].desc, sizeof(h->meas[i].desc), "SHA256 of the %s (%u bytes)", h->image[i].what, (unsigned)n);

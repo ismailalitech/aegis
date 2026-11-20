@@ -5,13 +5,21 @@
  *
  * The core is the device's side of the Aegis attestation protocol: an ML-DSA-65 quote, an ML-KEM-768 session bound
  * to that quote by one signed transcript, a credential from the verifier, KMAC256 heartbeats, and the session's end
- * on the device's own clock. It is plain C11 (<stddef.h>, <stdint.h>, and memcpy, memcmp, strlen and strcmp of
- * <string.h>), allocates nothing, and keeps all its state in a context and one work buffer that the caller provides. It reaches
+ * on the device's own clock. It is plain C11 (<stddef.h>, <stdint.h>, and memcpy, memset, memcmp, strlen and strcmp
+ * of <string.h>), allocates nothing, and keeps all its state in a context and one work buffer that the caller provides. It reaches
  * the device through the functions of struct aegis_platform, and the network not at all: the integrator carries
  * messages to and from it, either as text lines (aegis_prover_handle_line) or as binary operations (aegis_prover_*).
  *
  * Everything declared here runs in the device's secure world (a TF-M secure partition, a trusted application, or
  * the whole firmware on a chip without one): the context holds the secret keys.
+ *
+ * Memory, a security requirement of every function below: whatever the caller passes in (a line, a challenge, a
+ * nonce, a ciphertext, a credential, a status text) must lie in memory that the caller owns alone for the duration
+ * of the call. Nothing less trusted may be able to write it meanwhile: not the non-secure side through a mapped
+ * message buffer or shared memory, not a peripheral through DMA. A transport that receives requests in such memory
+ * copies them into the secure world first (every port here does). The binary operations take their inputs once
+ * and work on their own copies from then on, so that what is accepted is what was checked; the line transport
+ * parses the line where it stands and has no such second line of defence.
  */
 #ifndef AEGIS_SDK_H
 #define AEGIS_SDK_H
@@ -78,10 +86,13 @@ enum aegis_result {
 	AEGIS_OK = 0,
 	AEGIS_ERR_ARGUMENT,              /* a NULL or out-of-range argument of the caller's: a programming error */
 	AEGIS_ERR_VERSION,               /* aegis_prover_init: built against another API version or layout */
-	AEGIS_ERR_IDENTITY,              /* aegis_prover_init: no identity key (key generation or the platform failed) */
+	AEGIS_ERR_IDENTITY,              /* aegis_prover_init: no identity key (key generation or the platform failed,
+					  * or the seed or the exchange root is all zero) */
 	AEGIS_ERR_BAD_REQUEST,           /* "ERR bad-request"            a length the protocol does not allow */
 	AEGIS_ERR_EVIDENCE,              /* "ERR evidence"               the platform gave no evidence, or it does not fit */
-	AEGIS_ERR_RNG,                   /* "ERR rng"                    no fresh randomness for the exchange's key */
+	AEGIS_ERR_RNG,                   /* "ERR rng"                    no fresh randomness for the exchange's key: the
+					  *                              generator failed, or gave 32 equal bytes or its
+					  *                              last output again */
 	AEGIS_ERR_SIGN_RNG,              /* "ERR sign"                   no fresh randomness for a signature */
 	AEGIS_ERR_SIGN,                  /* "ERR sign"                   the signature could not be made */
 	AEGIS_ERR_KEM,                   /* "ERR kem"                    ML-KEM key generation or decapsulation failed */
@@ -118,18 +129,22 @@ struct aegis_measurement {
 #define AEGIS_COMPAT_CRED_WITHOUT_ENDPOINT  0x02u
 
 /* What the device gives the core. Every function gets `user` back as its first argument and returns 0 for success;
- * any other value makes the core refuse the request that needed it (it never continues with a default). The
- * structure must stay valid and unchanged for as long as the context is used: make it const.
+ * any other value makes the core refuse the request that needed it (it never continues with a default). The core
+ * keeps a pointer to the structure, not a copy: it must stay valid and unchanged for as long as the context is used,
+ * in memory only the secure world can write. Make it const (ROM): whoever can change a function pointer in it runs
+ * code in the secure world. A function may take as long as it needs; the core itself never waits for anything.
  *
  * Required: random, clock and clock_hz, and one of measurements and evidence. */
 struct aegis_platform {
 	void *user;
 
 	/* Randomness. n bytes (32 at a time) from the chip's random number generator or a DRBG seeded from it. They go
-	 * into every exchange's ML-KEM key and, hedged, into every signature. A failure refuses the request; so do 32
-	 * zero bytes for an exchange's key (a generator that reports success and writes nothing). The generator must
-	 * not restart with the same output after a reset: the exchange keys then repeat, and a recorded exchange can be
-	 * replayed (tests/host/test_reset_replay_check.py shows it). */
+	 * into every exchange's ML-KEM key and, hedged, into every signature. A failure refuses the request. For an
+	 * exchange's key the core also refuses 32 equal bytes (a generator that reports success and writes nothing, or
+	 * one constant) and the bytes of the draw before (a generator that stands still). These are the failures it can
+	 * see, not a health test: the quality of the bytes is the platform's. In particular the generator must not
+	 * restart with the same output after a reset, which the core cannot notice: the exchange keys then repeat, and
+	 * a recorded exchange can be replayed (tests/host/test_reset_replay_check.py shows it). */
 	int (*random)(void *user, uint8_t *out, size_t n);
 
 	/* Time. A counter that only advances, at clock_hz counts a second (1 or more), from any origin, and that
@@ -142,14 +157,16 @@ struct aegis_platform {
 	/* Evidence, variant 1: the measurements, as taken by code the measured code cannot change (the boot stage
 	 * before it, or the secure world before the non-secure image runs). *list points to *count entries that stay
 	 * valid until the next call. The core puts them into the Aegis claims (CBOR, PSA claim numbers) with `profile`
-	 * and `version` and signs them. Leave NULL when `evidence` is set. */
+	 * and `version` and signs them; an entry without a label, or claims that do not fit the work buffer, refuse the
+	 * quote. Leave NULL when `evidence` is set. */
 	int (*measurements)(void *user, const struct aegis_measurement **list, size_t *count);
 	const char *profile; /* the claims' profile name: tells the verifier what kind of device and key this is */
 	const char *version; /* the measured components' version text */
 
 	/* Evidence, variant 2 (instead of 1): the platform's own token for this challenge, at most cap bytes, its
 	 * length in *len (for example TF-M's PSA initial attestation token, which carries the boot measurements under
-	 * the platform's key). The core signs it as it is. This is also where an EAT / COSE encoder goes. */
+	 * the platform's key). The core signs it as it is; a length of 0 or beyond cap refuses the quote. This is also
+	 * where an EAT / COSE encoder goes. */
 	int (*evidence)(void *user, const uint8_t challenge[AEGIS_CHALLENGE_LEN], uint8_t *out, size_t cap, size_t *len);
 
 	/* Identity key held by the platform (a secure element, a key store, an accelerator). Set both or neither. With
@@ -181,31 +198,37 @@ struct aegis_prover {
 	uint8_t sk[AEGIS_SK_LEN];             /* unused when the platform holds the identity key */
 	uint8_t pk_sha256[AEGIS_DIGEST_LEN];
 	uint8_t prov_root[AEGIS_SEED_LEN];
-	uint8_t sig[AEGIS_SIG_LEN];
+	uint8_t sig[AEGIS_SIG_LEN];           /* the last signature made; a credential's signature while it is checked */
+	/* the pending exchange; kem_ek's place holds the verifier's ciphertext while the exchange is finished */
 	uint8_t kem_ek[AEGIS_KEM_EK_LEN], kem_dk[AEGIS_KEM_DK_LEN], kem_nonce[AEGIS_CHALLENGE_LEN];
 	uint8_t quote_ch[AEGIS_CHALLENGE_LEN], quote_t1[AEGIS_DIGEST_LEN]; /* the last quote signed since the start */
 	uint8_t kem_t2[AEGIS_DIGEST_LEN];     /* T2 of the pending exchange, when it continues a quote */
 	uint8_t session_key[32], cred_hash[AEGIS_DIGEST_LEN];
+	uint8_t rng_last[AEGIS_DIGEST_LEN];   /* the generator's last output, as a hash, once rng_have is set */
 	uint64_t session_start, session_limit; /* the clock at the accepted credential; the counts the session may live */
 	uint64_t now;                          /* the clock as last read */
 	uint64_t hb_counter;
 	uint32_t kem_counter;
-	uint8_t ready, clock_ok, quote_ready, kem_pending, kem_bound, session_ready, session_expired;
+	uint8_t ready, clock_ok, quote_ready, kem_pending, kem_bound, session_ready, session_expired, rng_have;
 };
 
 struct aegis_config {
 	const struct aegis_platform *platform;
-	/* The verifier's (gateway's) ML-DSA-65 public key, AEGIS_PK_LEN bytes, pinned in the image. Not copied: it must
-	 * stay valid and unchanged (keep it in ROM). Only credentials signed with it start a session. */
+	/* The verifier's (gateway's) ML-DSA-65 public key, AEGIS_PK_LEN bytes, pinned in the image. Not copied: the
+	 * core keeps the pointer, so the key must stay valid and unchanged in memory only the secure world can write
+	 * (const, in ROM, part of the measured image). Only credentials signed with it start a session. */
 	const uint8_t *verifier_pk;
 	/* The identity key's seed, AEGIS_SEED_LEN bytes, device-unique and derived from a hardware secret that only the
 	 * secure world can use. The core makes the ML-DSA-65 key pair from it (the same pair at every start) and does
-	 * not keep it: wipe your copy when aegis_prover_init() returns. NULL when the platform holds the key. */
+	 * not keep it: wipe your copy when aegis_prover_init() returns. NULL when the platform holds the key. A seed of
+	 * 32 zero bytes is refused (as is such an exchange root): it is what a derivation that failed leaves. */
 	const uint8_t *identity_seed;
 	/* A second device-unique secret, AEGIS_SEED_LEN bytes, used only in the derivation of the exchanges' ML-KEM
 	 * keys (with fresh randomness, the nonce and a counter). Copied into the context; wipe your copy. */
 	const uint8_t *exchange_root;
-	/* The work buffer: at least AEGIS_WORK_MIN bytes, see AEGIS_WORK_LEN(). Used only by the core. */
+	/* The work buffer: at least AEGIS_WORK_MIN bytes, see AEGIS_WORK_LEN(). Used only by the core, from its first
+	 * operation on: aegis_prover_init() reads the seed and the root before anything is written to it, so a port
+	 * short of stack may derive both in the work buffer and wipe them there afterwards (the STM32 port does). */
 	uint8_t *work;
 	size_t work_len;
 };
