@@ -596,11 +596,12 @@ def default_state_dir(platform):
 
 def load_gateway_identity(state=GATEWAY_STATE):
     """This verifier's ML-DSA-65 identity, as aegisd.py init made it in STATE: (secret key, identity sha256)."""
+    import keystore   # identity.sk, or sealed to this host's TPM (identity.tpm.json)
     import wire
     with open(os.path.join(state, "identity.json")) as f:
         rec = json.load(f)
-    with open(os.path.join(state, "identity.sk"), "rb") as f:
-        sk = f.read()
+    pk = rec["body"].get("pk")
+    sk, _ = keystore.load(state, bytes.fromhex(pk) if pk else None)
     return sk, wire.digest(rec["body"])
 
 

@@ -43,8 +43,8 @@ The pin is the SHA-256 of the public key, not the identity record digest that `a
 
 To make the host the credential issuer (a firmware change, not done here):
 
-1. `aegisd.py init --platform linux --state ~/.local/state/aegis` (once; the key is a 0600 file, software trust, until
-   a TPM backend exists);
+1. `aegisd.py init --platform linux --state ~/.local/state/aegis` (once; the key is sealed to the PC's TPM when one is
+   usable, see "The identity key and the TPM" below);
 2. `tools/gen_gateway_pin.py --identity ~/.local/state/aegis/identity.json` writes `gateway_pk.h` with the host's key;
 3. rebuild and reflash each endpoint (STM32 secure image, RW612 TF-M image);
 4. in the host's policy set `"provision": true` and `"verifier_pin_sha256"` for those endpoints, and remove
@@ -53,6 +53,72 @@ To make the host the credential issuer (a firmware change, not done here):
 An image pins one key, so exactly one verifier issues credentials to a given endpoint; any number can attest it.
 Pinning a short list of keys is possible in firmware, but each endpoint holds one session, so two issuers would
 replace each other's session every cycle. One issuer per endpoint is the design to keep.
+
+## The identity key and the TPM
+
+The host's identity key is ML-DSA-65, and no TPM 2.0 in the field implements ML-DSA. This PC's TPM is Intel PTT (a
+firmware TPM in the CSME): manufacturer `INTC`, firmware 500.14, spec revision 1.38. `tpm2_getcap algorithms` lists RSA,
+ECC (NIST P-256 and BN P-256 only), AES, SHA-1, SHA-256, HMAC, KDFs and the RSA/ECC schemes; no ML-DSA, no ML-KEM, not
+even SHA-384. So the TPM cannot hold the signing key and sign with it. Three ways to use it anyway:
+
+| | what it gives | what it does not |
+|---|---|---|
+| (a) seal the ML-DSA key to the TPM, unseal it at start | the files on disk are useless off this TPM: a stolen disk, a backup, a copy of the state directory to another machine, or this machine after a TPM clear yields no key | the key is in the process's memory while it runs; root (or anyone in group `tss`) on this machine can unseal it, or read it from memory; so can an administrator of any other OS booted on this machine (the Windows side), unless PCR-bound |
+| (b) a TPM-resident P-256 key co-signs each quote and credential | a stolen ML-DSA key alone cannot pass as this verifier, for whoever checks the P-256 signature | no endpoint checks it: every image verifies one ML-DSA-65 key (`gateway_pk.h`) and nothing else, so the endpoints, which are the parties that matter, would accept the stolen key exactly as before. P-256 is also not post-quantum, so against the adversary this project is about it adds nothing |
+| PCR binding on top of (a) (`--tpm-pcrs`) | the seal opens only in the boot state measured when it was made (e.g. PCR 7, Secure Boot policy): a different OS on this machine (the Windows side, a live USB with another Secure Boot state) cannot unseal | firmware updates, Secure Boot db/dbx updates and boot-loader changes break it, and the identity then has to be made again and re-pinned in firmware; PCRs 4 and 8-9 change at every kernel update |
+
+Design chosen: (a), with PCR binding available but off by default. It is the only option that protects the key the
+endpoints actually check. (b) would make the identity record bigger without changing what an endpoint accepts.
+
+**The exact property.** With `"key_store": "tpm2-sealed"` the ML-DSA-65 secret key exists on disk only as AES-256-GCM
+ciphertext (`identity.tpm.json`), under a random 32-byte key that exists only as a sealed TPM object: fixedTPM and
+fixedParent, so the TPM will not duplicate it, child of the owner hierarchy's storage root key (the TCG ECC P-256 SRK
+template, derived from the owner seed, which never leaves the TPM). Copying `~/.local/state/aegis` anywhere else gives
+an attacker nothing they can use. "Key cannot be exported" holds against offline attackers (disk, backups, another
+machine, another TPM), and against anyone who cannot open `/dev/tpmrm0` on this machine. It does not hold against root
+on the running machine: root can unseal the key or read it from aegisd's or fleet.py's memory, and so can any member of
+the `tss` group. The key was generated in software (kernel random pool) and existed in memory before it was sealed; it
+was never written to disk in the clear.
+
+What the endpoints and other verifiers see: the identity record carries `"key_store": "tpm2-sealed"`, the TPM's
+manufacturer and firmware, its SRK name (a stable name of this TPM's owner hierarchy) and the PCR policy, signed with
+the key; every quote carries `"key_store"` and `"key_store_tpm_srk_name"` as measurements (and
+`"key_store_tpm_pcrs"` when bound), so a verifier enrolled on a TPM-sealed identity reports `measurement changed:
+key_store` if the key is ever loaded from somewhere else. These are claims made by the key's holder, signed with that
+key: a thief who got the key off a running machine could sign the same words. They tell an honest operator where the
+key is, they do not prove it.
+
+Without a usable TPM (no `/dev/tpmrm0`, no `tpm2-pytss`, no access, or an owner hierarchy with a password) `init`
+falls back to the 0600 file and says so: `"key_store": "software-file"`, `"key_storage": "software, Linux file mode
+0600 (no TPM: <why>), weaker than a TPM-sealed key"`, and the quote's `"key_store": "software-file"`. `--key-store tpm`
+refuses to fall back; `--key-store software` skips the TPM.
+
+### Set up
+
+    sudo apt-get install -y libtss2-dev pkg-config     # tpm2-pytss builds against the system TSS (4.0.1 here)
+    .venv/bin/pip install tpm2-pytss
+    sudo usermod -aG tss $USER                         # /dev/tpmrm0 is tss:tss 0660; log in again afterwards
+    .venv/bin/python gateway/aegisd/aegisd.py --platform linux init --state ~/.local/state/aegis
+    # --key-store tpm to refuse the file fallback; --tpm-pcrs 7 to bind to the Secure Boot state as well
+
+`aegisd.py serve` and `fleet.py` unseal the key at start (`AEGIS_TPM_TCTI` selects another TPM, e.g.
+`swtpm:host=127.0.0.1,port=2321`). Nothing is stored in the TPM: no persistent handle, no NV index; the SRK is
+re-derived and every object flushed after use, so there is nothing to remove from the TPM. The code never changes
+hierarchy auth, PCRs, NV or dictionary-attack settings; the sealed object has noDA and empty auth, so no command here can
+count towards the TPM's lockout. If the owner hierarchy has a password (`ownerAuthSet`), the code refuses to use the TPM
+rather than ask for or guess it.
+
+The seal is lost, and the identity with it, if the TPM is cleared (a `TPM2_Clear`, "Clear TPM" in the firmware setup or
+in Windows, or a firmware reset of PTT on some boards), or, with `--tpm-pcrs`, when those PCRs change. Then: `init
+--force`, and re-pin the new key in every endpoint image that pinned the old one. That is the price of a key that cannot
+be copied; there is no backup by design.
+
+Tests: `tests/host/test_tpm_keystore.py` runs against swtpm (`apt install swtpm`) and, when this user can open
+`/dev/tpmrm0`, against the PC's TPM. It shows the key is never on disk in the clear, the state directory on another TPM
+fails (with the SRK check, and without it the TPM itself answers `integrity check failed`), an altered file is
+refused, a PCR-bound seal stops opening when the PCR changes (simulator PCR 16), a TPM with an owner password is
+refused, a seal made by the PC's TPM cannot be opened on the simulator, and no persistent handle is left behind.
+Without swtpm or tpm2-pytss those classes are skipped.
 
 ## Two verifiers on one endpoint
 
