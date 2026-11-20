@@ -52,7 +52,8 @@ def ttl(status):
 
 res = {"endpoint": a.endpoint, "lifetime_s": a.lifetime, "ends_after_s": limit}
 fleet.CRED_LIFETIME_S = a.lifetime
-r = fleet.provision(ep, base, sk, gid, {}, timeout=40)
+# with "transcript": "v2" in the entry, the session continues a quote taken now (docs/architecture.md)
+r = fleet.provision(ep, base, sk, gid, {}, timeout=40, quote=fleet.quote_to_continue(ep, base, timeout=40))
 t0 = time.monotonic()
 s1, _ = fleet.heartbeat(ep, r["session_key"])
 t1 = time.monotonic()

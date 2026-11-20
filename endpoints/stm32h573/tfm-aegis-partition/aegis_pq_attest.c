@@ -64,6 +64,24 @@
  *                                SHA3-256("aegis-hb-v1" || session || nonce || counter || status)
  *                      A light, symmetric proof of the session between full attestations.
  *
+ * One transcript (docs/architecture.md, common/transcript.py). QUOTE and the exchange after it are one hash chain, so
+ * that a verifier can refuse to finish a session with other code than the code whose quote it appraised:
+ *   T1 = SHA3-256("aegis-transcript-v2/quote"    || challenge || SHA3-256(token))    kept for the last quote signed
+ *   T2 = SHA3-256("aegis-transcript-v2/kem-init" || T1 || ek)
+ *   T3 = SHA3-256("aegis-transcript-v2/kem-fin"  || T2 || SHA3-256(ct) || SHA3-256(credential))
+ * A KEM_INIT whose nonce is the challenge of the last quote signed since reset continues that quote, once:
+ *   KEM_INIT    out[1] <- ML-DSA-65 signature over "aegis-kem-init-v2\0" || T2
+ *   KEM_FINISH  the credential must also name T2 in "transcript_sha3_256" (else PSA_ERROR_INVALID_SIGNATURE);
+ *               session = SHA3-256("aegis-session-v2" || K || T3), tag = SHA3-256("aegis-confirm-v2" || K || T3)
+ * Any other nonce gets the exchange described above, unchanged; a verifier that requires the transcript refuses it
+ * (the signature labels differ). Message types, sizes and the non-secure prover's lines are the same in both.
+ * What this says and does not say: the token's measurements are the ones BL2 recorded at boot (TF-M's attestation
+ * service reads them from the boot data; nothing is measured again, at QUOTE or at KEM_INIT). The quote is kept in
+ * this partition's RAM, so after a reset there is none to continue: a transcript shows that one boot of this
+ * partition signed exactly that token and then made this key for it. A secure image that holds this key and signs
+ * a transcript for a quote it did not make could still lie; the key would have to depend on the measured code to
+ * prevent that (it does not: it comes from the DHUK).
+ *
  * The session ends on this side's clock (docs/endpoint-expiry.md). Every message first reads the session clock; a
  * session older than its credential's lifetime plus a sixteenth is wiped, as is one whose age the clock can no
  * longer give. SESSION and HEARTBEAT answer PSA_ERROR_BAD_STATE before the first session and after a reset, and
@@ -111,6 +129,9 @@
 #define CHALLENGE_LEN       32u
 #define TOKEN_MAX           0x250u
 #define QUOTE_LABEL         "aegis-endpoint-quote-v1"
+#define T_QUOTE             "aegis-transcript-v2/quote"
+#define T_KEM_INIT          "aegis-transcript-v2/kem-init"
+#define T_KEM_FIN           "aegis-transcript-v2/kem-fin"
 
 static const uint8_t seed_label[32] = "aegis-stm32h5-mldsa65-seed-v1...";
 static const uint8_t prov_label[32] = "aegis-stm32h5-provision-root-v1.";
@@ -162,6 +183,10 @@ static uint8_t kem_dk[KEM_DK_LEN];
 static uint8_t kem_nonce[32];
 static int kem_pending;
 static uint32_t kem_counter;
+static uint8_t quote_ch[32], quote_t1[32]; /* the last quote signed since reset: its challenge and T1 ... */
+static int quote_ready;                    /* ... until a KEM_INIT continues it, or another QUOTE replaces it */
+static uint8_t kem_t2[32];                 /* T2 of the pending exchange, when it continues a quote */
+static int kem_bound;
 static uint8_t kem_ct[KEM_CT_LEN];
 static uint8_t cred[CRED_MAX];
 static uint8_t session_key[32];
@@ -252,6 +277,32 @@ static void wipe(void *p, size_t n)
 	while (n--) {
 		*v++ = 0;
 	}
+}
+
+/* One step of the transcript: SHA3-256(label || a || b || c). Every caller passes fields of fixed lengths, and no
+ * label is the beginning of another, so the steps cannot be taken for one another. Its own frame (not inlined), like
+ * kem_coins below: the hash state is off the stack again before the callers' deep parts. */
+static __attribute__((noinline)) void transcript_step(uint8_t out[32], const char *label, const uint8_t *a, size_t an,
+						      const uint8_t *b, size_t bn, const uint8_t *c, size_t cn)
+{
+	struct sha3 h;
+
+	sha3_init(&h);
+	sha3_update(&h, (const uint8_t *)label, strlen(label));
+	sha3_update(&h, a, an);
+	sha3_update(&h, b, bn);
+	sha3_update(&h, c, cn);
+	sha3_final(&h, out);
+}
+
+/* The quote just signed (its challenge is in quote_ch, its token in token) becomes the one a KEM_INIT can continue. */
+static __attribute__((noinline)) void quote_keep(size_t token_len)
+{
+	uint8_t h_token[32];
+
+	sha3_256(token, token_len, h_token);
+	transcript_step(quote_t1, T_QUOTE, quote_ch, CHALLENGE_LEN, h_token, 32, NULL, 0);
+	quote_ready = 1;
 }
 
 static int derive_from_dhuk(const uint8_t label[32], uint8_t out[32])
@@ -540,7 +591,6 @@ static psa_status_t signing_rnd(uint8_t rnd[32])
 
 static psa_status_t do_quote(const psa_msg_t *msg)
 {
-	uint8_t challenge[CHALLENGE_LEN];
 	uint8_t rnd[32] = {0};
 	const uint8_t pre[2] = {0, 0}; /* pure ML-DSA, empty context: M' = 0 || 0 || M */
 	psa_invec in[1];
@@ -551,10 +601,14 @@ static psa_status_t do_quote(const psa_msg_t *msg)
 	if (msg->in_size[0] != CHALLENGE_LEN || msg->out_size[0] < TOKEN_MAX || msg->out_size[1] < sizeof(sig)) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
-	if (psa_read(msg->handle, 0, challenge, CHALLENGE_LEN) != CHALLENGE_LEN) {
+	/* Only a quote that was signed can be continued, and only the last one: the quote before this one ends here,
+	 * and its challenge's place takes this one's (read there directly: one array less in this frame, which lies
+	 * under the signature's). */
+	quote_ready = 0;
+	if (psa_read(msg->handle, 0, quote_ch, CHALLENGE_LEN) != CHALLENGE_LEN) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
-	in[0].base = challenge;
+	in[0].base = quote_ch;
 	in[0].len = CHALLENGE_LEN;
 	out[0].base = token;
 	out[0].len = sizeof(token);
@@ -575,6 +629,7 @@ static psa_status_t do_quote(const psa_msg_t *msg)
 		return PSA_ERROR_GENERIC_ERROR;
 	}
 	wipe(rnd, sizeof(rnd));
+	quote_keep(token_len);
 	psa_write(msg->handle, 0, token, token_len);
 	psa_write(msg->handle, 1, sig, sizeof(sig));
 	return PSA_SUCCESS;
@@ -632,9 +687,29 @@ static __attribute__((noinline)) psa_status_t kem_coins(uint8_t coins[64])
 	return PSA_SUCCESS;
 }
 
+/* What the device key signs for the exchange's ML-KEM key, into signed_msg; returns its length. Not inlined, so that
+ * do_kem_init's frame, which lies under the signature's, stays as it was before the transcript. */
+static __attribute__((noinline)) size_t kem_init_message(void)
+{
+	static const char lbl[] = "aegis-kem-init-v1", lbl2[] = "aegis-kem-init-v2";
+
+	_Static_assert(sizeof(signed_msg) >= sizeof(lbl) + 32 + KEM_EK_LEN, "signed_msg");
+	if (kem_bound) {
+		/* "aegis-kem-init-v2\0" || T2: the quote this exchange continues, and the key made for it */
+		transcript_step(kem_t2, T_KEM_INIT, quote_t1, 32, kem_ek, KEM_EK_LEN, NULL, 0);
+		memcpy(signed_msg, lbl2, sizeof(lbl2));
+		memcpy(signed_msg + sizeof(lbl2), kem_t2, 32);
+		return sizeof(lbl2) + 32;
+	}
+	/* "aegis-kem-init-v1\0" || nonce || ek */
+	memcpy(signed_msg, lbl, sizeof(lbl));
+	memcpy(signed_msg + sizeof(lbl), kem_nonce, 32);
+	memcpy(signed_msg + sizeof(lbl) + 32, kem_ek, KEM_EK_LEN);
+	return sizeof(lbl) + 32 + KEM_EK_LEN;
+}
+
 static psa_status_t do_kem_init(const psa_msg_t *msg)
 {
-	static const char lbl[] = "aegis-kem-init-v1";
 	uint8_t coins[64], rnd[32] = {0};
 	const uint8_t pre[2] = {0, 0};
 	psa_status_t st;
@@ -651,6 +726,13 @@ static psa_status_t do_kem_init(const psa_msg_t *msg)
 	if (psa_read(msg->handle, 0, kem_nonce, 32) != 32) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
+	/* The nonce names the quote this exchange continues: the challenge of the last one signed. That quote is used
+	 * up here, whether or not the exchange completes. Any other nonce: the unbound exchange. (Both values are
+	 * public, so the comparison need not take constant time.) */
+	kem_bound = quote_ready && memcmp(kem_nonce, quote_ch, CHALLENGE_LEN) == 0;
+	if (kem_bound) {
+		quote_ready = 0;
+	}
 	st = kem_coins(coins);
 	if (st != PSA_SUCCESS) {
 		wipe(coins, sizeof(coins));
@@ -661,20 +743,13 @@ static psa_status_t do_kem_init(const psa_msg_t *msg)
 		return PSA_ERROR_GENERIC_ERROR;
 	}
 	wipe(coins, sizeof(coins));
-	/* sign "aegis-kem-init-v1\0" || nonce || ek with the device's ML-DSA key */
-	memcpy(signed_msg, lbl, sizeof(lbl));
-	memcpy(signed_msg + sizeof(lbl), kem_nonce, 32);
-	if (sizeof(signed_msg) < sizeof(lbl) + 32 + KEM_EK_LEN) {
-		return PSA_ERROR_GENERIC_ERROR;
-	}
-	memcpy(signed_msg + sizeof(lbl) + 32, kem_ek, KEM_EK_LEN);
 	st = signing_rnd(rnd);
 	if (st != PSA_SUCCESS) {
 		wipe(kem_dk, sizeof(kem_dk));
 		return st;
 	}
-	if (aegis_mldsa_signature_internal(sig, signed_msg, sizeof(lbl) + 32 + KEM_EK_LEN, pre, sizeof(pre), rnd, sk,
-					   0) != 0) {
+	/* the message is made here, in the call, so that no length has to be kept across the calls before it */
+	if (aegis_mldsa_signature_internal(sig, signed_msg, kem_init_message(), pre, sizeof(pre), rnd, sk, 0) != 0) {
 		wipe(rnd, sizeof(rnd));
 		wipe(kem_dk, sizeof(kem_dk));
 		return PSA_ERROR_GENERIC_ERROR;
@@ -770,7 +845,8 @@ static uint32_t cred_lifetime(const uint8_t *body, size_t n)
  * "aegis-credential-v1\0" || body (pure ML-DSA, empty context). The body must name SHA3-256(ct) in
  * "kem_ct_sha3_256" and SHA3-256(ek) of the pending exchange in "kem_ek_sha3_256": without the second, an old
  * KEM_FINISH replayed after a new KEM_INIT passed the check, decapsulated to an unrelated key and replaced a
- * working session (found on the RW612 by review, 2026-11-18; the gateway names both).
+ * working session (found on the RW612 by review, 2026-11-18; the gateway names both). For an exchange that continues
+ * a quote it must name T2 in "transcript_sha3_256" as well: the gateway signed for that quote and this key.
  * Returns PSA_SUCCESS and the lifetime the body carries, PSA_ERROR_INVALID_SIGNATURE, or PSA_ERROR_NOT_PERMITTED for
  * a signed and bound credential without a lifetime. */
 static psa_status_t check_credential(const uint8_t *c, size_t len, const uint8_t h_ct[32], uint32_t *lifetime)
@@ -795,6 +871,9 @@ static psa_status_t check_credential(const uint8_t *c, size_t len, const uint8_t
 	if (!names(c, body_len, "kem_ct_sha3_256", h_ct) || !names(c, body_len, "kem_ek_sha3_256", h_ek)) {
 		return PSA_ERROR_INVALID_SIGNATURE;
 	}
+	if (kem_bound && !names(c, body_len, "transcript_sha3_256", kem_t2)) {
+		return PSA_ERROR_INVALID_SIGNATURE;
+	}
 	*lifetime = cred_lifetime(c, body_len);
 	return *lifetime ? PSA_SUCCESS : PSA_ERROR_NOT_PERMITTED;
 }
@@ -802,6 +881,7 @@ static psa_status_t check_credential(const uint8_t *c, size_t len, const uint8_t
 static psa_status_t do_kem_finish(const psa_msg_t *msg)
 {
 	static const char l_sess[] = "aegis-session-v1", l_conf[] = "aegis-confirm-v1";
+	static const char l_sess2[] = "aegis-session-v2", l_conf2[] = "aegis-confirm-v2";
 	uint8_t k[32], h_ct[32], tag[32];
 	size_t cred_len = msg->in_size[1];
 	uint32_t lifetime = 0;
@@ -834,19 +914,34 @@ static psa_status_t do_kem_finish(const psa_msg_t *msg)
 	}
 	wipe(kem_dk, sizeof(kem_dk));
 	sha3_256(cred, cred_len, cred_hash);
-	sha3_init(&h);
-	sha3_update(&h, (const uint8_t *)l_sess, sizeof(l_sess) - 1);
-	sha3_update(&h, k, 32);
-	sha3_update(&h, kem_nonce, 32);
-	sha3_update(&h, h_ct, 32);
-	sha3_final(&h, session_key);
-	sha3_init(&h);
-	sha3_update(&h, (const uint8_t *)l_conf, sizeof(l_conf) - 1);
-	sha3_update(&h, k, 32);
-	sha3_update(&h, kem_nonce, 32);
-	sha3_update(&h, h_ct, 32);
-	sha3_update(&h, cred_hash, 32);
-	sha3_final(&h, tag);
+	if (kem_bound) {
+		/* T3 takes h_ct's place: the ciphertext's hash is in it, and is not used again */
+		transcript_step(h_ct, T_KEM_FIN, kem_t2, 32, h_ct, 32, cred_hash, 32);
+		sha3_init(&h);
+		sha3_update(&h, (const uint8_t *)l_sess2, sizeof(l_sess2) - 1);
+		sha3_update(&h, k, 32);
+		sha3_update(&h, h_ct, 32);
+		sha3_final(&h, session_key);
+		sha3_init(&h);
+		sha3_update(&h, (const uint8_t *)l_conf2, sizeof(l_conf2) - 1);
+		sha3_update(&h, k, 32);
+		sha3_update(&h, h_ct, 32);
+		sha3_final(&h, tag);
+	} else {
+		sha3_init(&h);
+		sha3_update(&h, (const uint8_t *)l_sess, sizeof(l_sess) - 1);
+		sha3_update(&h, k, 32);
+		sha3_update(&h, kem_nonce, 32);
+		sha3_update(&h, h_ct, 32);
+		sha3_final(&h, session_key);
+		sha3_init(&h);
+		sha3_update(&h, (const uint8_t *)l_conf, sizeof(l_conf) - 1);
+		sha3_update(&h, k, 32);
+		sha3_update(&h, kem_nonce, 32);
+		sha3_update(&h, h_ct, 32);
+		sha3_update(&h, cred_hash, 32);
+		sha3_final(&h, tag);
+	}
 	wipe(k, sizeof(k));
 	session_ready = 1;
 	session_expired = 0;

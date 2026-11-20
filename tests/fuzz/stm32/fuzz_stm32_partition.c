@@ -8,12 +8,14 @@
  * message type, any input and output sizes). It also plays the gateway, so the fuzzer gets past the credential
  * signature. An input is a list of operations "op, length (2 bytes, little-endian), payload":
  *   0  a raw message: type, two input sizes, two output sizes (from the payload), input bytes from the payload
- *   1  KEM_INIT with a nonce from the payload
+ *   1  KEM_INIT with a nonce from the payload (the challenge of the last QUOTE: the exchange continues that quote)
  *   2  KEM_FINISH built as the gateway would, then changed (fields left out or wrong, text added, a newline, the
  *      signature or ciphertext damaged, or the payload signed as the whole body); the op byte's upper bits change the
  *      validity: bits 3-5 pick 0 as the gateway writes it, 1 no "issued", 2 no "expires", 3 a lifetime of zero,
  *      4 "expires" twice, 5 eleven digits, 6 a string, 7 a second too long; bits 6-7 pick the lifetime (3600, 1,
- *      86400 or 40 seconds)
+ *      86400 or 40 seconds). The gateway names the transcript T2 exactly when the exchange continues a quote;
+ *      payload byte 32, bit 0 turns that round (left out where it is needed, added where it is not), bit 1 names
+ *      another transcript
  *   3  HEARTBEAT with a nonce and status data from the payload; the op byte's upper bits pick out[1]: 0 the prover's
  *      buffer (HB_STATUS_MAX), 1 none (provers up to 0.5.0), 2 exactly the length the status needs, else 5 * bits
  *   4  QUOTE with a challenge from the payload
@@ -58,7 +60,15 @@
  *     ";sstack=na;ttl=..."), with the used figure the model expects from the stack scenario and the seconds left
  *     rounded up, and its tag covers exactly that text; without out[1] the tag covers the data alone; status data
  *     naming "sstack=" or "ttl=" is refused, as is an out[1] too small for the status, and neither counts;
- *   - every KEM key and quote is signed by the device key.
+ *   - every KEM key and quote is signed by the device key;
+ *   - one transcript: a KEM_INIT continues a quote if and only if its nonce is the challenge of the last QUOTE that
+ *     was answered since the reset and no KEM_INIT has continued that quote yet (a reset, another QUOTE, a refused
+ *     QUOTE and a first use each end it). The KEM key's signature is then over "aegis-kem-init-v2" and
+ *     T2 = H(kem-init || H(quote || challenge || SHA3(token)) || ek), computed here from the token the QUOTE
+ *     returned, and otherwise over "aegis-kem-init-v1" and nonce || ek: never the other one. Such an exchange accepts
+ *     a credential only if it also names T2, and its tag and session key are the transcript's
+ *     (T3 = H(kem-fin || T2 || SHA3(ct) || SHA3(credential))); an exchange that continues no quote gives the first
+ *     version's tag and key whatever the credential says about a transcript.
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -211,6 +221,10 @@ static uint8_t gw_sec[MLDSA_SECRETKEYBYTES(65)], gw_pub[PK_LEN];
 static struct {
 	int pending;
 	uint8_t ek[KEM_EK_LEN], nonce[32];
+	int quote;             /* a QUOTE was answered since the reset and no KEM_INIT has continued it */
+	uint8_t q_ch[32], q_t1[32];
+	int bound;             /* the pending exchange continues a quote; its T2 */
+	uint8_t t2[32];
 	int session;
 	int expired;           /* the last session was ended by the clock */
 	uint64_t start, limit; /* the clock at the session's start; the counts it may live */
@@ -391,6 +405,51 @@ static int contains(const uint8_t *b, size_t n, const char *key, const uint8_t v
 
 static size_t u16(const uint8_t *p, size_t n, size_t i) { return i + 1 < n ? (size_t)p[i] | (size_t)p[i + 1] << 8 : 0; }
 
+/* ---- one transcript: the model's own reading of common/transcript.py ---- */
+/* a QUOTE with valid arguments: whatever it answers, the quote before it can no longer be continued */
+static void model_quote(psa_status_t st, const uint8_t ch[32], const uint8_t *tok, size_t len)
+{
+	uint8_t h[32];
+
+	M.quote = 0;
+	if (st != PSA_SUCCESS) return;
+	sha3_256(tok, len, h);
+	sha3v(M.q_t1, 3, "aegis-transcript-v2/quote", (size_t)25, ch, (size_t)32, h, (size_t)32);
+	memcpy(M.q_ch, ch, 32);
+	M.quote = 1;
+}
+
+/* a KEM_INIT with valid arguments: does it continue the quote? The quote is used up either way it ends. */
+static int model_continues(const uint8_t nonce[32])
+{
+	int b = M.quote && !memcmp(nonce, M.q_ch, 32);
+
+	if (b) M.quote = 0;
+	return b;
+}
+
+/* the answered KEM_INIT: its signature is the transcript's if it continues a quote, the first version's if not */
+static void model_kem_key(int continues, const uint8_t nonce[32], const uint8_t *ek, const uint8_t *s)
+{
+	static uint8_t msg[32 + KEM_EK_LEN];
+
+	if (continues) {
+		sha3v(M.t2, 3, "aegis-transcript-v2/kem-init", (size_t)28, M.q_t1, (size_t)32, ek, (size_t)KEM_EK_LEN);
+		if (dev_verify("aegis-kem-init-v2", M.t2, 32, s) != 0)
+			DIE("the KEM key of an exchange that continues a quote is not signed over its transcript");
+	} else {
+		memcpy(msg, nonce, 32);
+		memcpy(msg + 32, ek, KEM_EK_LEN);
+		if (dev_verify("aegis-kem-init-v1", msg, sizeof(msg), s) != 0)
+			DIE("the KEM key of an exchange that continues no quote is not signed as the first version's");
+	}
+	issued(ek);
+	memcpy(M.ek, ek, KEM_EK_LEN);
+	memcpy(M.nonce, nonce, 32);
+	M.bound = continues;
+	M.pending = 1;
+}
+
 /* ---- operations ---- */
 static void op_raw(const uint8_t *p, size_t n)
 {
@@ -400,22 +459,27 @@ static void op_raw(const uint8_t *p, size_t n)
 	size_t dn = n > 9 ? n - 9 : 0, w0, w1;
 	uint8_t *r0, *r1;
 	psa_status_t st;
-	int valid_init;
+	int valid_init, valid_quote;
 
 	if (l0 > dn) l0 = dn;
 	if (l1 > dn - l0) l1 = dn - l0;
 	valid_init = type == AEGIS_PQ_KEM_INIT && l0 == 32 && o0 >= KEM_EK_LEN && o1 >= SIG_LEN;
+	valid_quote = type == AEGIS_PQ_QUOTE && l0 == 32 && o0 >= TOKEN_MAX && o1 >= SIG_LEN;
 	model_sweep();
 	st = send(type, d, l0, d + l0, l1, o0, o1, &r0, &r1, &w0, &w1);
 	if (valid_init) {
+		int continues = model_continues(d);
+
 		M.pending = 0;
 		if (st == PSA_SUCCESS) {
-			if (w0 != KEM_EK_LEN) DIE("KEM_INIT output");
-			issued(r0);
-			memcpy(M.ek, r0, KEM_EK_LEN);
-			memcpy(M.nonce, d, 32);
-			M.pending = 1;
+			if (w0 != KEM_EK_LEN || w1 != SIG_LEN) DIE("KEM_INIT output");
+			model_kem_key(continues, d, r0, r1);
 		}
+	} else if (valid_quote) {
+		if (st == PSA_SUCCESS && (w0 != FZ_TOKEN_LEN || w1 != SIG_LEN)) DIE("QUOTE output");
+		model_quote(st, d, r0, w0);
+	} else if (type == AEGIS_PQ_QUOTE && st == PSA_SUCCESS) {
+		DIE("QUOTE with invalid arguments succeeded");
 	} else if (type == AEGIS_PQ_KEM_INIT && st == PSA_SUCCESS) {
 		DIE("KEM_INIT with invalid arguments succeeded");
 	} else if (type == AEGIS_PQ_KEM_FINISH) {
@@ -438,27 +502,23 @@ static void op_raw(const uint8_t *p, size_t n)
 
 static void op_kem_init(const uint8_t *p, size_t n)
 {
-	uint8_t nonce[32] = {0}, msg[32 + KEM_EK_LEN], *r0, *r1;
+	uint8_t nonce[32] = {0}, *r0, *r1;
 	/* two draws: the key's random bytes, which must be there and not zero, then the signature's */
 	const int key_draw = rng_next(0), sig_draw = rng_next(1), no_rng = key_draw != 0 || sig_draw == 1;
 	size_t w0, w1;
 	psa_status_t st;
+	int continues;
 
 	memcpy(nonce, p, n < 32 ? n : 32);
 	model_sweep();
 	st = send(AEGIS_PQ_KEM_INIT, nonce, 32, NULL, 0, KEM_EK_LEN, SIG_LEN, &r0, &r1, &w0, &w1);
+	continues = model_continues(nonce);
 	M.pending = 0;
 	if (no_rng != (st == PSA_ERROR_INSUFFICIENT_ENTROPY))
 		DIE("KEM_INIT with random draws %d (key), %d (signature): %d", key_draw, sig_draw, (int)st);
 	if (st == PSA_SUCCESS) {
 		if (w0 != KEM_EK_LEN || w1 != SIG_LEN) DIE("KEM_INIT output sizes");
-		memcpy(msg, nonce, 32);
-		memcpy(msg + 32, r0, KEM_EK_LEN);
-		if (dev_verify("aegis-kem-init-v1", msg, sizeof(msg), r1) != 0) DIE("KEM key not signed by the device key");
-		issued(r0);
-		memcpy(M.ek, r0, KEM_EK_LEN);
-		memcpy(M.nonce, nonce, 32);
-		M.pending = 1;
+		model_kem_key(continues, nonce, r0, r1);
 	} else if (st != PSA_ERROR_INSUFFICIENT_ENTROPY && st != PSA_ERROR_GENERIC_ERROR) {
 		DIE("KEM_INIT: %d", (int)st);
 	}
@@ -485,6 +545,10 @@ static void op_kem_fin(uint8_t sel, const uint8_t *p, size_t n)
 	uint8_t flags = n ? p[0] : 0, coins[32] = {0}, ct[KEM_CT_LEN], k[32], h_ct[32], h_ek[32], stale[32], rnd[32] = {0};
 	const uint8_t *extra = n > 33 ? p + 33 : p;
 	size_t extra_n = n > 33 ? n - 33 : 0, bl = 0, cl, ctl = KEM_CT_LEN, w0, w1;
+	/* the transcript's name in the credential: there exactly when the exchange continues a quote, unless bit 0 of
+	 * payload byte 32 turns that round; bit 1 names another transcript */
+	const unsigned tr = n > 32 ? p[32] & 3u : 0u;
+	const int name_tr = !(flags & F_SIGN_RAW) && (M.bound ? !(tr & 1u) : (tr & 1u) != 0);
 	int pending = M.pending, expect, sizes_ok, bound;
 	uint64_t lifetime;
 	uint8_t *r0, *r1;
@@ -508,6 +572,13 @@ static void op_kem_fin(uint8_t sel, const uint8_t *p, size_t n)
 		if (!(flags & F_DROP_EK)) {
 			bl += (size_t)sprintf((char *)body + bl, ",\"kem_ek_sha3_256\":\"");
 			for (int i = 0; i < 32; i++) { body[bl++] = hx[e[i] >> 4]; body[bl++] = hx[e[i] & 15]; }
+			body[bl++] = '"';
+		}
+		if (name_tr) {
+			const uint8_t *t = (tr & 2u) ? stale : M.t2;
+
+			bl += (size_t)sprintf((char *)body + bl, ",\"transcript_sha3_256\":\"");
+			for (int i = 0; i < 32; i++) { body[bl++] = hx[t[i] >> 4]; body[bl++] = hx[t[i] & 15]; }
 			body[bl++] = '"';
 		}
 		bl += (size_t)sprintf((char *)body + bl, ",\"x\":\"");
@@ -543,7 +614,8 @@ static void op_kem_fin(uint8_t sel, const uint8_t *p, size_t n)
 	lifetime = model_lifetime(body, bl);
 	bound = pending && M.clk && sizes_ok && !memchr(body, '\n', bl) && 20 + bl <= sizeof(signed_msg) &&
 		!(flags & F_BAD_SIG) && contains(body, bl, "kem_ct_sha3_256", h_ct) &&
-		contains(body, bl, "kem_ek_sha3_256", h_ek);
+		contains(body, bl, "kem_ek_sha3_256", h_ek) &&
+		(!M.bound || contains(body, bl, "transcript_sha3_256", M.t2));
 	expect = bound && lifetime != 0;
 	if (!pending) {
 		if (st != PSA_ERROR_BAD_STATE) DIE("KEM_FINISH without an exchange: %d", (int)st);
@@ -565,11 +637,20 @@ static void op_kem_fin(uint8_t sel, const uint8_t *p, size_t n)
 
 		if (w0 != 32) DIE("KEM_FINISH output");
 		sha3_256(cred, cl, h_cred);
-		sha3v(tag, 5, "aegis-confirm-v1", (size_t)16, k, (size_t)32, M.nonce, (size_t)32, h_ct, (size_t)32,
-		      h_cred, (size_t)32);
-		if (memcmp(tag, r0, 32)) DIE("confirmation tag");
-		sha3v(M.session_key, 4, "aegis-session-v1", (size_t)16, k, (size_t)32, M.nonce, (size_t)32, h_ct,
-		      (size_t)32);
+		if (M.bound) {
+			uint8_t t3[32];
+
+			sha3v(t3, 4, "aegis-transcript-v2/kem-fin", (size_t)27, M.t2, (size_t)32, h_ct, (size_t)32, h_cred,
+			      (size_t)32);
+			sha3v(tag, 3, "aegis-confirm-v2", (size_t)16, k, (size_t)32, t3, (size_t)32);
+			sha3v(M.session_key, 3, "aegis-session-v2", (size_t)16, k, (size_t)32, t3, (size_t)32);
+		} else {
+			sha3v(tag, 5, "aegis-confirm-v1", (size_t)16, k, (size_t)32, M.nonce, (size_t)32, h_ct, (size_t)32,
+			      h_cred, (size_t)32);
+			sha3v(M.session_key, 4, "aegis-session-v1", (size_t)16, k, (size_t)32, M.nonce, (size_t)32, h_ct,
+			      (size_t)32);
+		}
+		if (memcmp(tag, r0, 32)) DIE("confirmation tag%s", M.bound ? " of the transcript" : "");
 		memcpy(M.cred_hash, h_cred, 32);
 		memcpy(seen.ct, ct, KEM_CT_LEN);
 		memcpy(seen.cred, cred, cl);
@@ -694,6 +775,7 @@ static void op_quote(const uint8_t *p, size_t n)
 	memcpy(ch, p, n < 32 ? n : 32);
 	model_sweep();
 	st = send(AEGIS_PQ_QUOTE, ch, 32, NULL, 0, TOKEN_MAX, SIG_LEN, &r0, &r1, &w0, &w1);
+	model_quote(st, ch, r0, w0);
 	if (st == PSA_SUCCESS) {
 		if (w0 != FZ_TOKEN_LEN || w1 != SIG_LEN || memcmp(r0 + 8, ch, 32)) DIE("QUOTE output");
 		if (dev_verify(QUOTE_LABEL, r0, w0, r1) != 0) DIE("quote not signed by the device key");
@@ -740,6 +822,10 @@ static void op_pubkey(void)
 static void reset(unsigned hw_flags, unsigned rtcsel, uint32_t count)
 {
 	kem_pending = 0; session_ready = 0; session_expired = 0; hb_counter = 0; kem_counter = 0;
+	kem_bound = 0;
+#if !defined(FZ_QUOTE_OUTLIVES_RESET)
+	quote_ready = 0; /* RAM: a quote does not outlive a reset. The control build keeps it, to show the model sees it */
+#endif
 	session_start = session_limit = 0;
 	memset(session_key, 0, sizeof(session_key));
 	memset(&M, 0, sizeof(M));
@@ -832,12 +918,92 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 }
 
 #if defined(FZ_STANDALONE)
+static void put_hex(const char *name, const uint8_t *p, size_t n)
+{
+	printf("%s=", name);
+	for (size_t i = 0; i < n; i++) printf("%02x", p[i]);
+	printf("\n");
+}
+
+static const char *hex32(const uint8_t v[32], char out[65])
+{
+	for (int i = 0; i < 32; i++) sprintf(out + 2 * i, "%02x", v[i]);
+	return out;
+}
+
+/* "--transcript": one exchange that continues a quote, for tests/host/test_stm32_partition.py to check against the
+ * gateway's code (common/transcript.py), which this harness's own model above does not use. Prints what a verifier
+ * sees of QUOTE and KEM_INIT, then reads T2 as the verifier computed it (64 hex digits on standard input), has the
+ * test gateway sign a credential that names it, and prints KEM_FINISH's status, the ciphertext, the credential, the
+ * shared secret K (the verifier's own, from its encapsulation), the confirmation tag and SESSION's answer. */
+static int transcript_vector(void)
+{
+	static uint8_t body[1024], cred[1024 + SIG_LEN + 1], msg[32 + 1024];
+	uint8_t ch[32], coins[32], ek[KEM_EK_LEN], ct[KEM_CT_LEN], k[32], rnd[32] = {0}, h_ct[32], h_ek[32], *r0, *r1;
+	const uint8_t pre[2] = {0, 0};
+	char t2[80], hc[65], he[65];
+	size_t w0, w1, bl, cl;
+	psa_status_t st;
+
+	for (int i = 0; i < 32; i++) {
+		ch[i] = (uint8_t)(0xc0 + i);
+		coins[i] = (uint8_t)(0x30 + i);
+	}
+	reset(0, 2, 0xFFFF0000u);
+	rng_state = RNG_SEED;
+	rng_skip = rng_fail = 0;
+	if (send(AEGIS_PQ_QUOTE, ch, 32, NULL, 0, TOKEN_MAX, SIG_LEN, &r0, &r1, &w0, &w1) != PSA_SUCCESS) return 1;
+	put_hex("pk", pk, PK_LEN);
+	put_hex("challenge", ch, 32);
+	put_hex("token", r0, w0);
+	put_hex("quote_sig", r1, w1);
+	free(r0);
+	free(r1);
+	if (send(AEGIS_PQ_KEM_INIT, ch, 32, NULL, 0, KEM_EK_LEN, SIG_LEN, &r0, &r1, &w0, &w1) != PSA_SUCCESS) return 1;
+	memcpy(ek, r0, KEM_EK_LEN);
+	put_hex("ek", r0, w0);
+	put_hex("kem_sig", r1, w1);
+	free(r0);
+	free(r1);
+	fflush(stdout);
+	if (!fgets(t2, sizeof(t2), stdin)) return 1;
+	t2[strcspn(t2, "\r\n")] = 0;
+	if (aegis_mlkem_enc_derand(ct, k, ek, coins) != 0) return 1;
+	sha3_256(ct, KEM_CT_LEN, h_ct);
+	sha3_256(ek, KEM_EK_LEN, h_ek);
+	bl = (size_t)snprintf((char *)body, sizeof(body),
+			      "{\"expires\":1795003600,\"issued\":1795000000,\"kem_ct_sha3_256\":\"%s\","
+			      "\"kem_ek_sha3_256\":\"%s\",\"transcript\":\"v2\",\"transcript_sha3_256\":\"%s\"}",
+			      hex32(h_ct, hc), hex32(h_ek, he), t2);
+	memcpy(msg, "aegis-credential-v1", 20);
+	memcpy(msg + 20, body, bl);
+	memcpy(cred, body, bl);
+	cred[bl] = '\n';
+	if (aegis_mldsa_signature_internal(cred + bl + 1, msg, 20 + bl, pre, 2, rnd, gw_sec, 0) != 0) return 1;
+	cl = bl + 1 + SIG_LEN;
+	st = send(AEGIS_PQ_KEM_FINISH, ct, KEM_CT_LEN, cred, cl, 32, 0, &r0, &r1, &w0, &w1);
+	printf("finish=%d\n", (int)st);
+	put_hex("ct", ct, KEM_CT_LEN);
+	put_hex("cred", cred, cl);
+	put_hex("k", k, 32);
+	put_hex("tag", r0, w0);
+	free(r0);
+	free(r1);
+	st = send(AEGIS_PQ_SESSION, NULL, 0, NULL, 0, 64, 0, &r0, &r1, &w0, &w1);
+	printf("session_status=%d\n", (int)st);
+	put_hex("session", r0, w0);
+	free(r0);
+	free(r1);
+	return 0;
+}
+
 /* without libFuzzer: the inputs named on the command line, one after the other */
 int main(int argc, char **argv)
 {
 	static uint8_t buf[16384];
 
 	LLVMFuzzerInitialize(&argc, &argv);
+	if (argc == 2 && !strcmp(argv[1], "--transcript")) return transcript_vector();
 	for (int i = 1; i < argc; i++) {
 		FILE *f = fopen(argv[i], "rb");
 		size_t n;

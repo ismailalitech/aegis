@@ -29,6 +29,23 @@
  *   confirm tag      SHA3-256("aegis-confirm-v1" || K || nonce || SHA3-256(ct) || SHA3-256(credential))
  *   heartbeat        KMAC256(session, nonce || counter || status, 256, "aegis-hb-v2")
  * A refused exchange leaves an established session alone.
+ *
+ * One transcript (docs/architecture.md, common/transcript.py): the quote and the exchange that follows it are one
+ * hash chain, so a verifier can refuse to finish a session with other code than the code whose quote it appraised.
+ *   T1 = SHA3-256("aegis-transcript-v2/quote"    || challenge || SHA3-256(claims))   kept for the last quote signed
+ *   T2 = SHA3-256("aegis-transcript-v2/kem-init" || T1 || ek)
+ *   T3 = SHA3-256("aegis-transcript-v2/kem-fin"  || T2 || SHA3-256(ct) || SHA3-256(credential))
+ * A PQKEMINIT whose nonce is the challenge of the last quote signed since the start continues that quote, once:
+ *   KEM key signature  over "aegis-kem-init-v2\0" || T2 instead of "aegis-kem-init-v1\0" || nonce || ek
+ *   credential         must also name T2 in "transcript_sha3_256" (else "ERR cred other-transcript")
+ *   confirm tag        SHA3-256("aegis-confirm-v2" || K || T3)
+ *   session            SHA3-256("aegis-session-v2" || K || T3)
+ * Any other nonce gets the exchange above, unchanged, which a verifier that requires the transcript refuses (the
+ * labels differ). The request and reply lines are the same in both. The quote is kept in RAM only: after a restart
+ * there is none to continue. The measurements in a quote are what the platform gives when the quote is asked for:
+ * taken once at start by the TF-M partition and by the ZynqMP's boot chain (the TA reports the FSBL's hand-off),
+ * hashed from flash at every quote by the single-image prover. Nothing is measured again at PQKEMINIT: the transcript
+ * says that this boot signed exactly that quote and then made this key for it.
  */
 #include <stdio.h>
 #include <string.h>
@@ -58,6 +75,10 @@
 
 static const char QUOTE_LABEL[] = "aegis-endpoint-quote-v1";
 static const char KEM_LABEL[] = "aegis-kem-init-v1";
+static const char KEM2_LABEL[] = "aegis-kem-init-v2"; /* over T2: the exchange continues a quote */
+static const char T_QUOTE[] = "aegis-transcript-v2/quote";
+static const char T_KEM_INIT[] = "aegis-transcript-v2/kem-init";
+static const char T_KEM_FIN[] = "aegis-transcript-v2/kem-fin";
 static const char CRED_LABEL[] = "aegis-credential-v1";
 
 static uint8_t pk[PK_LEN];
@@ -71,6 +92,10 @@ static uint8_t claims[CLAIMS_MAX];
 static uint8_t kem_ek[KEM_EK_LEN], kem_dk[KEM_DK_LEN], kem_nonce[32], kem_ct[KEM_CT_LEN];
 static int kem_pending;
 static uint32_t kem_counter;
+static uint8_t quote_ch[32], quote_t1[32];  /* the last quote signed since the start: its challenge and T1 ... */
+static int quote_ready;                     /* ... until a PQKEMINIT continues it, or another PQCHAL replaces it */
+static uint8_t kem_t2[32];                  /* T2 of the pending exchange, when it continues a quote */
+static int kem_bound;
 static uint8_t cred[CRED_MAX];
 static uint8_t session_key[32], cred_hash[32];
 static int session_ready;
@@ -162,6 +187,21 @@ static void wipe(void *p, size_t n)
 	volatile uint8_t *v = p;
 
 	while (n--) *v++ = 0;
+}
+
+/* One step of the transcript: SHA3-256(label || a || b || c). Every caller passes fields of fixed lengths, and no
+ * label is the beginning of another, so the steps cannot be taken for one another. */
+static void transcript_step(uint8_t out[32], const char *label, const uint8_t *a, size_t an, const uint8_t *b,
+			    size_t bn, const uint8_t *c, size_t cn)
+{
+	struct sha3 h;
+
+	sha3_init(&h);
+	sha3_update(&h, label, strlen(label));
+	sha3_update(&h, a, an);
+	sha3_update(&h, b, bn);
+	sha3_update(&h, c, cn);
+	sha3_final(&h, out);
 }
 
 /* ---- hex and CBOR ---------------------------------------------------------------------------- */
@@ -469,6 +509,11 @@ static int kem_finish(const char *ct_hex, const char *cred_hex, char *out, size_
 			return snprintf(out, cap, "ERR cred other-key");
 		}
 	}
+	/* an exchange that continues a quote: the gateway must have signed for that quote and this key (T2) */
+	if (kem_bound && !names(cred, body_len, "transcript_sha3_256", kem_t2)) {
+		wipe(kem_dk, sizeof(kem_dk));
+		return snprintf(out, cap, "ERR cred other-transcript");
+	}
 	lifetime = cred_lifetime(cred, body_len);
 	if (lifetime == 0) {
 		wipe(kem_dk, sizeof(kem_dk));
@@ -480,19 +525,35 @@ static int kem_finish(const char *ct_hex, const char *cred_hex, char *out, size_
 	}
 	wipe(kem_dk, sizeof(kem_dk));
 	sha3_256(cred, (size_t)cred_len, cred_hash);
-	sha3_init(&h);
-	sha3_update(&h, "aegis-session-v1", 16);
-	sha3_update(&h, k, 32);
-	sha3_update(&h, kem_nonce, 32);
-	sha3_update(&h, h_ct, 32);
-	sha3_final(&h, session_key);
-	sha3_init(&h);
-	sha3_update(&h, "aegis-confirm-v1", 16);
-	sha3_update(&h, k, 32);
-	sha3_update(&h, kem_nonce, 32);
-	sha3_update(&h, h_ct, 32);
-	sha3_update(&h, cred_hash, 32);
-	sha3_final(&h, tag);
+	if (kem_bound) {
+		uint8_t t3[32];
+
+		transcript_step(t3, T_KEM_FIN, kem_t2, 32, h_ct, 32, cred_hash, 32);
+		sha3_init(&h);
+		sha3_update(&h, "aegis-session-v2", 16);
+		sha3_update(&h, k, 32);
+		sha3_update(&h, t3, 32);
+		sha3_final(&h, session_key);
+		sha3_init(&h);
+		sha3_update(&h, "aegis-confirm-v2", 16);
+		sha3_update(&h, k, 32);
+		sha3_update(&h, t3, 32);
+		sha3_final(&h, tag);
+	} else {
+		sha3_init(&h);
+		sha3_update(&h, "aegis-session-v1", 16);
+		sha3_update(&h, k, 32);
+		sha3_update(&h, kem_nonce, 32);
+		sha3_update(&h, h_ct, 32);
+		sha3_final(&h, session_key);
+		sha3_init(&h);
+		sha3_update(&h, "aegis-confirm-v1", 16);
+		sha3_update(&h, k, 32);
+		sha3_update(&h, kem_nonce, 32);
+		sha3_update(&h, h_ct, 32);
+		sha3_update(&h, cred_hash, 32);
+		sha3_final(&h, tag);
+	}
 	wipe(k, sizeof(k));
 	session_ready = 1;
 	session_expired = 0;
@@ -531,9 +592,18 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		size_t cl;
 
 		if (get_hex(tok[1], ch, sizeof(ch)) != 32) return snprintf(out, cap, "ERR bad-request");
+		quote_ready = 0; /* only a quote that was signed can be continued, and only the last one */
 		cl = make_claims(ch);
 		memcpy(msgbuf, claims, cl);
 		if (sign_framed(QUOTE_LABEL, sizeof(QUOTE_LABEL) - 1, cl) != 0) return snprintf(out, cap, "ERR sign");
+		{
+			uint8_t h_claims[32];
+
+			sha3_256(claims, cl, h_claims);
+			transcript_step(quote_t1, T_QUOTE, ch, 32, h_claims, 32, NULL, 0);
+			memcpy(quote_ch, ch, 32);
+			quote_ready = 1;
+		}
 		o = out + sprintf(out, "PQTOKEN %u ", (unsigned)cl);
 		o = put_hex(o, claims, cl);
 		o += sprintf(o, " %u ", (unsigned)SIG_LEN);
@@ -550,6 +620,11 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		 * it: unusable, and its decapsulation key kept in memory (found by tests/fuzz, 2026-11-18). */
 		kem_pending = 0;
 		wipe(kem_dk, sizeof(kem_dk));
+		/* The nonce names the quote this exchange continues: the challenge of the last one signed. That quote is
+		 * used up here, whether or not the exchange completes. Any other nonce: the unbound exchange. (Both
+		 * values are public, so the comparison need not take constant time.) */
+		kem_bound = quote_ready && memcmp(nonce, quote_ch, 32) == 0;
+		if (kem_bound) quote_ready = 0;
 		/* fresh randomness too, so an exchange's key cannot be regenerated after a reboot */
 		if (plat->random(fresh, sizeof(fresh)) != 0) return snprintf(out, cap, "ERR rng");
 		memcpy(kem_nonce, nonce, 32);
@@ -571,9 +646,15 @@ int aegis_proto_handle(char *line, char *out, size_t cap)
 		}
 		wipe(coins, sizeof(coins));
 		wipe(fresh, sizeof(fresh));
-		memcpy(msgbuf, kem_nonce, 32);
-		memcpy(msgbuf + 32, kem_ek, KEM_EK_LEN);
-		if (sign_framed(KEM_LABEL, sizeof(KEM_LABEL) - 1, 32 + KEM_EK_LEN) != 0) {
+		if (kem_bound) {
+			transcript_step(kem_t2, T_KEM_INIT, quote_t1, 32, kem_ek, KEM_EK_LEN, NULL, 0);
+			memcpy(msgbuf, kem_t2, 32);
+		} else {
+			memcpy(msgbuf, kem_nonce, 32);
+			memcpy(msgbuf + 32, kem_ek, KEM_EK_LEN);
+		}
+		if ((kem_bound ? sign_framed(KEM2_LABEL, sizeof(KEM2_LABEL) - 1, 32)
+			       : sign_framed(KEM_LABEL, sizeof(KEM_LABEL) - 1, 32 + KEM_EK_LEN)) != 0) {
 			wipe(kem_dk, sizeof(kem_dk));
 			return snprintf(out, cap, "ERR sign");
 		}

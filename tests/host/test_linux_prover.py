@@ -2,7 +2,8 @@
 """The aegis-linux prover (endpoints/zybo/aegis_linux_prover.py) against the gateway's own code (fleet.py), on the PC:
 attestation with software trust, ML-KEM provisioning with the credential checks, KMAC256 heartbeats, the session query,
 and the refusals (a changed boot file, a wrong pinned key, a credential from another key or for another exchange), and
-the session's end on the prover's own clock (docs/endpoint-expiry.md)."""
+the session's end on the prover's own clock (docs/endpoint-expiry.md). One transcript (docs/architecture.md): an
+exchange that continues a quote, what the prover refuses in it, and the quote that does not outlive a restart."""
 import hashlib
 import json
 import os
@@ -20,6 +21,7 @@ sys.path.insert(0, os.path.join(ROOT, "endpoints", "zybo"))
 import fleet  # noqa: E402
 import mldsa  # noqa: E402
 import mlkem  # noqa: E402
+import transcript  # noqa: E402
 import wire  # noqa: E402
 import aegis_linux_prover as prover_mod  # noqa: E402
 
@@ -98,7 +100,7 @@ class LinuxProver(unittest.TestCase):
         for n in (1, 2):
             status, ctr = fleet.heartbeat(self.ep(), r["session_key"], timeout=10)
             self.assertEqual(ctr, n)
-            self.assertRegex(status, rb"^uptime_s=\d+;link=1;fw=linux-0\.2\.0;ttl=382[345]$")
+            self.assertRegex(status, rb"^uptime_s=\d+;link=1;fw=linux-0\.3\.0;ttl=382[345]$")
         with self.assertRaises(ValueError):       # the first heartbeat construction does not verify a KMAC device
             fleet.heartbeat(self.ep(heartbeat_mac="sha3-256"), r["session_key"], timeout=10)
 
@@ -201,6 +203,88 @@ class LinuxProver(unittest.TestCase):
                          "a refused credential must not replace the session")
         self.assertTrue(self.kem_raw(self.gw_sk, validity={"issued": t, "expires": t + 86400}).startswith("PQKEMOK "))
         self.assertTrue(prover_mod.monotonic_s() > 0)
+
+    def bound_raw(self, name=lambda t2: t2, port=None):
+        """A quote and the exchange that continues it, by hand; name gives the transcript the credential names (None:
+        none). Returns the PQKEMFIN reply and what the gateway would compare it with."""
+        port = port or self.port
+        v = fleet.attest(self.ep(), None, self.d, timeout=10)
+        self.assertTrue(v["admitted"], v["reasons"])
+        ch, th = bytes.fromhex(v["quote"]["challenge"]), bytes.fromhex(v["quote"]["token_sha3_256"])
+        p = fleet._exchange("127.0.0.1", port, "PQKEMINIT " + ch.hex(), 10).split()
+        ek, sig = bytes.fromhex(p[2]), bytes.fromhex(p[4])
+        t2 = transcript.kem_init(transcript.quote(ch, th), ek)
+        self.assertTrue(mldsa.verify(self.prover.pk, transcript.KEM_INIT_LABEL, t2, sig))
+        self.assertFalse(mldsa.verify(self.prover.pk, fleet.KEM_INIT_LABEL, ch + ek, sig))
+        ct, k = mlkem.encaps(ek)
+        body = {"v": 1, "type": "credential", "endpoint": "zybo",
+                "endpoint_pq_pk_sha256": hashlib.sha256(self.prover.pk).hexdigest(),
+                "kem_ct_sha3_256": fleet._sha3(ct).hex(), "kem_ek_sha3_256": fleet._sha3(ek).hex(),
+                "issued": 4102441200, "expires": 4102444800}
+        if name:
+            body["transcript_sha3_256"] = name(t2).hex()
+        cred = wire.canonical(body) + b"\n" + mldsa.sign(self.gw_sk, fleet.CRED_LABEL, wire.canonical(body))
+        reply = fleet._exchange("127.0.0.1", port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), 10).strip()
+        return reply, transcript.confirm_tag(k, transcript.kem_fin(t2, ct, cred))
+
+    def test_a_transcript_bound_exchange(self):
+        ep = self.ep(transcript="v2")
+        v = fleet.attest(ep, None, self.d, timeout=10)
+        r = fleet.provision(ep, self.d, self.gw_sk, "gid", v["measurements"], timeout=20, quote=v["quote"])
+        self.assertEqual(r["transcript"], "v2")
+        self.assertEqual(r["quote"], v["quote"])
+        self.assertEqual(fleet.query_session(ep), (r["session_id"], r["credential_sha3_256"]))
+        self.assertEqual(self.prover.session[0], r["session_key"])
+        self.assertEqual(fleet.heartbeat(ep, r["session_key"], timeout=10)[1], 1)
+        # a quote continues one exchange: the same quote again gets the unbound exchange, which the gateway refuses
+        with self.assertRaises(fleet.TranscriptRefused) as e:
+            fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        self.assertIn("answered the unbound exchange", str(e.exception))
+        self.assertEqual(fleet.query_session(ep)[0], r["session_id"], "a refused exchange must not replace the session")
+        # and a quote of an earlier cycle is not the last one
+        fleet.attest(ep, None, self.d, timeout=10)
+        newer = fleet.attest(ep, None, self.d, timeout=10)
+        with self.assertRaises(fleet.TranscriptRefused):
+            fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        r2 = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=newer["quote"])
+        self.assertNotEqual(r2["session_id"], r["session_id"])
+
+    def test_b_credential_must_name_the_transcript(self):
+        ep = self.ep(transcript="v2")
+        v = fleet.attest(ep, None, self.d, timeout=10)
+        r = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        for name in (None, lambda t2: bytes(32), lambda t2: t2[::-1]):
+            self.assertEqual(self.bound_raw(name)[0], "ERR cred other-transcript")
+        self.assertEqual(fleet.query_session(ep)[0], r["session_id"], "a refused credential must not replace the session")
+        reply, tag = self.bound_raw()
+        self.assertEqual(reply, "PQKEMOK %s END" % tag.hex())
+
+    def test_c_quote_does_not_outlive_a_restart(self):
+        """The same key in a second process, as after a restart (or another program that holds the key file): it
+        signed no quote, so it answers the unbound exchange and the gateway refuses to finish with it."""
+        port = free_port()
+        args = prover_mod.argparse.Namespace(state=os.path.join(self.d, "state"), gateway_pk=os.path.join(self.d, "gw.pub"),
+                                             measure=[("BOOT", [self.bootf])], port=port, heartbeat_mac="kmac256")
+        second = prover_mod.Prover(args)
+        self.assertEqual(second.pk, self.prover.pk)
+        threading.Thread(target=prover_mod.serve, args=(second, port), daemon=True).start()
+        import time
+        for _ in range(50):
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.05)
+        ep = self.ep(transcript="v2")
+        v = fleet.attest(ep, None, self.d, timeout=10)
+        with self.assertRaises(fleet.TranscriptRefused) as e:
+            fleet.provision(dict(ep, port=port), self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        self.assertIn("answered the unbound exchange", str(e.exception))
+        self.assertIsNone(second.session)
+        # without the policy key nothing notices: the finding
+        r = fleet.provision(dict(self.ep(), port=port), self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        self.assertIsNone(r["transcript"])
+        self.assertEqual(second.session[0], r["session_key"])
 
     def test_6_malformed_requests(self):
         for line in ("", "PQCHAL zz", "PQCHAL " + "00" * 31, "PQKEMFIN 00", "HELLO", "PQHB " + "00" * 32 + " extra"):

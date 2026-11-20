@@ -61,6 +61,13 @@ What the endpoint code says (`aegis_pq_attest.c`, `rw612/tfm/aegis_pq/aegis_pq.c
 - `PQCHAL` (quote) reads no session state and changes none (every message lets the STM32 partition end a session
   that has already outlived its credential, which the next message of any kind would do as well). Attesting from a
   second verifier cannot disturb the first one's session, credential or heartbeat counter.
+- With the transcript (`architecture.md`, "One transcript"; images from `...-transcript` on) a quote does leave
+  something behind: the endpoint keeps the last quote it signed, for the one `PQKEMINIT` that may continue it. A
+  second verifier's `PQCHAL` between the issuer's quote and its `PQKEMINIT` replaces that quote, and the issuer's
+  exchange is refused (`provisioning REFUSED: ... the endpoint answered the unbound exchange`). `fleet.py` then waits
+  0.4 to 1.2 s, takes one more quote and continues that one in the same cycle, if it is admitted and reports the same
+  measurements (the journal line says `second quote of the cycle`); if that fails too, the next cycle tries again.
+  Admission does not depend on it, and an established session is not touched: a session is provisioned once an hour.
 - `PQKEMINIT` cancels a pending exchange (not an established session); a foreign `PQKEMFIN` is refused and the session
   kept. The host never sends either without the pin (above).
 - `PQHB` needs the session key; the counter is shared but only rises, so another verifier's heartbeat would not

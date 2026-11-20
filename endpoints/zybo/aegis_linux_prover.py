@@ -9,6 +9,16 @@ The same line protocol as the STM32 prover, TCP 7444, one request per connection
   PQHB <nonce>             -> PQHB <status> <counter> <tag> END           KMAC256 over the session
   PQSESSION                -> PQSESSION <session id> <credential hash> END
 
+One transcript (common/transcript.py, from 0.3.0): the prover remembers the last quote it signed since it started
+(its challenge and T1 = H(quote || challenge || SHA3(claims))). A PQKEMINIT whose nonce is that challenge continues
+that quote: the signature is then over T2 = H(kem-init || T1 || ek) with the label "aegis-kem-init-v2", the credential
+must name T2 ("transcript_sha3_256"), and the confirmation tag and the session key are made from
+T3 = H(kem-fin || T2 || SHA3(ct) || SHA3(credential)). A quote continues at most one exchange. Any other nonce gets the
+first version's exchange (signature over nonce || ek), which a verifier whose policy says "transcript": "v2" refuses.
+The measurements in a quote are taken when it is asked for (measure() below: the files as they are on disk then), not
+again at PQKEMINIT: the transcript says that this process, since its start, signed exactly that quote and then made
+this key for it.
+
 A session ends on this endpoint's own clock (docs/endpoint-expiry.md): the credential's lifetime ("expires" minus
 "issued", as signed by the gateway) plus a sixteenth after the accepted PQKEMFIN, the session key is dropped; PQHB and
 PQSESSION then answer "ERR pq expired" until the gateway provisions again. The clock is the kernel's CLOCK_BOOTTIME
@@ -41,8 +51,9 @@ import cbor  # noqa: E402
 import kmac  # noqa: E402
 import mldsa  # noqa: E402
 import mlkem  # noqa: E402
+import transcript  # noqa: E402
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 PROFILE = "aegis-linux-software-v1"
 QUOTE_LABEL = b"aegis-endpoint-quote-v1"
 KEM_INIT_LABEL = b"aegis-kem-init-v1"
@@ -104,7 +115,8 @@ class Prover:
         self.groups = a.measure
         self.hb_mac = a.heartbeat_mac
         self.instance = b"\x02" + hashlib.sha256(self.pk).digest()   # 0x02: not a PSA IAK-based instance ID
-        self.kem = None            # (nonce, decapsulation key) between PQKEMINIT and PQKEMFIN
+        self.kem = None            # (nonce, decapsulation key, key, T2 or None) between PQKEMINIT and PQKEMFIN
+        self.quote = None          # (challenge, T1) of the last quote signed since the start, until an exchange uses it
         self.session = None        # (session key, credential, clock at PQKEMFIN, seconds it may live)
         self.expired = False       # the last session ended by the clock: "ERR pq expired" until the next one
         self.clock = monotonic_s   # the tests replace it
@@ -140,10 +152,12 @@ class Prover:
                 ch = bytes.fromhex(p[1])
                 if len(ch) != 32:
                     return "ERR bad-request"
+                self.quote = None          # only a quote that was signed and sent can be continued
                 claims = {C_PROFILE: PROFILE, C_CHALLENGE: ch, C_INSTANCE: self.instance,
                           C_SWC: measure(self.groups + [("PROVER", [os.path.abspath(__file__)])])}
                 tok = cbor.dumps(claims)
                 sig = mldsa.sign(self.sk, QUOTE_LABEL, tok)
+                self.quote = (ch, transcript.quote(ch, transcript.token_hash(tok)))
                 return "PQTOKEN %d %s %d %s END" % (len(tok), tok.hex(), len(sig), sig.hex())
             if cmd == "PQKEMINIT" and len(p) == 2:
                 nonce = bytes.fromhex(p[1])
@@ -152,12 +166,19 @@ class Prover:
                 # a new exchange replaces a pending one whether or not it completes, and it is kept only once signed
                 # (as on the RW612 and STM32 partitions, 2026-11-18)
                 self.kem = None
+                # the nonce names the quote this exchange continues: the challenge of the last one signed. That
+                # quote is used up, whether or not the exchange completes. Any other nonce: the unbound exchange.
+                t1 = None
+                if self.quote and hmac.compare_digest(nonce, self.quote[0]):
+                    t1, self.quote = self.quote[1], None
                 try:
                     ek, dk = mlkem.keypair()
-                    sig = mldsa.sign(self.sk, KEM_INIT_LABEL, nonce + ek)
+                    t2 = transcript.kem_init(t1, ek) if t1 else None
+                    sig = (mldsa.sign(self.sk, transcript.KEM_INIT_LABEL, t2) if t2 else
+                           mldsa.sign(self.sk, KEM_INIT_LABEL, nonce + ek))
                 except Exception:  # noqa: BLE001 (any failure of the crypto library refuses this exchange only)
                     return "ERR sign"
-                self.kem = (nonce, dk, ek)
+                self.kem = (nonce, dk, ek, t2)
                 return "PQKEMEK %d %s %d %s END" % (len(ek), ek.hex(), len(sig), sig.hex())
             if cmd == "PQKEMFIN" and len(p) == 3:
                 return self.kem_finish(bytes.fromhex(p[1]), bytes.fromhex(p[2]))
@@ -188,13 +209,14 @@ class Prover:
 
     def kem_finish(self, ct, cred):
         """Accept the gateway's credential only if it is signed by the pinned gateway key, names this endpoint's key and
-        this exchange's ciphertext, carries a lifetime, and has not expired; only then replace the session (an aborted
-        or forged exchange leaves an established session alone)."""
+        this exchange's ciphertext (and, for an exchange that continues a quote, its transcript T2), carries a
+        lifetime, and has not expired; only then replace the session (an aborted or forged exchange leaves an
+        established session alone)."""
         if not self.kem:
             return "ERR cred no-exchange"
         if self.now is None:
             return "ERR clock"      # a session's end could not be measured: none starts
-        nonce, dk, ek = self.kem
+        nonce, dk, ek, t2 = self.kem
         self.kem = None
         body, sep, sig = cred.partition(b"\n")
         if not sep or not mldsa.verify(self.gw_pk, CRED_LABEL, body, sig):
@@ -211,6 +233,8 @@ class Prover:
             return "ERR cred other-endpoint"
         if b.get("kem_ek_sha3_256") != sha3(ek).hex():      # this exchange's key, not an earlier one
             return "ERR cred other-key"
+        if t2 and b.get("transcript_sha3_256") != t2.hex():  # the verifier signed for this quote and this key
+            return "ERR cred other-transcript"
         issued, expires = b.get("issued"), b.get("expires")
         if type(issued) is not int or type(expires) is not int or not 0 < expires - issued <= CRED_LIFETIME_MAX \
                 or issued < 0:
@@ -218,9 +242,13 @@ class Prover:
         if time.time() > 1.7e9 and expires < time.time():    # only with a set clock (no RTC battery)
             return "ERR cred expired"
         k = mlkem.decaps(ct, dk)
-        tag = sha3(b"aegis-confirm-v1", k, nonce, sha3(ct), sha3(cred))
+        if t2:
+            t3 = transcript.kem_fin(t2, ct, cred)
+            tag, key = transcript.confirm_tag(k, t3), transcript.session_key(k, t3)
+        else:
+            tag, key = sha3(b"aegis-confirm-v1", k, nonce, sha3(ct), sha3(cred)), sha3(b"aegis-session-v1", k, nonce, sha3(ct))
         lifetime = expires - issued
-        self.session = (sha3(b"aegis-session-v1", k, nonce, sha3(ct)), cred, self.now, lifetime + lifetime // 16)
+        self.session = (key, cred, self.now, lifetime + lifetime // 16)
         self.expired = False
         self.hb = 0
         return "PQKEMOK %s END" % tag.hex()

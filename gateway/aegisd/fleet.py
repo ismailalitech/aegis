@@ -36,6 +36,17 @@ and issues credentials only to endpoints whose policy entry names this verifier'
 (the key the endpoint's firmware pins, tools/gen_gateway_pin.py): any other endpoint would refuse the credential, and
 the attempt would cancel a provisioning exchange the gateway may have in flight. Attestation needs no pin and
 touches no session state on the endpoint.
+
+One transcript (common/transcript.py, docs/architecture.md): an entry with "transcript": "v2" gets a session only
+through the bound exchange. PQKEMINIT then carries the challenge of the quote this cycle appraised, the endpoint's
+signature over its ML-KEM key must cover that quote, and the credential, the confirmation tag and the session key all
+depend on the same hash chain: the session is finished with exactly the code that was appraised, in the same boot, or
+not at all. The older exchange (the endpoint signs nonce || ek and nothing of the quote) is then refused, and a stored
+session made that way is replaced. Without the key the older exchange is used, so an endpoint whose firmware has not
+been upgraded keeps working; every such session is marked "unbound" in the journal and the state file, with a line at
+warning priority when it is issued and when the loop starts. What the transcript says is that one boot of the code
+holding the endpoint's key signed the appraised quote and then made the session's key; it does not stop code that
+holds the key and lies (docs/architecture.md says what would).
 """
 import argparse
 import json
@@ -72,6 +83,13 @@ ENFORCE_TIMEOUT_S = 30
 KEM_INIT_LABEL = b"aegis-kem-init-v1"
 CRED_LABEL = b"aegis-credential-v1"
 CRED_LIFETIME_S = 3600
+TRANSCRIPTS = ("v2",)               # policy key "transcript": the bound exchange is required
+UNBOUND_NOTE = ('unbound: the session is not tied to the attestation (no "transcript": "v2" in the policy entry); '
+                "weaker")
+
+
+class TranscriptRefused(ValueError):
+    """The endpoint's answer does not continue the transcript of the quote this verifier appraised."""
 
 
 class EndpointBusy(ConnectionError):
@@ -171,9 +189,10 @@ def _sha3(*parts):
     return h.digest()
 
 
-def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.0):
+def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.0, quote=None):
     """ML-KEM-768 provisioning of an admitted aegis-pq endpoint.
 
+    Without "transcript" in the entry (the first version; nothing ties it to the attestation):
     1. gateway nonce -> endpoint returns a fresh ML-KEM-768 encapsulation key, signed with its
        enrolled ML-DSA-65 key (so the key cannot be swapped on the way);
     2. gateway encapsulates (ct, K) and sends ct with a credential signed by the gateway's own
@@ -181,19 +200,51 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
     3. endpoint decapsulates and answers a key-confirmation tag; the gateway accepts only if the
        tag equals SHA3-256("aegis-confirm-v1" || K || nonce || SHA3(ct) || SHA3(credential)).
     Both sides then hold session = SHA3-256("aegis-session-v1" || K || nonce || SHA3(ct)).
+
+    With "transcript": "v2" (common/transcript.py): quote is attest()'s record of the quote just appraised,
+    {"challenge", "token_sha3_256"} in hex, and the same three messages continue its transcript:
+    1. PQKEMINIT carries that quote's challenge; the endpoint's signature must be over
+       T2 = H(kem-init || T1 || ek), T1 = H(quote || challenge || SHA3(token)), label "aegis-kem-init-v2". A signature
+       of the first version, or one over another quote, is refused (TranscriptRefused) before anything is sent back;
+    2. the credential names T2 ("transcript_sha3_256") next to the ciphertext and the key;
+    3. the tag must equal SHA3-256("aegis-confirm-v2" || K || T3), T3 = H(kem-fin || T2 || SHA3(ct) || SHA3(cred)).
+    Both sides then hold session = SHA3-256("aegis-session-v2" || K || T3).
     Returns a dict; raises ValueError on any failure."""
+    import hmac
     import mldsa
     import mlkem
+    import transcript
     import wire
     host, port = ep["host"], int(ep["port"])
+    bound = ep.get("transcript") is not None
+    if bound and ep["transcript"] not in TRANSCRIPTS:
+        raise ValueError("unknown transcript %r" % (ep["transcript"],))
     with open(_path(base_dir, ep["pq_pub_file"])) as f:
         pk = bytes.fromhex(f.read().strip())
-    nonce = secrets.token_bytes(32)
+    if bound:
+        try:
+            challenge, tok_hash = bytes.fromhex(quote["challenge"]), bytes.fromhex(quote["token_sha3_256"])
+            t1 = transcript.quote(challenge, tok_hash)
+        except (TypeError, KeyError, ValueError):
+            raise TranscriptRefused("transcript v2: no appraised quote of this cycle to continue") from None
+        nonce = challenge       # the one verifier nonce of the transcript: it names the quote to the endpoint
+    else:
+        nonce = secrets.token_bytes(32)
     p = _exchange(host, port, "PQKEMINIT " + nonce.hex(), timeout).split()
     if len(p) != 6 or p[0] != "PQKEMEK" or p[5] != "END":
         raise ValueError("no KEM key in reply: %r" % " ".join(p)[:40])
     ek, sig = bytes.fromhex(p[2]), bytes.fromhex(p[4])
-    if len(ek) != mlkem.EK_LEN or not mldsa.verify(pk, KEM_INIT_LABEL, nonce + ek, sig):
+    if len(ek) != mlkem.EK_LEN:
+        raise ValueError("ML-KEM key of the wrong length")
+    if bound:
+        t2 = transcript.kem_init(t1, ek)
+        if not mldsa.verify(pk, transcript.KEM_INIT_LABEL, t2, sig):
+            if mldsa.verify(pk, KEM_INIT_LABEL, nonce + ek, sig):
+                raise TranscriptRefused("transcript v2 required, but the endpoint answered the unbound exchange: its "
+                                        "ML-KEM key is not tied to the quote just appraised (firmware without "
+                                        "transcript v2, a restart or another quote in between)")
+            raise TranscriptRefused("ML-KEM key not signed over the transcript of the quote just appraised")
+    elif not mldsa.verify(pk, KEM_INIT_LABEL, nonce + ek, sig):
         raise ValueError("ML-KEM key not signed by the enrolled endpoint key")
     ct, k = mlkem.encaps(ek)
     now = int(time.time())
@@ -201,18 +252,43 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
             "endpoint_pq_pk_sha256": __import__("hashlib").sha256(pk).hexdigest(),
             "measurements": measurements, "kem": "ML-KEM-768", "kem_ct_sha3_256": _sha3(ct).hex(), "kem_ek_sha3_256": _sha3(ek).hex(),
             "issued": now, "expires": now + CRED_LIFETIME_S, "gateway_identity_sha256": gw_identity_sha256}
+    if bound:
+        # T2 alone: it covers the quote, and the body must stay small (the STM32 partition verifies at most 1214
+        # bytes of it); the quote itself is kept beside the credential in this verifier's state
+        body.update({"transcript": transcript.VERSION, "transcript_sha3_256": t2.hex()})
     cred = wire.canonical(body) + b"\n" + mldsa.sign(gw_sk, CRED_LABEL, wire.canonical(body))
     p = _exchange(host, port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), timeout).split()
     if len(p) != 3 or p[0] != "PQKEMOK" or p[2] != "END":
         raise ValueError("provisioning refused by endpoint: %r" % " ".join(p)[:40])
-    expect = _sha3(b"aegis-confirm-v1", k, nonce, _sha3(ct), _sha3(cred))
-    import hmac
-    if not hmac.compare_digest(bytes.fromhex(p[1]), expect):
+    if bound:
+        t3 = transcript.kem_fin(t2, ct, cred)
+        expect, session = transcript.confirm_tag(k, t3), transcript.session_key(k, t3)
+    else:
+        expect = _sha3(b"aegis-confirm-v1", k, nonce, _sha3(ct), _sha3(cred))
+        session = _sha3(b"aegis-session-v1", k, nonce, _sha3(ct))
+    try:
+        tag = bytes.fromhex(p[1])
+    except ValueError:
+        raise ValueError("key confirmation is not hex") from None
+    if not hmac.compare_digest(tag, expect):
         raise ValueError("key confirmation failed")
-    session = _sha3(b"aegis-session-v1", k, nonce, _sha3(ct))
     session_id = _sha3(b"aegis-session-id-v1", session)
     return {"credential": cred, "body": body, "session_key": session, "session_id": session_id.hex(),
-            "credential_sha3_256": _sha3(cred).hex()}
+            "credential_sha3_256": _sha3(cred).hex(), "transcript": transcript.VERSION if bound else None,
+            "transcript_sha3_256": t3.hex() if bound else None,
+            "quote": {"challenge": challenge.hex(), "token_sha3_256": tok_hash.hex()} if bound else None}
+
+
+def quote_to_continue(ep, base_dir, ecdsa_verify=None, timeout=10.0):
+    """For tools that run provision() outside the loop (tests/board): the quote a session of this entry must
+    continue, from an attestation made now, or None where the entry does not ask for the transcript. As in the loop,
+    only an admitted endpoint gets a session: ValueError with the reasons otherwise."""
+    if ep.get("transcript") is None:
+        return None
+    v = attest(ep, ecdsa_verify or psa_token.verify_with_openssl_cli, base_dir, timeout)
+    if not v["admitted"]:
+        raise ValueError("not admitted, so no session: %s" % "; ".join(v["reasons"]))
+    return v["quote"]
 
 
 def heartbeat_tag(mode, session_key, nonce, ctr, status):
@@ -310,6 +386,12 @@ def policy_errors(ep):
     mac = ep.get("heartbeat_mac")
     if mac is not None and mac not in HEARTBEAT_MACS:
         errors.append("policy: unknown heartbeat_mac %r" % mac)
+    tr = ep.get("transcript")
+    if tr is not None and tr not in TRANSCRIPTS:
+        # a value this verifier does not know must not fall back to the unbound exchange
+        errors.append("policy: unknown transcript %r (known: %s)" % (tr, ", ".join(TRANSCRIPTS)))
+    elif tr is not None and kind not in PQ_KINDS:
+        errors.append("policy: transcript %s needs a post-quantum kind (%s)" % (tr, ", ".join(PQ_KINDS)))
     return errors
 
 
@@ -318,6 +400,15 @@ def policy_warnings(ep):
         return ["WARNING: %s may be admitted on development profile %s: its key is the same on every chip"
                 % (ep.get("name"), ep["profile"])]
     return []
+
+
+def binding_note(ep):
+    """For `check` and the start of `watch`: how a provisioned endpoint's session is tied to its attestation."""
+    if not ep.get("provision"):
+        return None
+    if ep.get("transcript") in TRANSCRIPTS:
+        return "session bound to the attestation (transcript %s required; the unbound exchange is refused)" % ep["transcript"]
+    return "session %s" % UNBOUND_NOTE
 
 
 def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
@@ -362,6 +453,9 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
                 verdict["reasons"].append("ML-DSA-65 quote signature invalid")
                 return verdict
             verdict["pq_signature"] = "ML-DSA-65 valid"
+            # the quote as signed, for the transcript a session of this cycle must continue (provision()); both
+            # values went over the network in the clear
+            verdict["quote"] = {"challenge": challenge.hex(), "token_sha3_256": _sha3(tok).hex()}
         if kind in PLAIN_KINDS:
             claims = psa_token.parse_plain(tok)
             profile = claims.get("profile")
@@ -545,10 +639,26 @@ def issuer_refusal(ep, state, require_pin):
     return None
 
 
-def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=False):
+def _binding(tr):
+    return "transcript-%s" % tr if tr else "unbound"
+
+
+def _unbound_tail(tr):
+    return "" if tr else " [%s]" % UNBOUND_NOTE
+
+
+def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=False, requote=None):
     """Zero trust: admitted aegis-pq endpoints with "provision": true get (or keep) a fresh
     credential; quarantined ones lose it. Endpoints that would not accept this verifier's credential
-    (issuer_refusal) are left alone: no KEM exchange, no heartbeat."""
+    (issuer_refusal) are left alone: no KEM exchange, no heartbeat.
+    With "transcript": "v2" in the entry a session is issued only as the continuation of this verdict's quote
+    (provision()), and a stored session that was not made that way is not kept alive by heartbeats: it is replaced.
+    An endpoint keeps one quote to continue, the last it signed, so a quote asked by another verifier between this
+    cycle's quote and its exchange makes the exchange fail. requote, if given, is called once then: it must return a
+    new verdict (attest() again). The exchange is tried once more with that quote only if the new verdict is admitted
+    and reports the same measurements, so the session is still bound to a quote appraised in this cycle with the
+    result this cycle reports; an endpoint that restarted into other code in between gets nothing from the retry.
+    Sets verdict["session_binding"] to "transcript-v2" or "unbound" for a session issued or kept."""
     if not ep.get("provision"):
         return None
     refusal = issuer_refusal(ep, state, require_pin)
@@ -563,10 +673,16 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
             if os.path.exists(f):
                 os.remove(f)
         return "revoked"
+    want = ep.get("transcript")
+    hb_error = None
     if os.path.exists(meta):
         with open(meta) as f:
             m = json.load(f)
-        if m["body"]["expires"] - time.time() > 300:
+        if m.get("transcript") != want:
+            # the policy now asks for another exchange than the one that made this session (the unbound one, when
+            # "transcript" was added to the entry): heartbeats would keep a session alive that the policy refuses
+            hb_error = "stored session is %s, the policy asks for %s" % (_binding(m.get("transcript")), _binding(want))
+        elif m["body"]["expires"] - time.time() > 300:
             # the endpoint must prove it still holds the session key: fresh nonce, MAC, rising counter
             try:
                 with open(keyf, "rb") as f:
@@ -576,17 +692,31 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
                     m["last_status"] = status.decode(errors="replace")
                     with open(meta, "w") as f:
                         json.dump(m, f, indent=1)
-                    return "valid, heartbeat %d (%s)" % (ctr, m["last_status"])
+                    verdict["session_binding"] = _binding(want)
+                    # every cycle's line says so in a word; the sentence is in the line that issued the session
+                    return "valid, heartbeat %d (%s)" % (ctr, m["last_status"]) + ("" if want else " [unbound]")
                 hb_error = "counter did not rise"
             except (OSError, ValueError) as e:
                 hb_error = str(e)
-        else:
-            hb_error = None
-    else:
-        hb_error = None
     sk, gid = load_gateway_identity(state)
+    second = False
     try:
-        r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}))
+        try:
+            r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}), quote=verdict.get("quote"))
+        except TranscriptRefused:
+            again = requote() if requote else None
+            if not (again and again.get("admitted") and again.get("quote") and
+                    again.get("measurements") == verdict.get("measurements")):
+                raise
+            r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}), quote=again["quote"])
+            verdict["quote"], second = again["quote"], True
+    except TranscriptRefused as e:
+        # nothing of an older session may outlive a refused transcript: the endpoint did not show that the code
+        # appraised in this cycle is the code that holds a session
+        for f in (meta, keyf):
+            if os.path.exists(f):
+                os.remove(f)
+        return "provisioning REFUSED: %s" % e + (" (after: %s)" % hb_error if hb_error else "")
     except (OSError, ValueError, RuntimeError) as e:
         return "provisioning failed: %s" % e + (" (after heartbeat failure: %s)" % hb_error if hb_error else "")
     fd = os.open(keyf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -594,8 +724,17 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
         f.write(r["session_key"])
     with open(meta, "w") as f:
         json.dump({"body": r["body"], "session_id": r["session_id"],
-                   "credential_sha3_256": r["credential_sha3_256"]}, f, indent=1)
-    return "issued session %s..." % r["session_id"][:12] + (" (heartbeat failed: %s)" % hb_error if hb_error else "")
+                   "credential_sha3_256": r["credential_sha3_256"], "transcript": r["transcript"],
+                   "transcript_sha3_256": r["transcript_sha3_256"], "quote": r["quote"]}, f, indent=1)
+    verdict["session_binding"] = _binding(r["transcript"])
+    if not r["transcript"]:
+        # once per session in the journal at warning priority (journal_line); the note is in every cycle's line
+        verdict["warning"] = "; ".join(x for x in (verdict.get("warning"), "session issued " + UNBOUND_NOTE) if x)
+    return ("issued session %s..." % r["session_id"][:12] +
+            (" bound to quote %s... (transcript %s%s)" % (verdict["quote"]["token_sha3_256"][:12], r["transcript"],
+                                                           ", second quote of the cycle" if second else "")
+             if r["transcript"] else "") +
+            (" (heartbeat failed: %s)" % hb_error if hb_error else "") + _unbound_tail(r["transcript"]))
 
 
 def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, state=GATEWAY_STATE, require_pin=False,
@@ -617,8 +756,12 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
                 v["endpoint"], "admit" if v["admitted"] else "quarantine", result["rc"], result["stderr"] or "(no output)"),
                 LOG_ERR, file=sys.stderr)
         if credentials and ep.get("provision"):
+            def requote(ep=ep):
+                import random
+                time.sleep(random.uniform(*BUSY_BACKOFF_S))   # as for a busy endpoint: do not collide again
+                return attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)))
             try:
-                cs = credential_step(ep, v, base_dir, state=state, require_pin=require_pin)
+                cs = credential_step(ep, v, base_dir, state=state, require_pin=require_pin, requote=requote)
             except Exception as e:  # noqa: BLE001
                 cs = "credential step failed: %s: %s" % (type(e).__name__, e)
             if cs:
@@ -695,6 +838,8 @@ def main(argv=None):
             if not errs and ep.get("provision") and not a.no_credentials:
                 refusal = issuer_refusal(ep, state_dir, on_host)
                 print("  credentials: %s" % (refusal or "issued by this verifier"))
+                if not refusal:
+                    print("  %s" % binding_note(ep))
         print("admission TTL: %d s (interval %g s)" % (admit_ttl(policy, a.interval), a.interval))
         print("platform %s, state %s, %s, this verifier's key sha256 %s" % (
             platform, state_dir, "enforcing" if enforce_hooks and policy.get("enforce_cmd") else "observe-only",
@@ -716,6 +861,11 @@ def main(argv=None):
         platform, "enforcing" if enforce_hooks and policy.get("enforce_cmd") else "observe-only",
         "off" if a.no_credentials else ("only where verifier_pin_sha256 names this verifier" if on_host else "on"),
         state_file))
+    if not a.no_credentials:
+        for ep in policy.get("endpoints", []):
+            if ep.get("provision") and ep.get("transcript") not in TRANSCRIPTS and not policy_errors(ep) \
+                    and not issuer_refusal(ep, state_dir, on_host):
+                log("aegis-fleet: %s: %s" % (ep.get("name"), binding_note(ep)), LOG_WARNING)
     while True:
         try:  # reload every cycle, so policy updates apply without a restart
             with open(a.policy) as f:

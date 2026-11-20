@@ -41,6 +41,11 @@ What has run on the bench, each with the record or test that shows it:
   ([`tests/host/test_linux_host_verifier.py`](tests/host/test_linux_host_verifier.py)).
 - Claims maps with non-scalar or repeated CBOR keys are refused
   ([`tests/host/test_cbor_keys.py`](tests/host/test_cbor_keys.py)).
+- In the source, attestation and the ML-KEM session are one signed transcript (policy key `"transcript": "v2"`;
+  [`docs/architecture.md`](docs/architecture.md), "One transcript"): the gateway finishes a session only with the
+  code whose quote it appraised, in the boot that signed it. Tested on the PC
+  ([`tests/host/test_transcript.py`](tests/host/test_transcript.py)) and built for the STM32 and the RW612; not yet
+  on the boards.
 
 One decision cycle, every 30 seconds per endpoint (the default `--interval` of `gateway/aegisd/fleet.py`):
 

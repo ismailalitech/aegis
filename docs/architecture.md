@@ -102,8 +102,8 @@ nonce, the profile where one is pinned, and every measurement against the policy
 ML-DSA signing is hedged on both: fresh randomness in every signature.
 
 **Provisioning** (only after ADMITTED):
-1. `PQKEMINIT <nonce>` -> a fresh ML-KEM-768 encapsulation key `ek`, signed by the device key with the nonce. A new
-   `PQKEMINIT` cancels any pending exchange. The key pair's coins are SHA3-256(root || fresh || nonce || counter ||
+1. `PQKEMINIT <nonce>` -> a fresh ML-KEM-768 encapsulation key `ek`, signed by the device key with the nonce (or,
+   with "One transcript" below, with the quote it continues). A new `PQKEMINIT` cancels any pending exchange. The key pair's coins are SHA3-256(root || fresh || nonce || counter ||
    0 or 1) for the two halves: a device secret, 32 bytes from the chip's random number generator, the gateway's
    nonce and the count of exchanges since reset. The random bytes keep a recorded exchange from being replayed
    after a reset (the other inputs repeat); without them the exchange is refused. In the STM32 partition's source
@@ -114,6 +114,91 @@ ML-DSA signing is hedged on both: fresh randomness in every signature.
 
 Both sides keep session = SHA3-256("aegis-session-v1" || K || nonce || SHA3(ct)); the key never leaves either side.
 A credential lasts an hour and is renewed five minutes before it expires.
+
+**One transcript** (policy `"transcript": "v2"`; audit finding 2. In source and tested on the PC; **not yet on the
+boards**.) The two exchanges above share nothing but the endpoint's key: the signature on the ML-KEM key covers
+`nonce || ek` and says nothing about the code that reported the measurements. Where one key serves two firmware
+images, the gateway can appraise one and finish the session with the other. That is the case on this bench: the
+RW612's single-image prover and its TF-M partition derive the same key, an STM32 secure image has the same
+DHUK-derived key before and after an upgrade, and the non-secure image can change under the same secure one. With
+`"transcript": "v2"` in an endpoint's policy entry, the quote and the exchange are one hash chain
+(`common/transcript.py`):
+
+    T1 = SHA3-256("aegis-transcript-v2/quote"    || challenge[32] || SHA3-256(token)[32])
+    T2 = SHA3-256("aegis-transcript-v2/kem-init" || T1[32] || ek[1184])
+    T3 = SHA3-256("aegis-transcript-v2/kem-fin"  || T2[32] || SHA3-256(ct)[32] || SHA3-256(credential)[32])
+
+    PQKEMEK signature   ML-DSA-65 by the device key over "aegis-kem-init-v2" || 0x00 || T2
+    credential          as above, and its signed body names T2: "transcript_sha3_256":"<64 hex digits>"
+    PQKEMOK tag         SHA3-256("aegis-confirm-v2" || K[32] || T3[32])
+    session key         SHA3-256("aegis-session-v2" || K[32] || T3[32])
+
+- **Fields.** `challenge`: the gateway's 32 random bytes of this cycle. `token`: the bytes the endpoint signed as its
+  quote, exactly as sent (the STM32's PSA token, the CBOR claims elsewhere); they hold the challenge and the
+  measurements. `ek`, `ct`: the ML-KEM-768 encapsulation key and ciphertext. `credential`: body, newline and
+  signature, as sent. `K`: the ML-KEM shared secret. The labels are ASCII without a terminator (25, 28, 27, 16 and 16
+  bytes); every other field has a fixed length, so the five hash inputs are 89, 1244, 123, 80 and 80 bytes, and no
+  label is the beginning of another.
+- **The lines do not change.** `PQKEMINIT` carries the challenge of the quote in the place of its nonce: that is how
+  the endpoint knows which quote the exchange continues. The STM32's non-secure prover passes the same bytes to the
+  same message types; it is not rebuilt.
+- **Endpoint.** Its secure side keeps the challenge and T1 of the last quote it signed since reset, in RAM. A
+  `PQKEMINIT` whose nonce is that challenge continues that quote, once: the signature is over T2, the credential
+  must name T2 (otherwise it is refused like one for another key, and an established session stays), and tag and
+  session key come from T3. Another `PQCHAL` replaces the quote; a `PQCHAL` that fails, a first use and a reset end
+  it. Any other nonce gets the first version's exchange, unchanged, so an upgraded endpoint still works with a
+  gateway whose policy does not ask for the transcript yet.
+- **Gateway.** With the policy key it sends the challenge of the quote it has just appraised, computes T2 from the
+  token bytes it appraised and the key it received, and checks the signature over that. Anything else (a signature
+  of the first version, one over another quote, another key or another step) is `provisioning REFUSED` before a
+  credential is sent, and whatever session was stored for the endpoint is deleted. A stored session that was not
+  made this way is replaced, not kept alive by heartbeats. Without the policy key the first version's exchange is
+  used and marked in every journal line (`[unbound]`), with the reason at warning priority when such a session is
+  issued and when the loop starts; `fleet.py check` says which entries are bound.
+- **What is refused** (`tests/host/test_transcript.py`, the fuzz models, `tests/redteam/fuzz_host.py`): the quote
+  from one image and the exchange from another, whether the other image knows the transcript or not, and whether or
+  not it first signed a quote of its own for the same challenge (its quote reports its own measurements, so its T1
+  is another one); the same image after a restart; an exchange before its quote; the quote of an earlier cycle; a
+  recorded `PQKEMEK` or `PQKEMOK`; a tag made the first version's way; a credential for another transcript.
+
+What a transcript says, and what it does not:
+
+- **No endpoint measures again for it.** The STM32's token carries what BL2 recorded at boot; the RW612's TF-M
+  partition hashes both flash partitions once, before the non-secure image runs; the ZynqMP's TA reports the FSBL's
+  hand-off; the RW612's single-image prover and the Linux prover hash their files when a quote is asked for. So a
+  transcript says: one boot of the code that holds the key signed exactly this quote and then made this ML-KEM key
+  for it. It does not say that the running code is still what was measured at boot.
+- **The same boot, or the same quote.** After a reset there is no quote to continue. An endpoint that restarts into
+  the same images and is asked for the same challenge again signs the same claims; where the quote is those claims
+  alone (RW612, ZynqMP, Linux) it is then the same token, byte for byte, the transcript is the appraised one, and
+  finishing it is correct: what answers reports what was appraised. The STM32's token carries TF-M's own ES256
+  signature, which t_cose asks for as randomized ECDSA, so there even the same images give another token and a
+  quote from before the reset cannot be continued at all (from the source; the board check prints which it saw).
+- **An image that holds the key and lies is not stopped.** It can sign T2 for a quote another image made (quotes
+  cross the network in the clear), as it could forge the quote itself. Every image of this repository, old or new,
+  keeps to the protocol and cannot be used that way. Closing this needs a key that depends on the measured code (a
+  key derived from the measurements, or released by the boot chain only to the measured image); these keys depend on
+  the chip only (`test_limit_a_firmware_that_holds_the_key_and_lies_is_accepted` states the boundary).
+- **One signature, not two.** The endpoint signs T2. The ciphertext and the credential come later and are covered by
+  the tag, which needs K, which only the holder of the decapsulation key of the signed `ek` has; the gateway's
+  signature on the credential covers T2.
+- **Two verifiers.** An endpoint keeps one quote, so a quote asked by another verifier between the gateway's quote
+  and its `PQKEMINIT` makes that exchange fail. The fleet loop then takes one more quote in the same cycle and
+  continues that one, only if it is admitted and reports the same measurements as the verdict (`pc-verifier.md`).
+
+Order of upgrade: the gateway first (`fleet.py` and `common/transcript.py`; nothing changes for entries without the
+key), then each endpoint image, then `"transcript": "v2"` in that endpoint's entry. With the key set for an image
+from before the transcript, the endpoint is still attested and admitted, and gets no session.
+
+| Endpoint | Where | State |
+|---|---|---|
+| STM32H573 (TF-M) | `aegis_pq_attest.c`; non-secure prover 0.6.0 unchanged | built: image `...-freshkem-transcript`, SPE 3183f74a, same MCUboot version (2.3.0) and signer as the running image; deepest stack path by GCC's figures 18712 bytes (18720 before; the boards report 18888 of 26624); not on the boards |
+| RW612 (TF-M) | `aegis_proto.c` in the secure image, 0.3.0 | built (SPE 76f89751; the non-secure image is byte for byte 0.2.2's, NSPE 24979a1f); not on the board |
+| RW612 (single image) | the same `aegis_proto.c` | source only (no Zephyr workspace on the build PC) |
+| ZynqMP (OP-TEE TA) | the same `aegis_proto.c` | source only; `optee/tests/run.sh` passes on the PC |
+| Linux prover | `aegis_linux_prover.py` 0.3.0 (needs `common/transcript.py` beside it) | source only; its own `PROVER` measurement changes with the file |
+
+On a board: `tests/board/transcript_swap_check.py` (its text says what each step shows).
 
 **The session's end** (`endpoint-expiry.md`; checked on the STM32s and the RW612 by the regression's `endpoint-expiry`
 stage, `evidence/console/regression-14of14-20261119.txt`): both sides end it.
