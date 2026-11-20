@@ -515,7 +515,18 @@ def check_status(name, tr, st, bounds, cred_lifetime):
     return f
 
 
-def check_gateway(cur, prev, bounds, base_offset):
+def bad_line_endpoint(text, names):
+    """The endpoint a bad aegis-fleet line names ("enforcement hook failed for frdm-rw612 ..."), or None. The longest
+    name that appears as a whole word wins (stm32h573-dk-2 over stm32h573-dk)."""
+    for n in sorted(set(names), key=len, reverse=True):
+        if re.search(r"(?<![A-Za-z0-9._-])%s(?![A-Za-z0-9_-]|\.[A-Za-z0-9])" % re.escape(n), text):
+            return n
+    return None
+
+
+def check_gateway(cur, prev, bounds, base_offset, endpoints=(), absent=()):
+    """Findings for the gateway. A bad aegis-fleet line that names an endpoint is that endpoint's finding; on an
+    absent endpoint it is INFO, as its quarantine is."""
     f = []
     gw = cur["gw_now"]
     if prev and prev.get("boot_id") and cur["boot_id"] and cur["boot_id"] != prev["boot_id"]:
@@ -547,7 +558,12 @@ def check_gateway(cur, prev, bounds, base_offset):
                          % span))
     for r in cur["journal"]:
         if r["kind"] == "bad":
-            f.append(finding("FAIL", "aegis-fleet", "journal:bad:%d" % int(r["t"]), r["text"], once=True))
+            ep = bad_line_endpoint(r["text"], list(endpoints) + list(absent))
+            if ep in absent:
+                f.append(finding("INFO", ep, "journal:bad:%d" % int(r["t"]), "on an absent endpoint: " + r["text"],
+                                 once=True))
+            else:
+                f.append(finding("FAIL", ep or "aegis-fleet", "journal:bad:%d" % int(r["t"]), r["text"], once=True))
     for t, msg in cur["kernel"]:
         if KERNEL_FATAL.search(msg):
             f.append(finding("FAIL", "gateway", "kernel:%s" % t, "kernel: " + msg, always=True, once=True))
@@ -869,7 +885,7 @@ class Soak:
         cur["journal"] = [r for r in cur["journal"] if r["t"] > last_t]
         cur["last_journal_t"] = max([r["t"] for r in cur["journal"]] + [last_t])
         bounds = self.cfg["bounds"]
-        findings = check_gateway(cur, prev, bounds, self.st["base_offset"])
+        findings = check_gateway(cur, prev, bounds, self.st["base_offset"], self.cfg["endpoints"], self.cfg["absent"])
         span = cur["gw_now"] - prev["gw_now"] if prev and prev.get("gw_now") else 0
         for name in self.cfg["endpoints"]:
             findings += check_endpoint(name, self.st["eps"][name], cur, prev, bounds, self.cfg["cred_lifetime"],

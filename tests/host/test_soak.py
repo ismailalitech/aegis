@@ -221,6 +221,24 @@ class Criteria(unittest.TestCase):
         cur, prev = cur_prev(disk=["Archived and active journals take up 80.0M in the file system."])
         self.assertIn("size", keys(soak.check_gateway(cur, prev, soak.BOUNDS, 3)))
 
+    def test_bad_lines_attributed_to_their_endpoint(self):
+        eps, absent = ["stm32h573-dk-2", "frdm-rw612"], ["stm32h573-dk", "arduino-uno"]
+        lines = [
+            "1800000001 gw python3[812]: aegis-fleet: enforcement hook failed for frdm-rw612 (quarantine), rc=1:",
+            "1800000002 gw python3[812]: aegis-fleet: enforcement hook failed for stm32h573-dk (quarantine), rc=1:",
+            "1800000003 gw python3[812]: aegis-fleet: enforcement FAILED for stm32h573-dk-2: nft exited 1",
+            "1800000004 gw python3[812]: aegis-fleet: policy REFUSED arduino-uno: no route",
+            "1800000005 gw python3[812]: Traceback (most recent call last):",
+        ]
+        cur, prev = cur_prev(journal=lines)
+        fs = [f for f in soak.check_gateway(cur, prev, soak.BOUNDS, 3, eps, absent)
+              if f["key"].startswith("journal:bad")]
+        self.assertEqual([(f["item"], f["level"]) for f in fs], [
+            ("frdm-rw612", "FAIL"), ("stm32h573-dk", "INFO"), ("stm32h573-dk-2", "FAIL"), ("arduino-uno", "INFO"),
+            ("aegis-fleet", "FAIL")])
+        self.assertIsNone(soak.bad_line_endpoint("failed for frdm-rw612x", eps))
+        self.assertEqual(soak.bad_line_endpoint("failed for frdm-rw612.", eps), "frdm-rw612")
+
     def test_known_kernel_message_and_clock(self):
         cur, prev = cur_prev(kernel=["%d gw kernel: mpfs_rtc: timed out uploading time to rtc" % T0])
         fs = soak.check_gateway(cur, prev, soak.BOUNDS, 3)
