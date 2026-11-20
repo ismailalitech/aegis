@@ -773,8 +773,11 @@ class Soak:
         os.replace(tmp, self.state_path)
 
     def windows(self, t):
-        """The planned windows open at t (a regression's included)."""
-        return [w for w in self.st["planned"] if w[0] <= t <= w[1]]
+        """The planned windows open at t (a regression's included). Findings are judged when a sample sees them, up
+        to one interval after they happened, so each window lasts one interval longer than announced: an event near
+        its end is excused whatever --interval-min is."""
+        slack = self.cfg["interval_min"] * 60
+        return [w for w in self.st["planned"] if w[0] <= t <= w[1] + slack]
 
     def excused(self, f, t):
         """Whether a planned window excuses the finding f seen at t. A window announced with `plan` excuses every

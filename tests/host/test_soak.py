@@ -416,6 +416,22 @@ class Runs(unittest.TestCase):
             self.assertTrue(passed, s.st["failures"])
             self.assertIn("EXPECTED", read(d, "events.log"))
 
+    def test_planned_window_independent_of_the_interval(self):
+        # an endpoint quarantined 60 s before the window ends; at 15 min samples the next sample comes 5 min after it
+        with tempfile.TemporaryDirectory() as d:
+            faults = {"quarantine": {"zynqmp-te0808": T0 + 2 * 3600 + 540}}
+            with open(os.path.join(d, "planned.txt"), "w") as fh:
+                fh.write("%d %d zynqmp-te0808 link pulled on purpose\n" % (T0 + 2 * 3600, T0 + 2 * 3600 + 600))
+            passed, s = soak.simulate(d, hours=8, faults=faults, interval_min=15)
+            self.assertTrue(passed, s.st["failures"])
+            self.assertIn("EXPECTED zynqmp-te0808: QUARANTINED", " ".join(read(d, "events.log").split()))
+        with tempfile.TemporaryDirectory() as d:
+            s = soak.Soak(d, soak.make_cfg(hours=8, interval_min=15, regression=False), None, soak.FakeClock(T0), None)
+            s.st["planned"].append([T0, T0 + 600, "frdm-rw612", "x"])
+            F = soak.finding("FAIL", "frdm-rw612", "frdm-rw612:silent", "silent")
+            self.assertTrue(s.excused(F, T0 + 600 + 899))
+            self.assertFalse(s.excused(F, T0 + 600 + 901))
+
     def test_absent_endpoint_tolerated_only_when_listed(self):
         with tempfile.TemporaryDirectory() as d:
             clock = soak.FakeClock(T0)
