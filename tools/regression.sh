@@ -9,10 +9,11 @@
 # (EXPIRY_ENDPOINTS="name ..." to choose), starts the service again however the stage ends (failure, Ctrl-C) and
 # waits until those endpoints are ADMITTED again. About 3 minutes, during which the fleet is not re-attested.
 # --expiry-only runs that one stage and nothing else (tools/soak.py's extra expiry rounds, docs/soak-and-watchdogs.md).
+# AEGIS_SOAK=1 (tools/soak.py sets it): fleet-session and fleet-heartbeat run once more after a failure (soak_retry).
 # Writes logs/regression/<time>/, runs every stage and exits non-zero if any failed.
 # SPDX-License-Identifier: Apache-2.0
 set -u
-usage() { sed -n '2,12p' "$0" | cut -c3-; }
+usage() { sed -n '2,13p' "$0" | cut -c3-; }
 BOARD=; WITH_EXPIRY=; ONLY_EXPIRY=
 for arg in "$@"; do
     case $arg in
@@ -39,6 +40,17 @@ pass=0; fail=0
 stage() {
     name=$1; shift
     if "$@" > "$OUT/$name.log" 2>&1; then echo "PASS $name"; pass=$((pass+1)); else echo "FAIL $name (see $OUT/$name.log)"; fail=$((fail+1)); fi
+}
+# soak_retry: with AEGIS_SOAK=1 (set by tools/soak.py) a failed check runs once more after AEGIS_SOAK_RETRY_S
+# (default 20 s). At the soak's short credential lifetime (600 s) the fleet renews a session about every 5 min, and
+# fleet-session or fleet-heartbeat can read the session key while fleet.py rewrites it. Without AEGIS_SOAK=1 it runs
+# the check once, as before.
+soak_retry() {
+    "$@" && return 0
+    [ "${AEGIS_SOAK:-0}" = 1 ] || return 1
+    echo "soak_retry: failed; once more in ${AEGIS_SOAK_RETRY_S:-20} s (a session renewal may have raced the check)"
+    sleep "${AEGIS_SOAK_RETRY_S:-20}"
+    "$@"
 }
 
 # The expiry stage's SSH calls give up on a dead link instead of hanging (and the soak's regression timeout with it).
@@ -107,8 +119,8 @@ if [ -n "$BOARD" ]; then
     # (installed by tools/accel/board_sponge_test.sh)
     stage fabric-sponge-acvp   ssh -o BatchMode=yes $B 'cd /root/aegis/oqs-sponge && LD_LIBRARY_PATH=$PWD AEGIS_PQC_SPONGE=hw python3 run_acvp_commands.py commands.jsonl $PWD'
     stage fleet-once           ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 fleet.py once ../policy/fleet.json --no-credentials | grep -q "\"admitted\": true"'
-    stage fleet-session        ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 fleet.py session ../policy/fleet.json | grep -q "\"same_session\": true"'
-    stage fleet-heartbeat      ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 -c "
+    stage fleet-session        soak_retry ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 fleet.py session ../policy/fleet.json | grep -q "\"same_session\": true"'
+    stage fleet-heartbeat      soak_retry ssh -o BatchMode=yes $B 'cd /root/aegis/gateway/aegisd && python3 -c "
 import sys, json, os
 sys.path.insert(0, \"../../common\")
 import fleet

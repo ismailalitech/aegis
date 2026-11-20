@@ -532,6 +532,7 @@ class Runs(unittest.TestCase):
         out = buf.getvalue()
         self.assertIn("AEGIS_STM32_OVERRIDE=192.0.2.21:7444", out)
         self.assertIn("EXPIRY_ENDPOINTS=stm32h573-dk-2 frdm-rw612 zynqmp-te0808", out)
+        self.assertIn("AEGIS_SOAK=1", out)
         self.assertIn("gateway complete", out)
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "c.json")
@@ -624,6 +625,22 @@ class RegressionScript(unittest.TestCase):
             for c in calls:
                 for opt in ("BatchMode=yes", "ConnectTimeout=10", "ServerAliveInterval=15", "ServerAliveCountMax=3"):
                     self.assertIn(opt, c)
+
+    def test_fleet_session_retried_only_under_the_soak(self):
+        # the first fleet.py session fails (a renewal raced it); the second would pass
+        with tempfile.TemporaryDirectory() as d:
+            p, calls = run_regression(d, ["--board"], FAKE_SESSION_FAILS="1", AEGIS_SOAK="1", AEGIS_SOAK_RETRY_S="0")
+            self.assertIn("PASS fleet-session", p.stdout)
+            self.assertIn("PASS fleet-heartbeat", p.stdout)
+            self.assertEqual(sum("fleet.py session" in c for c in calls), 2)
+        with tempfile.TemporaryDirectory() as d:
+            p, calls = run_regression(d, ["--board"], FAKE_SESSION_FAILS="1", AEGIS_SOAK_RETRY_S="0")
+            self.assertIn("FAIL fleet-session", p.stdout)
+            self.assertEqual(sum("fleet.py session" in c for c in calls), 1)
+        with tempfile.TemporaryDirectory() as d:     # a real mismatch fails under the soak as well
+            p, calls = run_regression(d, ["--board"], FAKE_SESSION_FAILS="2", AEGIS_SOAK="1", AEGIS_SOAK_RETRY_S="0")
+            self.assertIn("FAIL fleet-session", p.stdout)
+            self.assertEqual(sum("fleet.py session" in c for c in calls), 2)
 
 
 class BenchWatch(unittest.TestCase):
