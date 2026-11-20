@@ -85,6 +85,13 @@ def loads(data):
     return x
 
 
+def loads_prefix(data, start=0):
+    """The one item that begins at data[start], and where it ends: (item, end). For a CBOR sequence (RFC 8742), such
+    as a file of records written one after the other. An item that the data ends in the middle of raises CBORError
+    whose text begins "truncated"."""
+    return _decode(data, start, 0)
+
+
 def _enc_head(mt, v):
     if v < 24:
         return bytes([(mt << 5) | v])
