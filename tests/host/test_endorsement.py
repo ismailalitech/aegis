@@ -616,6 +616,133 @@ class Review(Bench):
             self.assertEqual(json.load(f)["body"]["endpoint_pq_pk_sha256"], v["device_pk_sha256"])
 
 
+class Superseded(Bench):
+    """Old records: enroll-endorsed pins the record it installs in the policy entry ("endorsement_sha256"), and the
+    policy may bound a record's age ("max_endorsement_age_s")."""
+
+    def enroll(self, *records, force=False):
+        rc, out = run(fleet.main, ["enroll-endorsed", self.pol, *records] + (["--force"] if force else []))
+        with open(self.pol) as f:
+            self.policy = json.load(f)
+        return rc, out
+
+    def test_an_older_record_copied_back_is_refused_once_pinned(self):
+        old = self.endorse()
+        with open(old["record"], "rb") as f:
+            old_bytes = f.read()
+        rc, out = self.enroll(old["record"])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.ep()["endorsement_sha256"], old["record_sha256"])
+        self.assertIn("pins record %s" % old["record_sha256"], out)
+        self.assertTrue(os.path.exists(self.pol + ".bak"))
+        self.assertTrue(self.attest()["admitted"])
+        import time
+        later = time.time() + 10
+        with mock.patch.object(prov.time, "time", return_value=later):
+            new = self.endorse()                # renewed: a later record for the same device and key
+        self.assertNotEqual(new["record_sha256"], old["record_sha256"])
+        rc, out = self.enroll(new["record"])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.ep()["endorsement_sha256"], new["record_sha256"])
+        v = self.attest()
+        self.assertTrue(v["admitted"], v["reasons"])
+        self.assertEqual(v["endorsement"]["record_sha256"], new["record_sha256"])
+        # someone who can write endorsements/ but not the policy puts the old, validly signed record back
+        with open(self.record_path(), "wb") as f:
+            f.write(old_bytes)
+        v = self.attest()
+        self.assertRefused(v, "is not the one the policy pins (endorsement_sha256")
+        self.assertEqual(v.get("elapsed_s"), None)              # the endpoint was not asked
+        # the control: without the pin the old record is as good as the new one
+        del self.ep()["endorsement_sha256"]
+        self.assertTrue(self.attest()["admitted"])
+        # and enroll-endorsed does not put an older record over a newer one
+        self.ep()["endorsement_sha256"] = new["record_sha256"]
+        self.save()
+        with open(new["record"], "rb") as f, open(self.record_path(), "wb") as g:
+            g.write(f.read())
+        old_path = os.path.join(self.out, "old.json")         # the endorser wrote the new one over it
+        with open(old_path, "wb") as f:
+            f.write(old_bytes)
+        rc, out = self.enroll(old_path)
+        self.assertEqual(rc, 1, out)
+        self.assertIn("an older record does not replace a newer one", out)
+        self.assertEqual(self.ep()["endorsement_sha256"], new["record_sha256"])
+
+    def test_the_policy_is_written_last_and_put_back_on_failure(self):
+        res = self.endorse()
+        with open(self.pol, "rb") as f:
+            before = f.read()
+        real, calls = endorsement.commit, []
+
+        def third_fails(tmp, path):
+            if path.endswith(".bak"):           # the copy of the policy as it was, taken first
+                return real(tmp, path)
+            calls.append(path)
+            if len(calls) == 3:
+                raise OSError("power cut")
+            real(tmp, path)
+        with mock.patch.object(endorsement, "commit", side_effect=third_fails):
+            with self.assertRaises(OSError):
+                fleet.install_endorsement(self.policy, self.d, res["record"], policy_path=self.pol)
+        self.assertEqual(calls, [self.record_path(), self.key_path(), self.pol])
+        with open(self.pol, "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertFalse(os.path.exists(self.record_path()) or os.path.exists(self.key_path()))
+        self.assertNotIn("endorsement_sha256", self.ep())
+        self.assertEqual(tmp_files(self.d), [])
+        # an entry someone changed on disk after the policy was read: nothing is written
+        self.ep()["port"] = 1
+        with self.assertRaises(endorsement.Refused) as c:
+            fleet.install_endorsement(self.policy, self.d, res["record"], policy_path=self.pol)
+        self.assertIn("changed since it was read", str(c.exception))
+        self.assertFalse(os.path.exists(self.record_path()))
+
+    def test_max_endorsement_age(self):
+        res = self.endorse()
+        rc, out = run(fleet.main, ["enroll-endorsed", self.pol, res["record"]])
+        self.assertEqual(rc, 0, out)
+        with open(self.pol) as f:
+            self.policy = json.load(f)
+        with open(res["record"]) as f:
+            issued = json.load(f)["body"]["issued"]
+        self.policy["max_endorsement_age_s"] = 3600
+        ep = fleet.effective_entry(self.policy, self.ep())
+        trust = self.policy["endorsers"]
+        fleet.device_key(ep, self.d, trust, now=issued + 3600)
+        with self.assertRaises(endorsement.Refused) as c:
+            fleet.device_key(ep, self.d, trust, now=issued + 3601)
+        self.assertIn("older than max_endorsement_age_s 3600", str(c.exception))
+        with mock.patch.object(fleet.time, "time", return_value=issued + 3601.0):
+            v, = fleet.run_once(dict(self.policy, endpoints=[self.ep()]), self.d, VERIFY, credentials=False,
+                                enforce_hooks=False)
+        self.assertRefused(v, "older than max_endorsement_age_s")
+        # an entry's own value wins over the policy's
+        self.assertEqual(fleet.effective_entry(self.policy, dict(self.ep(), max_endorsement_age_s=9))
+                         ["max_endorsement_age_s"], 9)
+        # check warns before the record stops being accepted
+        self.policy["endpoints"] = [self.ep()]
+        self.save()
+        rc, out = run(fleet.main, ["check", self.pol, "--platform", "linux", "--state-dir", tempfile.mkdtemp()])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("pinned by endorsement_sha256", out)
+        self.assertIn("WARNING: the record reaches max_endorsement_age_s in 0.0", out)
+        self.policy["max_endorsement_age_s"] = 400 * 86400
+        self.save()
+        rc, out = run(fleet.main, ["check", self.pol, "--platform", "linux", "--state-dir", tempfile.mkdtemp()])
+        self.assertNotIn("WARNING", out)
+        # a value that is not a number of seconds refuses the entry, it does not mean "no limit"
+        for bad in (0, -1, "3600", 1.5, True, None):
+            self.policy["max_endorsement_age_s"] = bad
+            if bad is None:
+                continue
+            self.assertRefused(fleet.attest(fleet.effective_entry(self.policy, self.ep()), VERIFY, self.d, 5,
+                                            trust), "max_endorsement_age_s is not")
+        for bad in ("00", "AB" * 32, 1, "g" * 64):
+            self.assertIn("endorsement_sha256 is not", " ".join(fleet.policy_errors(dict(self.ep(),
+                                                                                          endorsement_sha256=bad))))
+
+
 class Enrolment(Bench):
     """Partial or failed enrolment leaves no trusted entry."""
 
@@ -847,18 +974,21 @@ class BoardCheck(Bench):
         return r.returncode, json.loads(r.stdout)
 
     def test_passes_on_two_enrolled_devices_and_changes_nothing(self):
-        self.enrol("dev-a")
+        pin = self.enrol("dev-a")["record_sha256"]
         self.enrol("dev-b")
         for e in self.policy["endpoints"]:
             del e["endorsement"]                    # the policy before the switch: the check asks for it itself
+        self.ep("dev-a")["endorsement_sha256"] = pin    # as enroll-endorsed leaves it
+        self.policy["max_endorsement_age_s"] = 86400
         self.save()
         before = snapshot(self.d)
         rc, res = self.check("dev-a", "dev-b")
         self.assertEqual(rc, 0, res)
         self.assertTrue(res["ok"])
         self.assertEqual(res["E1_as_enrolled"]["enrolment"], "endorsed")
+        self.assertEqual(res["E1_record_pinned"], pin)
         refused = [k for k, v in res.items() if isinstance(v, dict) and v.get("admitted") is False]
-        self.assertEqual(len(refused), 11, refused)
+        self.assertEqual(len(refused), 12, refused)
         self.assertTrue(all(res[k]["as_expected"] is True for k in refused))
         self.assertFalse(any(res[k]["endpoint_asked"] for k in refused if not k.startswith("E6")))
         control = res["E9_control_trust_on_first_use"]

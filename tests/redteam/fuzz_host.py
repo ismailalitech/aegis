@@ -16,7 +16,8 @@
   5. endorsed enrolment (policy "endorsement": "required", docs/enrolment.md): a record file that is not exactly what
      a trusted endorser signed for this device, family and key (mutated bytes, edited claims with the old signature
      or a new one by a key the policy does not list, the endorser's own signature under another label or for another
-     device, family, key or an expiry in the past, another key pinned, random JSON) never makes a key trusted:
+     device, family, key or an expiry in the past, another key pinned, the endorser's own record for this device and
+     key that is not the one the entry pins with endorsement_sha256, random JSON) never makes a key trusted:
      device_key() raises endorsement.Refused and nothing else, attest() refuses without contacting the endpoint.
 
   fuzz_host.py [iterations]     prints a JSON summary, exit 0 only if no property broke
@@ -376,6 +377,7 @@ good_body = {"v": 1, "type": "endorsement", "device": "dev", "kind": "aegis-pq",
              "endorser": "bench", "endorser_pk_sha256": endorsement.pk_sha256(e_pk), "issued": int(time.time()) - 10}
 good_rec = endorsement.sign(good_body, e_sk, pq_pk)
 good_bytes = endorsement.dumps(good_rec)
+end_ep["endorsement_sha256"] = endorsement.record_sha256(good_rec)     # as enroll-endorsed pins it
 rec_file = os.path.join(end_dir, "dev.json")
 
 
@@ -420,6 +422,9 @@ def hostile_record(kind):
     elif kind == "other-label":                  # the endorser's key, signing these bytes as something else
         sk, label = e_sk, R.choice([fleet.CRED_LABEL, fleet.PQ_LABEL, wire.LABEL_IDENTITY, wire.LABEL_QUOTE,
                                     endorsement.ENDORSER_LABEL, transcript.KEM_INIT_LABEL, b"aegis-endorsement-v2"])
+    elif kind == "superseded":                   # the trusted endorser's record for this device and key, not the pinned one
+        sk = e_sk
+        body["issued"] -= R.randrange(0, 10 ** 6)
     elif kind == "endorsed-for-something-else":  # a genuine record of the trusted endorser: not for this entry
         sk = e_sk
         which = R.randrange(5)
@@ -443,7 +448,7 @@ def hostile_record(kind):
 
 
 END_KINDS = ("bytes", "bytes", "bytes", "edited", "edited-resigned", "rogue", "other-label",
-             "endorsed-for-something-else", "another-key-pinned", "random-json")
+             "endorsed-for-something-else", "another-key-pinned", "random-json", "superseded")
 end_tried = end_trusted = end_raised = end_same = end_admitted = end_contacted = 0
 with open(rec_file, "wb") as f:
     f.write(good_bytes)

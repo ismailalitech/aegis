@@ -28,6 +28,10 @@ service may keep running: at worst one of its exchanges meets a quote of this ch
                                                                   what the endorsement is for. Otherwise reported
                                                                   as not applicable.
   E10 ENDPOINT as enrolled, once more                             admitted: nothing was changed
+  E11 ENDPOINT's entry pinning another record (endorsement_sha256)
+                                                                  refused: not the record the policy pins (what a
+                                                                  validly signed older record copied back meets),
+                                                                  endpoint not asked
 
 Exit 0 only if every line holds; the JSON printed has each verdict's reasons.
 """
@@ -71,7 +75,8 @@ def absolute(ep):
 
 
 try:
-    mine, theirs = (absolute(next(e for e in policy["endpoints"] if e["name"] == n)) for n in (a.endpoint, a.other))
+    mine, theirs = (absolute(fleet.effective_entry(policy, next(e for e in policy["endpoints"] if e["name"] == n)))
+                    for n in (a.endpoint, a.other))
 except StopIteration:
     sys.exit("%s has no entry %s or %s" % (a.policy, a.endpoint, a.other))
 trusted = [dict(e, pk_file=fleet._path(base, e["pk_file"])) for e in policy.get("endorsers", [])]
@@ -118,6 +123,7 @@ try:
         print(json.dumps(res, indent=1))
         sys.exit(2)
     res["E1_endorsement"] = v.get("endorsement")
+    res["E1_record_pinned"] = mine.get("endorsement_sha256")
     expect("E2_no_record", attest(dict(mine, endorsement_file=os.path.join(tmp, "none.json"))), False,
            "no endorsement record", asked=False)
     swapped = dict(mine, pq_pub_file=theirs["pq_pub_file"])
@@ -150,7 +156,8 @@ try:
     expect("E8_no_trusted_endorsers", attest(mine, endorsers=[]), False, "no trusted endorsers", asked=False)
 
     same_firmware = all(mine.get(k) == theirs.get(k) for k in ("kind", "profile", "allowed", "iak_pub_pem"))
-    tofu = {k: x for k, x in dict(swapped, **there).items() if k not in ("endorsement", "endorsement_file")}
+    tofu = {k: x for k, x in dict(swapped, **there).items()
+            if k not in ("endorsement", "endorsement_file", "endorsement_sha256")}
     v = attest(tofu)
     res["E9_control_trust_on_first_use"] = {
         "admitted": v["admitted"], "enrolment": v.get("enrolment"), "reasons": v["reasons"],
@@ -159,6 +166,9 @@ try:
                                                            "reference, so the swap fails on those"}
     ok = ok and (v["admitted"] or not same_firmware)
     expect("E10_as_enrolled_again", attest(mine), True, asked=True)
+    other_pin = "0" * 64 if mine.get("endorsement_sha256") != "0" * 64 else "1" * 64
+    expect("E11_another_record_pinned", attest(dict(mine, endorsement_sha256=other_pin)), False,
+           "is not the one the policy pins", asked=False)
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 res["ok"] = ok

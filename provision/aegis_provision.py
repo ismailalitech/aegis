@@ -175,7 +175,7 @@ def confirm(endorser, ep, base_dir, data, pk, timeout, ecdsa_verify):
         for name, content in files.items():
             with open(os.path.join(tmp, name), "wb") as f:
                 f.write(content)
-        entry = {k: v for k, v in ep.items() if k not in ("provision", "transcript")}
+        entry = {k: v for k, v in ep.items() if k not in ("provision", "transcript", "endorsement_sha256")}
         entry.update(endorsement="required", pq_pub_file=os.path.join(tmp, "device.pub"),
                      endorsement_file=os.path.join(tmp, "record.json"))
         trust = [{"name": endorser.name, "pk_file": os.path.join(tmp, "endorser.pub"),

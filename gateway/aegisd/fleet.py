@@ -53,9 +53,10 @@ Endorsed enrolment (common/endorsement.py, docs/enrolment.md): an entry with "en
 only if a record signed by one of the policy's trusted endorsers ("endorsers": [{"name", "pk_file", "pk_sha256"}])
 names this entry's device, family and exactly the pinned key, and the quote's components are the endorsed ones.
 Without such a record, with a record for another key (a substituted key file), from an endorser the policy does not
-list, altered, or expired, the endpoint is refused without being contacted. `fleet.py enroll-endorsed POLICY RECORD...`
-puts a record and its key into the policy's directory, checked first and in an order that leaves nothing trusted if
-it stops half way. Without the key in the entry the pinned key is whatever was first put there (`enroll-pq`, trust on
+list, altered, or expired, other than the one the entry pins ("endorsement_sha256") or older than the policy's
+"max_endorsement_age_s", the endpoint is refused without being contacted. `fleet.py enroll-endorsed POLICY RECORD...`
+puts a record and its key into the policy's directory and pins the record in the entry, checked first and in an order
+that leaves nothing trusted if it stops half way. Without the key in the entry the pinned key is whatever was first put there (`enroll-pq`, trust on
 first use); every such endpoint is marked "trust-on-first-use" in its verdict and its journal line, with a line at
 warning priority when the loop starts.
 """
@@ -104,6 +105,7 @@ ENDORSED, TOFU, NOT_ENDORSED = "endorsed", "trust-on-first-use", "refused"     #
 # an entry's name becomes part of file names (keys, endorsements/<name>.json, credentials/<name>.json): the same rule as
 # common/endorsement.py is_name()
 ENTRY_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}\Z")
+RENEW_WARNING_S = 30 * 86400        # `check` warns when an endorsement stops being accepted sooner than this
 TOFU_NOTE = ('trust on first use: nothing shows that the pinned key belongs to a genuine device (no "endorsement": '
              '"required" in the policy entry); weaker')
 
@@ -448,34 +450,78 @@ def device_key(ep, base_dir, endorsers=None, now=None):
         raise endorsement.Refused('the policy lists no trusted endorsers ("endorsers")')
     rec = endorsement.load(endorsement_file(ep, base_dir))
     kind, profile = _endorsed_family(ep)
-    body = endorsement.check(rec, trust, ep["name"], kind, profile, pk, time.time() if now is None else now)
-    return pk, dict(body, record_sha256=endorsement.record_sha256(rec))
+    now = time.time() if now is None else now
+    body = endorsement.check(rec, trust, ep["name"], kind, profile, pk, now)
+    return pk, dict(body, record_sha256=_current_record(ep, rec, body, now))
+
+
+def _current_record(ep, rec, body, now):
+    """The record's name (record_sha256) if it is the one the entry pins and young enough; Refused otherwise.
+
+    "endorsement_sha256" in an entry names the one record the verifier accepts for it (enroll-endorsed writes it): an
+    older record of the same endorser for the same device and key, copied back with its key, is then refused.
+    "max_endorsement_age_s" (in the entry, or at the top of the policy: effective_entry()) refuses a record issued
+    longer ago than that on this verifier's clock."""
+    import endorsement
+    name = endorsement.record_sha256(rec)
+    pin = ep.get("endorsement_sha256")
+    if pin is not None and pin != name:
+        raise endorsement.Refused("the record (%s...) is not the one the policy pins (endorsement_sha256 %s...): an "
+                                  "older or another record" % (name[:16], str(pin)[:16]))
+    max_age = ep.get("max_endorsement_age_s")
+    if max_age is not None and now - body["issued"] > max_age:
+        raise endorsement.Refused("the endorsement is older than max_endorsement_age_s %d (issued %d, now %d)"
+                                  % (max_age, body["issued"], int(now)))
+    return name
+
+
+def effective_entry(policy, ep):
+    """The entry as the verifier applies it: policy-wide settings that the entry does not set itself, merged in."""
+    if isinstance(ep, dict) and "max_endorsement_age_s" in policy and "max_endorsement_age_s" not in ep:
+        return dict(ep, max_endorsement_age_s=policy["max_endorsement_age_s"])
+    return ep
 
 
 def enrolment_note(ep, base_dir, endorsers=None):
     """For `check` and the start of `watch`: (how an entry's key is trusted, whether that is a refusal)."""
     if ep.get("endorsement") is None:
         return "enrolment: %s" % TOFU_NOTE, False
+    now = time.time()
     try:
-        _, e = device_key(ep, base_dir, endorsers)
+        _, e = device_key(ep, base_dir, endorsers, now)
     except (OSError, ValueError) as err:
         return "enrolment: endorsement REFUSED: %s" % err, True
-    return "enrolment: endorsed by %s (record %s..., device key %s..., device state %s%s)" % (
-        e["endorser_name"], e["record_sha256"][:12], e["device_pk_sha256"][:16], e["device_state"],
-        ", expires %s" % time.strftime("%Y-%m-%d", time.gmtime(e["expires"])) if "expires" in e else ""), False
+    ends = []
+    if "expires" in e:
+        ends.append((e["expires"], "the record expires"))
+    if ep.get("max_endorsement_age_s") is not None:
+        ends.append((e["issued"] + ep["max_endorsement_age_s"], "the record reaches max_endorsement_age_s"))
+    note = "enrolment: endorsed by %s (record %s..., %s, device key %s..., device state %s, issued %s%s)" % (
+        e["endorser_name"], e["record_sha256"][:12],
+        "pinned by endorsement_sha256" if ep.get("endorsement_sha256") else
+        "NOT pinned: no endorsement_sha256, an older record of this endorser for this key would be accepted",
+        e["device_pk_sha256"][:16], e["device_state"], time.strftime("%Y-%m-%d", time.gmtime(e["issued"])),
+        "".join(", %s on %s" % (what, time.strftime("%Y-%m-%d", time.gmtime(t))) for t, what in sorted(ends)))
+    if ends:
+        t, what = min(ends)
+        if t - now < RENEW_WARNING_S:
+            note += "; WARNING: %s in %.1f days: endorse the device again" % (what, (t - now) / 86400)
+    return note, False
 
 
-def install_endorsement(policy, base_dir, record_path, force=False):
+def install_endorsement(policy, base_dir, record_path, force=False, policy_path=None):
     """Enrol one device from its endorsement record (the file provision/aegis_provision.py wrote): put the record and
-    the device key it carries where the policy's entry for that device looks for them. Returns (name, body).
+    the device key it carries where the policy's entry for that device looks for them and, with policy_path (the file
+    policy was read from), pin that record in the entry ("endorsement_sha256"). Returns (name, body).
 
     Checked before anything is written: the record is signed by a trusted endorser of this policy and names an entry
-    of it, that entry's family, and the key it carries. A different key already pinned for the entry is kept unless
-    force (as enroll-pq does). Then both files are written under temporary names, read back and checked once more as
-    the loop will check them, and renamed into place: the record first, the key last. If anything fails, what was
-    there before is put back; if the process dies between the two renames, the entry has a record without its key
-    (or with the old key, which the record does not name), and nothing is trusted that was not before. Raises
-    endorsement.Refused or OSError; nothing is trusted then."""
+    of it, that entry's family, and the key it carries; it is not older than max_endorsement_age_s. A different key
+    already pinned for the entry, or a record issued before the one installed now, is kept unless force (as enroll-pq
+    does). Then every file is written under a temporary name and renamed into place: the record first, the key next,
+    the policy last (its previous content kept as POLICY.bak). If anything fails, what was there before is put back;
+    if the process dies between the renames, the entry has a record without its key (or with the old key, which the
+    record does not name), or a record and key that the old pin does not name, and nothing is trusted that was not
+    before. Raises endorsement.Refused or OSError; nothing is trusted then."""
     import endorsement
     rec = endorsement.load(record_path)
     if "device_pk" not in rec:
@@ -486,7 +532,8 @@ def install_endorsement(policy, base_dir, record_path, force=False):
     if len(eps) != 1:
         raise endorsement.Refused("the policy has %s entry named %r" % ("no" if not eps else "more than one", name[:40]))
     ep = eps[0]
-    errors = policy_errors(ep)
+    applied = effective_entry(policy, ep)
+    errors = policy_errors(applied)
     if errors:
         raise endorsement.Refused("; ".join(errors))
     if ep.get("kind") not in PQ_KINDS:
@@ -495,7 +542,9 @@ def install_endorsement(policy, base_dir, record_path, force=False):
     if not trust:
         raise endorsement.Refused('the policy lists no trusted endorsers ("endorsers")')
     kind, profile = _endorsed_family(ep)
-    body = endorsement.check(rec, trust, name, kind, profile, pk, time.time())
+    now = time.time()
+    body = endorsement.check(rec, trust, name, kind, profile, pk, now)
+    record_name = _current_record({k: v for k, v in applied.items() if k != "endorsement_sha256"}, rec, body, now)
     key_path, rec_path = _path(base_dir, ep["pq_pub_file"]), endorsement_file(ep, base_dir)
 
     def previous(path):
@@ -507,30 +556,55 @@ def install_endorsement(policy, base_dir, record_path, force=False):
     old_key, old_rec = previous(key_path), previous(rec_path)
     if old_key is not None and old_key.strip().lower() != rec["device_pk"].encode() and not force:
         raise endorsement.Refused("another key is already pinned for %s in %s (--force replaces it)" % (name, key_path))
-    tmp_rec = tmp_key = None
-    done = []
     try:
-        tmp_rec = endorsement.stage(rec_path, endorsement.dumps(rec))
-        tmp_key = endorsement.stage(key_path, rec["device_pk"].encode() + b"\n")
-        endorsement.commit(tmp_rec, rec_path)
-        done.append((rec_path, old_rec))
-        endorsement.commit(tmp_key, key_path)
-        done.append((key_path, old_key))
+        old_issued = endorsement.loads(old_rec)["body"]["issued"] if old_rec is not None else None
+    except endorsement.Refused:
+        old_issued = None
+    if old_issued is not None and old_issued > body["issued"] and not force:
+        raise endorsement.Refused("the record installed for %s was issued later (%d) than this one (%d): an older "
+                                  "record does not replace a newer one (--force does)" % (name, old_issued, body["issued"]))
+    new_policy = old_policy = None
+    if policy_path is not None:
+        # the file as it is now, so that nothing someone changed since it was read is lost; the entry itself must be
+        # the one that was checked
+        old_policy = previous(policy_path)
+        try:
+            on_disk = json.loads(old_policy.decode()) if old_policy is not None else None
+        except ValueError:
+            on_disk = None
+        mine = [e for e in (on_disk or {}).get("endpoints", []) if isinstance(e, dict) and e.get("name") == name]
+        if len(mine) != 1 or mine[0] != ep:
+            raise endorsement.Refused("the entry for %s in %s changed since it was read: run the command again"
+                                      % (name, policy_path))
+        mine[0]["endorsement_sha256"] = record_name
+        new_policy = (json.dumps(on_disk, indent=1) + "\n").encode()
+    staged, done = [], []
+    try:
+        steps = [(rec_path, endorsement.dumps(rec), old_rec, 0o644),
+                 (key_path, rec["device_pk"].encode() + b"\n", old_key, 0o644)]
+        if new_policy is not None:
+            endorsement.write_atomic(policy_path + ".bak", old_policy, os.stat(policy_path).st_mode & 0o777)
+            steps.append((policy_path, new_policy, old_policy, os.stat(policy_path).st_mode & 0o777))
+        for path, data, old, mode in steps:
+            staged.append((endorsement.stage(path, data, mode), path, old, mode))
+        for tmp, path, old, mode in staged:
+            endorsement.commit(tmp, path)
+            done.append((path, old, mode))
     except BaseException:
-        for tmp in (tmp_rec, tmp_key):
-            if tmp:
-                endorsement.discard(tmp)
-        if len(done) == 1:          # the record went in and the key did not: put back what was there
-            path, old = done[0]
+        for tmp, *_ in staged:
+            endorsement.discard(tmp)
+        for path, old, mode in reversed(done):      # put back what was there, the last one first
             try:
                 if old is None:
                     os.unlink(path)
                 else:
-                    endorsement.write_atomic(path, old)
+                    endorsement.write_atomic(path, old, mode)
             except OSError:
-                pass                # the record stays without its key: still nothing trusted
+                pass                # the record stays without its key, or unpinned: still nothing new trusted
         raise
-    return name, body
+    if new_policy is not None:
+        ep["endorsement_sha256"] = record_name
+    return name, dict(body, record_sha256=record_name)
 
 
 def policy_errors(ep):
@@ -578,6 +652,12 @@ def policy_errors(ep):
     elif en is not None and ep.get("profile") in DEV_PROFILES:
         errors.append("policy: profile %s has one key for every chip, so no endorsement can tie it to one device"
                       % ep["profile"])
+    pin = ep.get("endorsement_sha256")
+    if pin is not None and not (isinstance(pin, str) and len(pin) == 64 and all(c in "0123456789abcdef" for c in pin)):
+        errors.append("policy: endorsement_sha256 is not 64 lower-case hex digits")
+    age = ep.get("max_endorsement_age_s")
+    if age is not None and not (isinstance(age, int) and not isinstance(age, bool) and age > 0):
+        errors.append("policy: max_endorsement_age_s is not a positive whole number of seconds")
     return errors
 
 
@@ -1004,6 +1084,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
     out = []
     ttl = admit_ttl(policy, interval)
     for ep in policy["endpoints"]:
+        ep = effective_entry(policy, ep)
         try:
             v = attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)), policy.get("endorsers"))
         except Exception as e:  # noqa: BLE001 - one endpoint must never stop the loop for the others
@@ -1087,15 +1168,15 @@ def main(argv=None):
         bad = 0
         for path in a.records:
             try:
-                name, body = install_endorsement(policy, base, path, a.force)
+                name, body = install_endorsement(policy, base, path, a.force, a.policy)
             except (OSError, ValueError) as e:
                 bad += 1
                 print("REFUSED %s: %s (nothing was enrolled from it)" % (path, e))
                 continue
             ep = next(e for e in policy["endpoints"] if e.get("name") == name)
-            print("enrolled %s: ML-DSA-65 key sha256 %s, endorsed by %s -> %s, %s%s" % (
+            print("enrolled %s: ML-DSA-65 key sha256 %s, endorsed by %s -> %s, %s; %s pins record %s%s" % (
                 name, body["device_pk_sha256"], body["endorser_name"], _path(base, ep["pq_pub_file"]),
-                endorsement_file(ep, base),
+                endorsement_file(ep, base), a.policy, body["record_sha256"],
                 "" if ep.get("endorsement") in ENDORSEMENTS else
                 ' (the entry does not say "endorsement": "required" yet: the record is not checked by the loop)'))
         return 1 if bad else 0
@@ -1138,6 +1219,7 @@ def main(argv=None):
         # what the strict profile rules refuse in this policy, without contacting any endpoint
         bad = 0
         for ep in policy["endpoints"]:
+            ep = effective_entry(policy, ep)
             errs, warns = policy_errors(ep), policy_warnings(ep)
             bad += bool(errs)
             print("%s %s%s" % (ep.get("name"), "REFUSED: " + "; ".join(errs) if errs else "ok",
