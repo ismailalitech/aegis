@@ -69,14 +69,15 @@ real TPM (2), which the container does not have. Everything else runs.
 | | How | Where |
 |---|---|---|
 | Base image | `ubuntu:24.04` by digest | `ARG BASE_IMAGE` in the Dockerfile |
-| Ubuntu packages (gcc, make, cmake, Python 3.12, OpenSSL) | the Ubuntu archive as it was at one moment, `APT::Snapshot` (snapshot.ubuntu.com) | `ARG UBUNTU_SNAPSHOT=20261115T000000Z`; `--build-arg UBUNTU_SNAPSHOT=` uses the current archive instead |
+| Ubuntu packages (gcc, make, cmake, Python 3.12, OpenSSL) | the Ubuntu archive as it was at one moment, `APT::Snapshot` (snapshot.ubuntu.com) | `ARG UBUNTU_SNAPSHOT=20261115T000000Z`; `--build-arg UBUNTU_SNAPSHOT=` uses the current archive instead. The snapshot is HTTPS only, so `ca-certificates` alone comes from the current archive first; a snapshot index that fails to download fails the build |
 | Python packages | every package, transitive ones too, by version and by the SHA-256 of its wheel (x86_64 and aarch64), `pip install --require-hashes` | `requirements.txt`, made from `requirements.in` |
 | mldsa-native, mlkem-native v2.0.0, liboqs 0.16.0 | tag and commit; the build stops if the tag is not that commit | `ARG MLDSA_NATIVE_COMMIT`, `MLKEM_NATIVE_COMMIT`, `LIBOQS_COMMIT` |
 
 The image runs as user `aegis` (uid 10001), with no network at run time (`--network none`; the verifier, the device
 and the gateway service talk over 127.0.0.1 inside the container). It holds no keys: every key is made during the run,
-in a temporary directory, and is gone with the container. `/etc/machine-id` is made at build time because the
-Linux-host identity of `aegisd.py` is bound to one; two containers from the same image share it.
+in a temporary directory, and is gone with the container. Nor does it hold a machine id: the Linux-host identity of
+`aegisd.py` is bound to one, so `/etc/machine-id` links to `/tmp/machine-id`, which `evaluate.sh` fills with a new
+random id when each container starts; no two containers share one.
 
 ## Without Docker
 
