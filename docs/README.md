@@ -46,6 +46,7 @@ claimed. Every document below is in this directory unless a path says otherwise.
 | [`rw612-security-review.md`](rw612-security-review.md) | a security review of the RW612 TrustZone prover |
 | [`../endpoints/zynqmp/README.md`](../endpoints/zynqmp/README.md) | the Zynq UltraScale+ endpoint with OP-TEE |
 | [`zynqmp-key-design.md`](zynqmp-key-design.md) | the ZynqMP endpoint's key design |
+| [`zynqmp-sdk-port.md`](zynqmp-sdk-port.md) | the ZynqMP trusted application on the Prover SDK: build, boot image request, card swap, endorsement |
 | [`second-board.md`](second-board.md) | two chips, two keys: the key is bound to the chip |
 | [`board-changes.md`](board-changes.md) | what Aegis changes on each board, and how to undo it |
 
