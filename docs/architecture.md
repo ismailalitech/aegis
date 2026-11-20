@@ -152,7 +152,8 @@ SPE b876213a, and RW612 0.3.1, SPE b48d2ecf):
 | Measurements | STM32: TF-M BL2 (MCUboot). RW612: the secure partition hashes both flash partitions whole before non-secure code runs | STM32 images verified with TF-M development keys; RW612 secure image not verified at boot |
 | Gateway identity key | `/var/lib/aegis/identity.sk` (0600) | software key: the MPFS095T (non-S) has no key-holding data-security services |
 | Gateway key at the endpoint | pinned in each endpoint's secure image at build time | as strong as the secure image |
-| Policy | gateway file system | edited by the operator; `enroll-pq` keeps existing pins. Whoever can write it decides which endorsers are trusted and which entries must be endorsed |
+| Policy | gateway file system | edited by the operator; `enroll-pq` keeps existing pins. Whoever can write it decides which endorsers are trusted and which entries must be endorsed, unless the verifier was given policy-signing keys (below) |
+| Policy-signing key (ML-DSA-65), optional | the operator's machine, `~/.local/state/aegis-policy-signer`; the verifier has the public key in `policy-signers.json` | off by default. With it the verifier runs only from a policy signed by that key (COSE_Sign1), of a version not lower than the last it accepted ([audit-and-policy.md](audit-and-policy.md)) |
 | Endorser key (ML-DSA-65) | the bench PC, `~/.local/state/aegis-endorser`: sealed to its TPM, else a 0600 file | signs endorsement records ([enrolment.md](enrolment.md)); whoever can use it can make any key a trusted device key at each verifier that lists it |
 | Endorsement record per device | `endorsements/<name>.json` beside the policy | for an entry with `"endorsement": "required"`, the only way a device key is trusted: signed by a listed endorser, naming the device, its family, the key and the components appraised at the bench. As good as the cable the device was on when it was endorsed; the devices are in their development state |
 
@@ -316,6 +317,11 @@ flowchart TD
   OK --> E["enforce hook: add to @admitted"]
   OK2 --> E
 ```
+
+With `"audit_log": true` in the policy (off by default) the loop also keeps a signed, hash-chained log of what it
+decided under `STATE_DIR/audit/`: an entry when a decision, a session or the policy changes, one ML-DSA-65 signature
+per batch by the gateway's identity key, nothing in a cycle where nothing changed
+([audit-and-policy.md](audit-and-policy.md); `fleet.py audit`, `tools/verify_audit.py`). It has not run on the gateway.
 
 The verdict names the trust behind it:
 - `trustzone` for the RW612's TF-M partition;

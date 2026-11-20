@@ -68,6 +68,20 @@ attestation result (an EAR in a COSE_Sign1, by this verifier's identity key) and
 evidence it appraised, under STATE_DIR/attestation/<name>/; `fleet.py export-evidence POLICY NAME` copies them, the
 endorsement record and the public keys into one directory that tools/verify_evidence.py checks with third-party
 libraries only.
+
+Signed policy (docs/audit-and-policy.md, common/signed_policy.py): a verifier that was given policy-signing keys
+(STATE_DIR/policy-signers.json, or --policy-signers FILE) runs only from a policy file that is a COSE_Sign1 signed by
+one of them (provision/aegis_provision.py policy-sign), for its fleet, with a version not lower than the last one it
+accepted; anything else is refused, at the start and at every reload. Without such keys, which is the default, the
+policy is the plain JSON file and nothing here changes. An entry may pin its key file with "pq_pub_sha256", so that a
+signed policy also says which device key it means.
+
+Audit log (common/audit.py): a policy with "audit_log": true makes the loop keep a signed, hash-chained log of what it
+decided under STATE_DIR/audit/: an entry when an endpoint's decision changes (admit, refuse), when a session is
+issued, revoked or reaches its end, when the policy changes or is refused, and when a key is enrolled; one ML-DSA-65
+signature per batch, by this verifier's identity key. A cycle in which nothing changed writes nothing. Off by default.
+`fleet.py audit POLICY` checks the log and prints where it stands; tools/verify_audit.py checks a copy with
+third-party libraries only.
 """
 import argparse
 import hashlib
@@ -467,6 +481,13 @@ def device_key(ep, base_dir, endorsers=None, now=None):
         import endorsement
         raise endorsement.Refused("no key is pinned for %s (%s): enrol the device with `fleet.py enroll-endorsed`"
                                   % (ep["name"], _path(base_dir, ep["pq_pub_file"]))) from None
+    pin = ep.get("pq_pub_sha256")
+    if pin is not None and hashlib.sha256(pk).hexdigest() != pin:
+        # the policy itself says which key it means (a signed policy then covers the key file too)
+        import endorsement
+        raise endorsement.Refused("the key in %s (sha256 %s...) is not the key the policy pins (pq_pub_sha256 %s...)"
+                                  % (_path(base_dir, ep["pq_pub_file"]), hashlib.sha256(pk).hexdigest()[:16],
+                                     str(pin)[:16]))
     if mode is None:
         return pk, None
     import endorsement
@@ -682,6 +703,11 @@ def policy_errors(ep):
     pin = ep.get("endorsement_sha256")
     if pin is not None and not (isinstance(pin, str) and len(pin) == 64 and all(c in "0123456789abcdef" for c in pin)):
         errors.append("policy: endorsement_sha256 is not 64 lower-case hex digits")
+    pin = ep.get("pq_pub_sha256")
+    if pin is not None and not (isinstance(pin, str) and len(pin) == 64 and all(c in "0123456789abcdef" for c in pin)):
+        errors.append("policy: pq_pub_sha256 is not 64 lower-case hex digits")
+    elif pin is not None and kind not in PQ_KINDS:
+        errors.append("policy: pq_pub_sha256 needs a post-quantum kind (%s)" % ", ".join(PQ_KINDS))
     age = ep.get("max_endorsement_age_s")
     if age is not None and not (isinstance(age, int) and not isinstance(age, bool) and age > 0):
         errors.append("policy: max_endorsement_age_s is not a positive whole number of seconds")
@@ -1309,7 +1335,13 @@ def export_evidence(policy, policy_bytes, base_dir, state, name, out, with_polic
     kind = ep.get("kind", "psa")
     if kind in PQ_KINDS and ep.get("pq_pub_file"):
         with open(_path(base_dir, ep["pq_pub_file"])) as f:
-            files["keys/device.cosekey"] = cbor_key(bytes.fromhex(f.read().strip()))
+            device_pk = bytes.fromhex(f.read().strip())
+        pin = ep.get("pq_pub_sha256")
+        if pin is not None and hashlib.sha256(device_pk).hexdigest() != pin:
+            raise ValueError("the key in %s (sha256 %s...) is not the key the policy pins (pq_pub_sha256 %s...): "
+                             "it is not put into a pack" % (_path(base_dir, ep["pq_pub_file"]),
+                                                            hashlib.sha256(device_pk).hexdigest()[:16], str(pin)[:16]))
+        files["keys/device.cosekey"] = cbor_key(device_pk)
     if ep.get("iak_pub_pem"):
         with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
             files["keys/device-iak.pem"] = f.read()
@@ -1366,12 +1398,410 @@ def wants_results(policy, ep):
     return policy.get("attestation_results") is True or (isinstance(ep, dict) and ep.get("evidence_format") == EAT_COSE)
 
 
+# ---- the signed policy (docs/audit-and-policy.md, common/signed_policy.py) --------------------------------------------
+
+class PolicyRefused(ValueError):
+    """The policy file is not one this verifier may run from: not signed where a signature is required, signed by
+    another key, for another fleet, older than the last one accepted."""
+
+
+def policy_signers(state, path=None):
+    """The keys this verifier checks a policy's signature with (signed_policy.load_signers), or None if it was given
+    none: a policy is then the plain JSON file. path: --policy-signers, a file that must be there; without it
+    STATE/policy-signers.json, if it is there. PolicyRefused if the file cannot be used: a verifier that was told to
+    check signatures does not go on without checking."""
+    explicit = path is not None
+    path = path or os.path.join(state, "policy-signers.json")      # signed_policy.SIGNERS_FILE
+    if not explicit and not os.path.exists(path):
+        return None             # the default: nothing of the signed policy is loaded
+    import signed_policy
+    try:
+        with open(os.path.join(state, "identity.json")) as f:
+            own = bytes.fromhex(json.load(f)["body"]["pk"])
+    except (OSError, ValueError, KeyError, TypeError):
+        own = None
+    try:
+        return dict(signed_policy.load_signers(path, own), path=path)
+    except (OSError, ValueError) as e:
+        raise PolicyRefused("the policy signers in %s cannot be used: %s" % (path, e)) from None
+
+
+def load_policy(path, state, signers_path=None, remember=False, known=None):
+    """The policy a verifier runs from: (policy, policy_bytes, info).
+
+    Without policy signers (policy_signers(): the default) the file is JSON, read as it always was; info is
+    {"signed": False, "sha256"}, with "warning" if this verifier accepted signed policies before. A file that is a
+    signed policy is then refused, not read unchecked.
+
+    With signers the file must be a signed policy (provision/aegis_provision.py policy-sign) by one of them, for this
+    verifier's audience if the signers file names one, and of a version this verifier has not gone past
+    (STATE/policy-version.json; remember=True records a higher version as accepted: the loop and `once` do, `check`
+    does not). policy_bytes is the JSON inside, so an attestation result names the same policy either way. info:
+    {"signed": True, "sha256", "version", "signer", "signer_key_sha256", "audience", "issued", "file_sha256"}.
+    known: what this function returned last time; the same file under the same signers is not verified again. If it
+    was a signed policy, policy-version.json is there and the signers file is gone now, the file is refused rather
+    than read unchecked (the loop keeps the last verified policy).
+
+    PolicyRefused for a policy that may not be used; OSError and ValueError as before for a file that cannot be
+    read or is not JSON."""
+    with open(path, "rb") as f:
+        data = f.read()
+    signers = policy_signers(state, signers_path)
+    if signers is None:
+        if data[:1] == b"\xd2":     # signed_policy.is_signed
+            raise PolicyRefused("%s is a signed policy, and this verifier has no policy-signing key to check it with "
+                                "(%s, or --policy-signers): it is not read unchecked" % (
+                                    path, os.path.join(state, "policy-signers.json")))
+        if known is not None and known[2].get("signed") and os.path.exists(os.path.join(state, "policy-version.json")):
+            # the signers file went away while the loop ran from a signed policy: not a reason to run unchecked. The
+            # last verified policy stays in use; a restart (said at warning priority) is what runs unsigned again
+            raise PolicyRefused("the policy signers file (%s) is gone while this verifier runs from a signed policy: "
+                                "%s is not read unchecked; put the file back, or restart the verifier to run unsigned"
+                                % (os.path.join(state, "policy-signers.json"), path))
+        info = {"signed": False, "sha256": hashlib.sha256(data).hexdigest()}
+        if os.path.exists(os.path.join(state, "policy-version.json")):
+            info["warning"] = ("this verifier accepted signed policies before (%s) and has no policy-signing key now: "
+                               "the policy is not checked" % os.path.join(state, "policy-version.json"))
+        return json.loads(data.decode()), data, info
+    import signed_policy
+    digest = hashlib.sha256(data).hexdigest()
+    if known is not None and known[2].get("file_sha256") == digest and known[2].get("signers_sha256") == signers["sha256"]:
+        return json.loads(known[1].decode()), known[1], known[2]
+    if not signed_policy.is_signed(data):
+        raise PolicyRefused("%s is not signed, and this verifier runs only from a signed policy (policy signers in %s)"
+                            % (path, signers["path"]))
+    try:
+        o = signed_policy.open_signed(data, signers["keys"], signers["audience"])
+        signed_policy.check_version(o, signed_policy.last_version(state))
+        if remember:
+            signed_policy.remember_version(state, o)
+    except ValueError as e:         # signed_policy.Refused, cose.Refused
+        raise PolicyRefused("%s refused: %s" % (path, e)) from None
+    info = {"signed": True, "sha256": o["policy_sha256"], "file_sha256": digest, "signers_sha256": signers["sha256"],
+            "version": o["version"], "signer": o["signer_name"], "signer_key_sha256": o["signer_key_sha256"],
+            "audience": o["audience"], "issued": o["issued"]}
+    return o["policy"], o["policy_bytes"], info
+
+
+def policy_signers_configured(state, path=None):
+    """Whether this verifier was given policy-signing keys (so that only a signed policy will do), usable or not."""
+    return path is not None or os.path.exists(os.path.join(state, "policy-signers.json"))
+
+
+def policy_line(info):
+    """One line for `check` and the journal: how the policy in use is trusted."""
+    if not info.get("signed"):
+        return "policy sha256 %s, not signed (no policy-signing key is configured)%s" % (
+            info["sha256"], "; WARNING: " + info["warning"] if info.get("warning") else "")
+    return "policy sha256 %s, signed by %s (key sha256 %s...), version %d%s" % (
+        info["sha256"], info["signer"], info["signer_key_sha256"][:16], info["version"],
+        ", for %s" % info["audience"] if info.get("audience") else "")
+
+
+# ---- the audit log (docs/audit-and-policy.md, common/audit.py) --------------------------------------------------------
+
+# min_interval_s: a flapping endpoint makes at most one batch (about 3.5 kB, most of it the signature) per 300 s, about
+# 1 MB a day, not one per cycle (about 10 MB a day at 30 s). max_segments 0: every segment is kept (docs/audit-and-policy.md)
+AUDIT_SETTINGS = {"checkpoint_s": 3600, "min_interval_s": 300, "segment_bytes": 1 << 20, "max_segments": 0}
+RENEWAL_WINDOW_S = 300      # credential_step issues a new session when the stored one has less than this left
+
+
+def audit_settings(policy):
+    """None: no audit log, the default; a policy without the key runs as before (no key opened, nothing written).
+    The policy asks with "audit_log": true at its top level, or with {"checkpoint_s", "min_interval_s",
+    "segment_bytes", "max_segments"} to set what true leaves at AUDIT_SETTINGS. ValueError for any other value: someone meant to
+    have a log, and must not find later that none was kept."""
+    v = policy.get("audit_log")
+    if v is None or v is False:
+        return None
+    if v is True:
+        return dict(AUDIT_SETTINGS)
+    if (isinstance(v, dict) and not set(v) - set(AUDIT_SETTINGS)
+            and all(type(x) is int and 0 <= x < 1 << 31 for x in v.values())
+            and v.get("segment_bytes", 1 << 20) >= 1 << 16 and v.get("max_segments", 0) != 1):
+        return dict(AUDIT_SETTINGS, **v)
+    raise ValueError('"audit_log" is neither true nor {checkpoint_s, min_interval_s, segment_bytes (65536 or more), '
+                     "max_segments (0: keep all, or 2 or more)} in whole seconds, bytes and files")
+
+
+def _digest(v, n=32):
+    """A hash given in hex as the bytes the log carries, or None if it is not one."""
+    try:
+        b = bytes.fromhex(v)
+    except (TypeError, ValueError):
+        return None
+    return b if len(b) == n else None
+
+
+class AuditTrail:
+    """What the fleet verifier puts into its audit log (common/audit.py), and when.
+
+    An entry is made when something changes, not every cycle: a verifier that re-admits the same fleet for a day
+    writes the empty batches of "checkpoint_s" and nothing else.
+      start     the loop or a `once` run began; every endpoint's decision is then logged once
+      policy    the policy in use changed (its hash; for a signed one its version and signer)
+      policy-refused   a policy file was refused (the previous one stays in use)
+      admit, refuse    an endpoint's decision, when it is the first since start or differs from the last one in:
+                admitted or not, how far the appraisal got, the device key, the measurements, how the key is trusted
+                (enrolment, trust, the endorsement record), the evidence format, whether enforcement worked
+      issue, revoke, expiry    a session credential was issued; deleted or replaced before its time; replaced because
+                it reached the end of its life
+      remove    an endpoint is no longer in the policy
+      enrol     a key was pinned by `enroll-pq` or `enroll-endorsed`
+      stop      the policy no longer asks for a log
+    No method raises: the verdict and its enforcement never depend on the log."""
+
+    def __init__(self, state, settings, grace_s=120, promise=True, start=None):
+        import audit
+        with open(os.path.join(state, "identity.json")) as f:
+            pk = bytes.fromhex(json.load(f)["body"]["pk"])
+        self.state, self.settings, self.promise = state, dict(settings), promise
+        self.log = audit.Log(os.path.join(state, "audit"), pk, lambda: load_gateway_identity(state)[0],
+                             grace_s=grace_s, **settings)
+        self.decisions, self.policy_seen, self.refusal_seen, self.error, self.failed = {}, None, None, None, {}
+        if start is not None:
+            self.log.add("start", None, dict(start, verifier_key_sha256=hashlib.sha256(pk).digest()))
+
+    def _guard(self, what, fn, *args):
+        try:
+            return fn(*args)
+        except Exception as e:  # noqa: BLE001 - whatever a verdict holds, the loop goes on and the log says so
+            why = "%s: %s" % (type(e).__name__, e)
+            if self.failed.get(what) != why:        # once per reason, not once per cycle
+                self.failed[what] = why
+                self.log.add("audit-error", None, {"what": what, "error": why})
+            return None
+
+    # -- the policy --
+
+    def policy(self, info, policy=None):
+        """The policy in use, once per change; with policy, also which of the endpoints logged so far have left it."""
+        def note():
+            if info["sha256"] != self.policy_seen:
+                d = {"sha256": _digest(info["sha256"]), "signed": bool(info.get("signed"))}
+                if self.policy_seen is not None:
+                    d["previous_sha256"] = _digest(self.policy_seen)
+                if info.get("signed"):
+                    d.update(version=info["version"], signer=info["signer"],
+                             signer_key_sha256=_digest(info["signer_key_sha256"]),
+                             file_sha256=_digest(info["file_sha256"]))
+                if info.get("warning"):
+                    d["warning"] = info["warning"]
+                self.log.add("policy", None, d)
+                self.policy_seen, self.refusal_seen = info["sha256"], None
+            if policy is not None:
+                there = {self._slot(ep.get("name"), ep) for ep in policy.get("endpoints", []) if isinstance(ep, dict)}
+                for slot in [s for s in self.decisions if s not in there]:
+                    del self.decisions[slot]
+                    self.log.add("remove", slot[0], {"why": "no longer in the policy", "address": slot[1]})
+        self._guard("policy", note)
+
+    @staticmethod
+    def _slot(name, ep):
+        """What a decision is remembered under: the entry's name and the address it is asked at."""
+        return str(name)[:64], "%s:%s" % (str(ep.get("host"))[:64], str(ep.get("port"))[:8])
+
+    def policy_refused(self, why):
+        """A policy file the verifier did not take, once per reason."""
+        if str(why) != self.refusal_seen:
+            self.refusal_seen = str(why)
+            self.log.add("policy-refused", None, {"why": str(why)[:300], "in_use_sha256": _digest(self.policy_seen)})
+
+    # -- sessions --
+
+    def session(self, ep):
+        """The session this verifier holds for ep: {"id", "expires", "binding"}, or None."""
+        def read():
+            if not (isinstance(ep.get("name"), str) and ENTRY_NAME.match(ep["name"])):
+                return None
+            try:
+                with open(os.path.join(self.state, "credentials", ep["name"] + ".json")) as f:
+                    m = json.load(f)
+            except FileNotFoundError:
+                return None
+            return {"id": m.get("session_id"), "expires": m.get("body", {}).get("expires"),
+                    "binding": _binding(m.get("transcript"))}
+        return self._guard("session", read)
+
+    def session_change(self, ep, before, note, now=None):
+        """Entries for what credential_step did to the session of ep, by comparing what is stored now with before
+        (session() from before the step). note: the step's own words."""
+        def compare():
+            after = self.session(ep)
+            if (before or {}).get("id") == (after or {}).get("id"):
+                return
+            t = time.time() if now is None else now
+            name, why = ep["name"], str(note or "")[:200]
+            if before:
+                ended = isinstance(before.get("expires"), int) and before["expires"] - t <= RENEWAL_WINDOW_S
+                if ended and after:
+                    self.log.add("expiry", name, {"session": _digest(before["id"]), "expires": before["expires"]})
+                else:
+                    self.log.add("revoke", name, {"session": _digest(before["id"]), "why": why,
+                                                  "replaced": bool(after)})
+            if after:
+                self.log.add("issue", name, {"session": _digest(after["id"]), "expires": after["expires"],
+                                             "binding": after["binding"], "note": why})
+        self._guard("session", compare)
+
+    # -- decisions --
+
+    def decision(self, v, facts, ep=None):
+        """The verdict of one cycle for one endpoint (ep: its policy entry): an entry if it is the first or not the
+        last one's again."""
+        def note():
+            name, address = self._slot(v.get("endpoint"), ep if isinstance(ep, dict) else {})
+            admitted = v.get("admitted") is True
+            e = v.get("endorsement") if isinstance(v.get("endorsement"), dict) else {}
+            meas = v.get("measurements") if isinstance(v.get("measurements"), dict) else {}
+            # what makes a decision another decision. The reasons' words are not part of it (some carry a time or an
+            # address that changes every cycle); how far the appraisal got is
+            key = repr((admitted, facts.get("stage"), v.get("device_pk_sha256"),
+                        sorted((str(k), str(m)) for k, m in meas.items()), v.get("enrolment"), v.get("trust"),
+                        e.get("record_sha256"), facts.get("format"), v.get("enforcement")))
+            if self.decisions.get((name, address)) == key:
+                return
+            self.decisions[(name, address)] = key
+            quote = v.get("quote") if isinstance(v.get("quote"), dict) else {}
+            result = v.get("attestation_result") if isinstance(v.get("attestation_result"), dict) else {}
+            d = {"kind": v.get("kind"), "address": address if isinstance(ep, dict) else None,
+                 "stage": facts.get("stage"), "evidence_format": facts.get("format"),
+                 "enrolment": v.get("enrolment"), "trust": v.get("trust"), "enforcement": v.get("enforcement"),
+                 "session_binding": v.get("session_binding"), "credential": v.get("credential"),
+                 "device_key_sha256": _digest(v.get("device_pk_sha256")),
+                 "endorsement_sha256": _digest(e.get("record_sha256")), "endorser": e.get("endorser_name"),
+                 "quote_sha3_256": _digest(quote.get("token_sha3_256")), "result_sha256": _digest(result.get("sha256")),
+                 "warning": v.get("warning")}
+            if meas:
+                d["measurements"] = {str(k)[:64]: _digest(m) or str(m)[:64] for k, m in list(meas.items())[:16]}
+            if not admitted:
+                reasons = [str(r)[:240] for r in (v.get("reasons") or [])]
+                d["reasons"] = reasons[:6]
+                if len(reasons) > 6:
+                    d["more_reasons"] = len(reasons) - 6
+            for k in ("credential", "warning"):
+                if d[k] is not None:
+                    d[k] = str(d[k])[:240]
+            self.log.add("admit" if admitted else "refuse", name, {k: x for k, x in d.items() if x is not None},
+                         v.get("time"))
+        self._guard("decision", note)
+
+    # -- writing --
+
+    def flush(self, final=False, last=False):
+        """Sign and append what was noted (common/audit.py Log.flush). final: do not wait, and promise no further
+        batch of this writer; last: the log itself ends here. One line per batch on stderr: the journal then holds
+        each batch's hash too, which tools/verify_audit.py --head compares a log with. A log that cannot be written
+        is said once, at error priority; the entries wait in memory."""
+        try:
+            written = self.log.flush(promise=self.promise and not final, force=final or last, last=last)
+        except Exception as e:  # noqa: BLE001 - no key, a full disk: the loop goes on
+            why = "%s: %s" % (type(e).__name__, e)
+            if why != self.error:
+                self.error = why
+                log("aegis-audit: the audit log in %s could NOT be written (%s); %d entries wait in memory" % (
+                    self.log.dir, why, len(self.log.pending)), LOG_ERR, file=sys.stderr)
+            return []
+        self.error = None
+        for b in written:
+            log("aegis-audit: batch %d of log %s, %s, sha256 %s" % (
+                b.batch, b.log.hex(), "entries %d to %d" % (b.first, b.next_entry - 1) if b.entries else "no entry",
+                b.head.hex()), file=sys.stderr)
+        return written
+
+    def stop(self, why):
+        self.log.add("stop", None, {"why": str(why)[:300]})
+        return self.flush(last=True)
+
+
+def _hand_over(old, new):
+    """The settings changed: old writes what it holds now, without waiting; what it could not write (no key, a full
+    disk) is not lost but goes to new, ahead of its own entries, and new's log says so ("gap", with how many entries
+    were carried over and how many did not fit in memory)."""
+    import audit
+    old.flush(final=True)
+    held = [e for e in old.log.pending if e[audit.E_EVENT] not in ("log-start", "pruned")]     # new plans its own
+    lost = old.log.dropped
+    if not held and not lost:
+        return
+    room = max(0, audit.MAX_PENDING - len(new.log.pending) - 1)
+    carried, lost = held[:room], lost + len(held[room:])
+    new.log.pending[:0] = carried + [audit.entry("gap", None, {
+        "carried": len(carried), "dropped": lost, "error": str(old.error)[:200],
+        "why": "the audit log could not be written when its settings changed"})]
+    log("aegis-audit: the audit settings changed while the log could not be written: %d entries carried over, %d lost"
+        % (len(carried), lost), LOG_ERR, file=sys.stderr)
+
+
+def open_audit(policy, state, current=None, grace_s=120, promise=True, start=None, said=None):
+    """The audit trail a policy asks for: current, if it is one with the same settings; a new one if the policy asks
+    and there is none (or the settings changed); None if the policy does not ask, after a last entry in current.
+    A policy that asks in words this verifier does not know, or a verifier without an identity to sign with, gets no
+    log and a line at error priority, once per reason (said: a one-element list that remembers it)."""
+    why = None
+    try:
+        settings = audit_settings(policy)
+    except ValueError as e:
+        settings, why = None, str(e)
+    if settings is not None and (current is None or current.settings != settings):
+        try:
+            new = AuditTrail(state, settings, grace_s, promise, start)
+        except Exception as e:  # noqa: BLE001 - no identity.json, or not a verifier's
+            settings, why = None, "no verifier identity in %s to sign it with (%s: %s)" % (state, type(e).__name__, e)
+        else:
+            if current is not None:
+                _hand_over(current, new)
+            current = new
+    if settings is None and current is not None:
+        current.stop(why or "the policy no longer asks for an audit log")
+        current = None
+    if said is not None and why != said[0]:
+        said[0] = why
+        if why:
+            log("aegis-fleet: NO AUDIT LOG is kept: %s" % why, LOG_ERR, file=sys.stderr)
+    return current
+
+
+def audit_report(state, extra_keys=(), entries=False, allow_pruned=False, now=None):
+    """Check this verifier's own audit log (common/audit.py verify) under its identity key and extra_keys; returns
+    (report, the last batch record or None). The record is an anchor: kept somewhere else, it shows later that the
+    log was not cut off or written again before it. audit.Refused if the log is not whole."""
+    import audit
+    with open(os.path.join(state, "identity.json")) as f:
+        pk = bytes.fromhex(json.load(f)["body"]["pk"])
+    d = os.path.join(state, "audit")
+    if not audit.segments(d):
+        raise audit.Refused("no audit log in %s" % d)
+    with audit.reading(d):
+        report = audit.verify(d, [pk] + list(extra_keys), now=time.time() if now is None else now,
+                              allow_pruned=allow_pruned, with_entries=entries)
+        recs = []
+        for _, path in reversed(audit.segments(d)):     # the last segment that holds a record
+            with open(path, "rb") as f:
+                recs = audit.split(f.read())
+            if recs:
+                break
+    return report, (recs[-1][1] if recs else None)
+
+
+def _jsonable(v):
+    if isinstance(v, bytes):
+        return v.hex()
+    if isinstance(v, dict):
+        return {str(k): _jsonable(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_jsonable(x) for x in v]
+    return v if isinstance(v, (str, int, bool)) or v is None else repr(v)
+
+
 def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, state=GATEWAY_STATE, require_pin=False,
-             enforce_hooks=True, policy_bytes=None):
+             enforce_hooks=True, policy_bytes=None, audit=None):
     """One cycle over every endpoint. enforce_hooks=False is observe-only: the policy's enforce_cmd is not run.
     With policy_bytes (the policy file as read) and a verifier identity in state, the verdict of every entry that
     asks for it (wants_results()) gets a signed attestation result, kept with its evidence under STATE/attestation/
-    (issue_result). Without such an entry the identity key is not loaded and nothing is written."""
+    (issue_result). Without such an entry the identity key is not loaded and nothing is written.
+    audit: the AuditTrail of a policy that asks for an audit log (open_audit()); it is told each verdict and what
+    became of each session, and the caller flushes it when the cycle is over."""
     out = []
     ttl = admit_ttl(policy, interval)
     signer = None
@@ -1409,6 +1839,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
                     second["facts"] = {"stage": "error"}
                 return second["verdict"]
             admitted = v["admitted"]
+            held = audit.session(ep) if audit is not None else None
             try:
                 cs = credential_step(ep, v, base_dir, state=state, require_pin=require_pin, requote=requote,
                                      endorsers=policy.get("endorsers"))
@@ -1416,6 +1847,8 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
                 cs = "credential step failed: %s: %s" % (type(e).__name__, e)
             if cs:
                 v["credential"] = cs
+            if audit is not None:
+                audit.session_change(ep, held, cs)
             if admitted and not v["admitted"]:
                 # the second quote of the cycle was not admitted (credential_step): that is this cycle's verdict, so
                 # the network must hear it too, not the admission enforced above
@@ -1433,6 +1866,8 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
                 facts = second["facts"]     # the cycle's verdict rests on the second quote: that is its evidence
         if signs:
             issue_result(v, facts, signer, policy_bytes, state, ttl)
+        if audit is not None:
+            audit.decision(v, facts, ep)
         out.append(v)
     return out
 
@@ -1440,7 +1875,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Aegis fleet verifier")
     ap.add_argument("cmd", choices=["once", "watch", "enroll-pq", "enroll-endorsed", "session", "check",
-                                    "export-evidence"])
+                                    "export-evidence", "audit"])
     ap.add_argument("--force", action="store_true",
                     help="enroll-pq, enroll-endorsed: replace keys that are already pinned")
     ap.add_argument("policy")
@@ -1461,19 +1896,64 @@ def main(argv=None):
                     help="attest only; do not issue, check or revoke credentials (use while the service runs)")
     ap.add_argument("--enforce", action="store_true",
                     help="--platform linux: run the policy's enforce_cmd (default there: observe-only)")
+    ap.add_argument("--policy-signers",
+                    help="the keys a signed policy is checked with (docs/audit-and-policy.md); the policy must then "
+                         "be signed, and this file must exist. Default: STATE_DIR/policy-signers.json if it is "
+                         "there, else the policy is plain JSON and not checked")
+    ap.add_argument("--audit-key", action="append", default=[],
+                    help="audit: a file with another ML-DSA-65 public key in hex whose batches are accepted too (an "
+                         "identity this verifier had before)")
+    ap.add_argument("--entries", action="store_true", help="audit: print every entry, not only where the log stands")
+    ap.add_argument("--allow-pruned", action="store_true",
+                    help="audit: accept a log whose older segments were archived away")
     a = ap.parse_args(argv)
-    with open(a.policy, "rb") as f:
-        policy_bytes = f.read()
-    policy = json.loads(policy_bytes.decode())
-    base = os.path.dirname(os.path.abspath(a.policy))
     platform = detect_platform() if a.platform == "auto" else a.platform
     state_dir = a.state_dir or default_state_dir(platform)
+    try:
+        # the policy this run acts on; `watch` and `once` record a signed policy's version as accepted
+        loaded = load_policy(a.policy, state_dir, a.policy_signers, remember=a.cmd in ("watch", "once"))
+    except PolicyRefused as e:
+        log("aegis-fleet: policy REFUSED: %s" % e, LOG_ERR, file=sys.stderr)
+        return 1
+    policy, policy_bytes, pinfo = loaded
+    base = os.path.dirname(os.path.abspath(a.policy))
     state_file = a.state or os.path.join(state_dir, "fleet-state.json")
     on_host = platform == "linux"
     enforce_hooks = not on_host or a.enforce
     ev = psa_token.verify_with_openssl_cli if a.verifier == "openssl" else psa_token.verify_with_cryptography
     if a.records and a.cmd not in ("enroll-endorsed", "export-evidence"):
         ap.error("only enroll-endorsed takes record files")
+    if pinfo.get("warning"):
+        log("aegis-fleet: %s" % pinfo["warning"], LOG_WARNING, file=sys.stderr)
+    said = [None]
+
+    def note_enrolments(entries):
+        """enroll-pq, enroll-endorsed: what was pinned goes into the audit log, if the policy asks for one."""
+        trail = open_audit(policy, state_dir, promise=False, said=said) if entries else None
+        if trail is not None:
+            trail.policy(pinfo)
+            for name, details in entries:
+                trail.log.add("enrol", name, details)
+            trail.flush(final=True)
+
+    if a.cmd == "audit":
+        # where this verifier's audit log stands, checked first; --out keeps the last batch record as an anchor
+        try:
+            keys = []
+            for path in a.audit_key:
+                with open(path) as f:
+                    keys.append(bytes.fromhex(f.read().strip()))
+            report, anchor = audit_report(state_dir, keys, a.entries, a.allow_pruned)
+        except (OSError, ValueError) as e:
+            print(json.dumps({"verified": False, "reason": str(e)}, indent=1))
+            return 1
+        if a.out and anchor is not None:
+            with open(a.out, "wb") as f:
+                f.write(anchor)
+            report["anchor"] = {"file": a.out, "sha256": hashlib.sha256(anchor).hexdigest(),
+                                "batch": report["logs"][-1]["last_batch"]}
+        print(json.dumps(dict(_jsonable(report), verified=True), indent=1))
+        return 1 if report["stale"] else 0
     if a.cmd == "export-evidence":
         # the evidence pack of one endpoint, for someone who checks it without Aegis code (docs/evidence-format.md)
         if len(a.records) != 1:
@@ -1494,24 +1974,40 @@ def main(argv=None):
         # the entry it names, then its record and key are committed so that a failure leaves nothing trusted.
         if not a.records:
             ap.error("enroll-endorsed needs at least one endorsement record")
-        bad = 0
+        bad, enrolled = 0, []
         for path in a.records:
             try:
-                name, body = install_endorsement(policy, base, path, a.force, a.policy)
+                # a signed policy is not this verifier's to change: the record's pin goes into the next one signed
+                name, body = install_endorsement(policy, base, path, a.force, None if pinfo["signed"] else a.policy)
             except (OSError, ValueError) as e:
                 bad += 1
                 print("REFUSED %s: %s (nothing was enrolled from it)" % (path, e))
                 continue
             ep = next(e for e in policy["endpoints"] if e.get("name") == name)
+            enrolled.append((name, {"how": ENDORSED, "device_key_sha256": _digest(body["device_pk_sha256"]),
+                                    "endorser": body["endorser_name"],
+                                    "endorsement_sha256": _digest(body["record_sha256"]), "forced": bool(a.force)}))
+            if pinfo["signed"]:
+                print("enrolled %s: ML-DSA-65 key sha256 %s, endorsed by %s -> %s, %s; the policy is signed, so the "
+                      "record is NOT pinned by this command: put \"endorsement_sha256\": \"%s\" into the entry and "
+                      "sign the policy again (%s)" % (
+                          name, body["device_pk_sha256"], body["endorser_name"], _path(base, ep["pq_pub_file"]),
+                          endorsement_file(ep, base), body["record_sha256"],
+                          "the entry pins another record until then: the device is refused" if
+                          ep.get("endorsement_sha256") not in (None, body["record_sha256"]) else
+                          "until then an older record of this endorser for this key would be accepted too"))
+                continue
             print("enrolled %s: ML-DSA-65 key sha256 %s, endorsed by %s -> %s, %s; %s pins record %s%s" % (
                 name, body["device_pk_sha256"], body["endorser_name"], _path(base, ep["pq_pub_file"]),
                 endorsement_file(ep, base), a.policy, body["record_sha256"],
                 "" if ep.get("endorsement") in ENDORSEMENTS else
                 ' (the entry does not say "endorsement": "required" yet: the record is not checked by the loop)'))
+        note_enrolments(enrolled)
         return 1 if bad else 0
     if a.cmd == "enroll-pq":
         # Trust on first use: fetch the ML-DSA-65 key of each PQ endpoint that has none pinned yet. An existing pin is
         # never replaced from the network (the reply comes through the endpoint's untrusted side); --force re-enrols.
+        enrolled = []
         for ep in policy["endpoints"]:
             if ep.get("kind") not in PQ_KINDS:
                 continue
@@ -1528,6 +2024,9 @@ def main(argv=None):
                 f.write(pk.hex() + "\n")
             print("enrolled %s by trust on first use: ML-DSA-65 key sha256 %s -> %s"
                   % (ep["name"], hashlib.sha256(pk).hexdigest(), path))
+            enrolled.append((ep["name"], {"how": TOFU, "device_key_sha256": hashlib.sha256(pk).digest(),
+                                          "forced": bool(a.force), "from": "%s:%s" % (ep["host"], ep["port"])}))
+        note_enrolments(enrolled)
         return 0
     if a.cmd == "session":
         # compare this verifier's stored credential/session with what the endpoint's secure side reports
@@ -1566,6 +2065,21 @@ def main(argv=None):
         print("platform %s, state %s, %s, this verifier's key sha256 %s" % (
             platform, state_dir, "enforcing" if enforce_hooks and policy.get("enforce_cmd") else "observe-only",
             verifier_pk_sha256(state_dir) or "(no identity)"))
+        if pinfo["signed"] or pinfo.get("warning"):
+            print(policy_line(pinfo))
+        if "audit_log" in policy:
+            try:
+                settings = audit_settings(policy)
+                print("audit log: %s" % ("off" if settings is None else "in %s, a batch at least every %d s%s%s" % (
+                    os.path.join(state_dir, "audit"), settings["checkpoint_s"],
+                    (", at most every %d s" % settings["min_interval_s"] if settings["min_interval_s"] else "") +
+                    (", at most %d segments of %d bytes" % (settings["max_segments"], settings["segment_bytes"])
+                     if settings["max_segments"] else ", every segment kept"),
+                    "" if verifier_pk_sha256(state_dir) else "; NO verifier identity to sign it with: none is kept")))
+                bad += settings is not None and not verifier_pk_sha256(state_dir)
+            except ValueError as e:
+                bad += 1
+                print("audit log: REFUSED: %s (no log is kept)" % e)
         return 1 if bad else 0
     run = dict(credentials=not a.no_credentials, interval=a.interval, state=state_dir, require_pin=on_host,
                enforce_hooks=enforce_hooks)
@@ -1575,8 +2089,16 @@ def main(argv=None):
     if policy.get("enforce_cmd") and not enforce_hooks:
         log("aegis-fleet: observe-only on platform %s: enforce_cmd in the policy is not run (--enforce runs it)"
             % platform, file=sys.stderr)
+    started = {"platform": platform, "enforcing": bool(enforce_hooks and policy.get("enforce_cmd")),
+               "credentials": not a.no_credentials, "verifier": "aegis-fleet-verifier 1"}
+    grace = admit_ttl(policy, a.interval)
     if a.cmd == "once":
-        res = run_once(policy, base, ev, policy_bytes=policy_bytes, **run)
+        trail = open_audit(policy, state_dir, None, grace, False, dict(started, cmd="once"), said)
+        if trail is not None:
+            trail.policy(pinfo, policy)
+        res = run_once(policy, base, ev, policy_bytes=policy_bytes, audit=trail, **run)
+        if trail is not None:
+            trail.flush(final=True)
         for v in res:
             v.pop("enforce_note", None)
         print(json.dumps(res, indent=1))
@@ -1594,14 +2116,41 @@ def main(argv=None):
     for ep in policy.get("endpoints", []):
         if ep.get("kind") in PQ_KINDS and ep.get("endorsement") is None and not policy_errors(ep):
             log("aegis-fleet: %s: enrolment: %s" % (ep.get("name"), TOFU_NOTE), LOG_WARNING)
+    if pinfo["signed"]:
+        log("aegis-fleet: %s" % policy_line(pinfo))
+    trail, refused = None, None
     while True:
+        not_taken = None
         try:  # reload every cycle, so policy updates apply without a restart
-            with open(a.policy, "rb") as f:
-                new_bytes = f.read()
-            policy, policy_bytes = json.loads(new_bytes.decode()), new_bytes
+            loaded = load_policy(a.policy, state_dir, a.policy_signers, remember=True, known=loaded)
+            if loaded[2] != pinfo and (loaded[2]["signed"] or loaded[2].get("warning")):
+                log("aegis-fleet: %s" % policy_line(loaded[2]), LOG_WARNING if loaded[2].get("warning") else None)
+            policy, policy_bytes, pinfo = loaded
+            refused = None
+        except PolicyRefused as e:
+            if not pinfo["signed"] and policy_signers_configured(state_dir, a.policy_signers):
+                # this verifier was given policy-signing keys while it ran from a policy nobody signed: there is no
+                # accepted policy to keep. It stops; its admissions lapse with their TTL
+                log("aegis-fleet: policy REFUSED and the policy in use is not a signed one: stopping (%s)" % e,
+                    LOG_ERR, file=sys.stderr)
+                if trail is not None:
+                    trail.policy_refused(e)
+                    trail.stop("no signed policy to run from")
+                return 1
+            if str(e) != refused:       # at error priority once; the previous policy stays in use
+                refused = str(e)
+                log("aegis-fleet: policy REFUSED, keeping the previous one: %s" % e, LOG_ERR, file=sys.stderr)
+            not_taken = e
         except (OSError, ValueError) as e:
             print("policy reload failed, keeping the previous one: %s" % e, flush=True)
-        res = run_once(policy, base, ev, policy_bytes=policy_bytes, **run)
+            not_taken = "policy reload failed: %s" % e
+        trail = open_audit(policy, state_dir, trail, admit_ttl(policy, a.interval), True, dict(started, cmd="watch"),
+                           said)
+        if trail is not None:
+            trail.policy(pinfo, policy)
+            if not_taken is not None:
+                trail.policy_refused(not_taken)
+        res = run_once(policy, base, ev, policy_bytes=policy_bytes, audit=trail, **run)
         lines = [journal_line(v) for v in res]
         for v in res:
             v.pop("enforce_note", None)
@@ -1611,6 +2160,8 @@ def main(argv=None):
         os.replace(tmp, state_file)
         for text, prio in lines:
             log(text, prio)
+        if trail is not None:
+            trail.flush()
         time.sleep(a.interval)
 
 

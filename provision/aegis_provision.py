@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Aegis provisioning tool: endorse a device's identity key at the bench (docs/enrolment.md).
+"""Aegis provisioning tool: endorse a device's identity key at the bench (docs/enrolment.md), and sign a fleet
+policy (docs/audit-and-policy.md; the policy-* commands, described after the endorser's).
 
   aegis_provision.py init    --name NAME [--state DIR] [--key-store auto|tpm|software] [--tpm-pcrs 7]
   aegis_provision.py show    [--state DIR]
@@ -45,6 +46,29 @@ The endorser's key is ML-DSA-65, made by init and kept like a verifier's identit
 machine's TPM 2.0 when one is usable, else a 0600 file. STATE defaults to $AEGIS_ENDORSER_DIR, else
 ~/.local/state/aegis-endorser. Whoever can use that key can make any key a trusted device key at every verifier that
 lists it.
+
+Signing a policy (docs/audit-and-policy.md):
+
+  aegis_provision.py policy-init   --name NAME [--state DIR] [--key-store auto|tpm|software] [--tpm-pcrs 7]
+  aegis_provision.py policy-show   [--state DIR]
+  aegis_provision.py policy-export DIR [--audience FLEET] [--state DIR]     DIR/policy-signers.json for a verifier
+  aegis_provision.py policy-sign   POLICY.json [--out FILE] [--policy-version N] [--audience FLEET] [--pin-keys]
+                                   [--yes] [--force] [--state DIR]
+
+The policy-signing key is a key of its own, ML-DSA-65, made by policy-init and kept like the endorser's, in its own
+state directory ($AEGIS_POLICY_SIGNER_DIR, else ~/.local/state/aegis-policy-signer). It is not the endorser's key and
+not a verifier's identity: a verifier checks policies with the public key (policy-export writes the file it reads)
+and holds nothing that can sign one.
+
+policy-sign reads the policy as JSON, refuses one with a key twice in an object, prints what it is about to sign (the
+version, every endpoint and how its key is pinned, the enforcement command, what the policy turns on) and asks the
+operator to type "yes" (--yes skips that). The version is one more than the last this signer signed (its ledger,
+STATE/signed.jsonl); a verifier accepts a policy only with a version higher than the last it accepted, so an older
+signed policy put back is refused there. --pin-keys writes each post-quantum entry's key hash into the policy
+("pq_pub_sha256", from the key files beside it; the policy as it was is kept as POLICY.bak) before it signs: without
+the pin the signature covers the name of the key file and not the key in it. The signed bytes are checked as a
+verifier checks them, logged in the ledger, and only then written, to POLICY.cose unless --out names another file.
+`fleet.py watch POLICY.cose` runs from it.
 """
 import argparse
 import hashlib
@@ -62,6 +86,7 @@ import fleet  # noqa: E402
 import keystore  # noqa: E402
 import mldsa  # noqa: E402
 import psa_token  # noqa: E402
+import signed_policy  # noqa: E402
 import wire  # noqa: E402
 
 RECORD = "endorser.json"
@@ -151,16 +176,17 @@ def default_state():
 class Endorser:
     """The endorser's name and key pair, loaded from its state directory. The secret key is loaded (from the TPM,
     if it is sealed there) when it is first used: show and export never touch it."""
+    RECORD, TYPE, LABEL = RECORD, "endorser", endorsement.ENDORSER_LABEL
 
     def __init__(self, state, tcti=None):
         self.state, self._tcti, self._sk = state, tcti, None
-        with open(os.path.join(state, RECORD)) as f:
+        with open(os.path.join(state, self.RECORD)) as f:
             rec = json.load(f)
         body = rec["body"]
         self.pk = bytes.fromhex(body["pk"])
-        if body.get("type") != "endorser" or not mldsa.verify(self.pk, endorsement.ENDORSER_LABEL,
-                                                              wire.canonical(body), bytes.fromhex(rec["sig"])):
-            raise ValueError("%s is not a self-signed endorser record" % os.path.join(state, RECORD))
+        if body.get("type") != self.TYPE or not mldsa.verify(self.pk, self.LABEL,
+                                                             wire.canonical(body), bytes.fromhex(rec["sig"])):
+            raise ValueError("%s is not a self-signed %s record" % (os.path.join(state, self.RECORD), self.TYPE))
         self.name, self.body = body["name"], body
         self.pk_sha256 = endorsement.pk_sha256(self.pk)
 
@@ -183,14 +209,30 @@ class Endorser:
         return {"name": self.name, "pk_file": "endorsers/%s.mldsa65.pub" % self.name, "pk_sha256": self.pk_sha256}
 
 
-def init(state, name, key_store="auto", pcrs=None, force=False, tcti=None):
-    """Make the endorser's key and its self-signed record. Returns the record's body."""
+class PolicySigner(Endorser):
+    """The policy signer's name and key pair: the same kind of record and key store as the endorser's, another key,
+    another state directory, and a label of its own on its record."""
+    RECORD, TYPE, LABEL = "policy-signer.json", "policy-signer", b"aegis-policy-signer-v1"
+
+    def trust(self):
+        """This signer as a verifier's policy signers (signed_policy.load_signers()["keys"])."""
+        return {signed_policy.cose.key_thumbprint(self.pk): {"name": self.name, "pk": self.pk}}
+
+
+def default_policy_state():
+    return os.environ.get("AEGIS_POLICY_SIGNER_DIR") or os.path.join(
+        os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state"),
+        "aegis-policy-signer")
+
+
+def init(state, name, key_store="auto", pcrs=None, force=False, tcti=None, role=Endorser):
+    """Make the endorser's key (or, with role=PolicySigner, the policy signer's) and its self-signed record. Returns
+    the record's body."""
     if not endorsement._is_text(name, 64) or any(c in name for c in "/\\ \t\n") or name.startswith("."):
-        raise SystemExit("the endorser's name must be a short word (it becomes a file name)")
+        raise SystemExit("the %s's name must be a short word (it becomes a file name)" % role.TYPE)
     os.makedirs(state, mode=0o700, exist_ok=True)
     if keystore.stored_where(state) and not force:
-        raise SystemExit("an endorser key exists in %s (--force makes a new one; verifiers then need the new key)"
-                         % state)
+        raise SystemExit("a key exists in %s (--force makes a new one; verifiers then need the new key)" % state)
     store, why = keystore.SOFTWARE, "--key-store software"
     if key_store != "software":
         ok, why, _ = keystore.tpm_status(tcti)
@@ -200,14 +242,14 @@ def init(state, name, key_store="auto", pcrs=None, force=False, tcti=None):
             raise SystemExit("no usable TPM: %s" % why)
     pk, sk = mldsa.keypair()
     where = keystore.save(state, sk, pk, store, pcrs, tcti)
-    body = {"v": 1, "type": "endorser", "name": name, "pk_alg": endorsement.PK_ALG, "pk": pk.hex(),
+    body = {"v": 1, "type": role.TYPE, "name": name, "pk_alg": endorsement.PK_ALG, "pk": pk.hex(),
             "key_store": where["key_store"], "created": int(time.time())}
     if where["key_store"] == keystore.TPM:
         body["key_store_tpm"] = where["tpm"]
     else:
         body["key_storage"] = "software, file mode 0600 (no TPM: %s)" % why
-    rec = {"body": body, "sig": mldsa.sign(sk, endorsement.ENDORSER_LABEL, wire.canonical(body)).hex()}
-    endorsement.write_atomic(os.path.join(state, RECORD), (json.dumps(rec, indent=1) + "\n").encode(), 0o600)
+    rec = {"body": body, "sig": mldsa.sign(sk, role.LABEL, wire.canonical(body)).hex()}
+    endorsement.write_atomic(os.path.join(state, role.RECORD), (json.dumps(rec, indent=1) + "\n").encode(), 0o600)
     return body
 
 
@@ -365,10 +407,11 @@ def endorse(endorser, ep, base_dir, out_dir, serial=None, notes=None, valid_days
     return res
 
 
-def ledger(state, entry):
-    """One line per signature this endorser made, appended and flushed to disk before the record is handed out."""
+def ledger(state, entry, name=LEDGER):
+    """One line per signature this endorser (or policy signer) made, appended and flushed to disk before the record
+    is handed out."""
     entry = {k: v for k, v in entry.items() if k != "endorsed" and v is not None}
-    fd = os.open(os.path.join(state, LEDGER), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    fd = os.open(os.path.join(state, name), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a") as f:
         f.write(json.dumps(entry, sort_keys=True) + "\n")
         f.flush()
@@ -390,25 +433,206 @@ def ask(seen, out=None, stdin=None):
     return stdin.readline().strip() == "yes"
 
 
+# ---- signing a policy (docs/audit-and-policy.md) ----------------------------------------------------------------------
+
+POLICY_LEDGER = "signed.jsonl"
+
+
+def last_signed_version(state):
+    """The highest version in the signer's ledger; 0 if it signed nothing yet."""
+    last = 0
+    try:
+        with open(os.path.join(state, POLICY_LEDGER)) as f:
+            for line in f:
+                if line.strip():
+                    last = max(last, int(json.loads(line)["version"]))
+    except FileNotFoundError:
+        pass
+    return last
+
+
+def pin_keys(policy, base):
+    """--pin-keys: give every post-quantum entry the hash of the key its key file holds now ("pq_pub_sha256").
+    Returns (names pinned, reasons it cannot be done); an entry that already pins another key than its file holds
+    is a reason, not something to overwrite."""
+    pinned, reasons = [], []
+    for ep in policy["endpoints"]:
+        if not (isinstance(ep, dict) and ep.get("kind") in fleet.PQ_KINDS and isinstance(ep.get("pq_pub_file"), str)):
+            continue
+        try:
+            with open(fleet._path(base, ep["pq_pub_file"])) as f:
+                pk = bytes.fromhex(f.read(4 * mldsa.PK_LEN).strip())
+            if len(pk) != mldsa.PK_LEN:
+                raise ValueError("not an ML-DSA-65 public key")
+        except (OSError, ValueError) as e:
+            reasons.append("--pin-keys: no usable key file for %s: %s" % (ep.get("name"), e))
+            continue
+        digest = hashlib.sha256(pk).hexdigest()
+        if ep.get("pq_pub_sha256") not in (None, digest):
+            reasons.append("--pin-keys: %s pins key %s..., and its key file holds %s..." % (
+                ep.get("name"), str(ep["pq_pub_sha256"])[:16], digest[:16]))
+        elif "pq_pub_sha256" not in ep:
+            ep["pq_pub_sha256"] = digest
+            pinned.append(ep.get("name"))
+    return pinned, reasons
+
+
+def policy_summary(policy):
+    """What a policy says, for the operator to confirm before it is signed, and what in it a signature does not
+    cover or a verifier would refuse ("warnings")."""
+    endpoints, warnings = [], []
+    for ep in policy["endpoints"]:
+        if not isinstance(ep, dict):
+            warnings.append("an entry of \"endpoints\" is not an object")
+            continue
+        applied = fleet.effective_entry(policy, ep)
+        name, kind = ep.get("name"), ep.get("kind", "psa")
+        warnings += ["%s: %s" % (name, e) for e in fleet.policy_errors(applied)]
+        if kind not in fleet.PQ_KINDS:
+            key = "ES256 key file %s (the file is not covered by the signature)" % ep.get("iak_pub_pem")
+        elif ep.get("endorsement") is not None:
+            key = "endorsed, record %s" % ("pinned %s..." % str(ep["endorsement_sha256"])[:16]
+                                           if ep.get("endorsement_sha256") else "NOT pinned")
+            if not ep.get("endorsement_sha256"):
+                warnings.append("%s: no endorsement_sha256: an older record of the same endorser for the same key "
+                                "would be accepted" % name)
+        elif ep.get("pq_pub_sha256"):
+            key = "trust on first use, key pinned %s..." % str(ep["pq_pub_sha256"])[:16]
+        else:
+            key = "trust on first use, key NOT pinned"
+            warnings.append("%s: no pq_pub_sha256: the signature covers the name of the key file, not the key in it "
+                            "(--pin-keys)" % name)
+        endpoints.append({"name": name, "kind": kind, "address": "%s:%s" % (ep.get("host"), ep.get("port")),
+                          "key": key, "provision": bool(ep.get("provision")),
+                          "allowed": len(ep.get("allowed") or []) if isinstance(ep.get("allowed"), list) else 0})
+    try:
+        audit_log = fleet.audit_settings(policy)
+    except ValueError as e:
+        audit_log = None
+        warnings.append(str(e))
+    return {"endpoints": endpoints, "enforce_cmd": policy.get("enforce_cmd"),
+            "endorsers": [e.get("name") for e in policy.get("endorsers") or [] if isinstance(e, dict)],
+            "attestation_results": policy.get("attestation_results") is True, "audit_log": audit_log is not None,
+            "warnings": warnings}
+
+
+def sign_policy(signer, policy_path, out=None, version=None, audience=None, pin=False, force=False, approve=None,
+                now=None):
+    """Sign one policy file (the module text has the steps). Returns a result dict; "signed" is True only when the
+    signed policy is in the file "out". Nothing is written before the operator has approved (approve: called with
+    what is about to be signed; None approves, for a caller that has checked by other means)."""
+    res = {"signed": False, "policy": policy_path}
+    try:
+        with open(policy_path, "rb") as f:
+            data = f.read()
+        policy = signed_policy.parse_policy(data)
+    except (OSError, ValueError) as e:
+        res["reasons"] = ["no usable policy: %s" % e]
+        return res
+    base = os.path.dirname(os.path.abspath(policy_path))
+    pinned, original = [], data
+    if pin:
+        pinned, reasons = pin_keys(policy, base)
+        if reasons:
+            res["reasons"] = reasons
+            return res
+        if pinned:
+            data = (json.dumps(policy, indent=1) + "\n").encode()
+    last = last_signed_version(signer.state)
+    version = last + 1 if version is None else version
+    if version <= last and not force:
+        res["reasons"] = ["version %d is not higher than the last this signer signed (%d): a verifier that accepted "
+                          "that one refuses it (--force signs it all the same)" % (version, last)]
+        return res
+    seen = dict(policy_summary(policy), policy=policy_path, version=version, previous_version=last,
+                policy_sha256=hashlib.sha256(data).hexdigest(), signer=signer.name, audience=audience,
+                keys_pinned_now=pinned)
+    if approve is not None and approve(seen) is not True:
+        res["reasons"] = ["not confirmed by the operator: nothing signed"]
+        return res
+    out = out or (policy_path[:-5] if policy_path.endswith(".json") else policy_path) + ".cose"
+    try:
+        signed = signed_policy.sign(signer.sk, signer.pk, data, version, signer.name, now, audience)
+        # verify before commit: the bytes that will be written, read as a verifier reads them
+        back = signed_policy.open_signed(signed, signer.trust(), audience)
+        if back["policy_bytes"] != data or back["version"] != version:
+            raise ValueError("the signed policy does not read back as it was signed")
+    except (ValueError, TypeError, RuntimeError, OSError) as e:
+        res["reasons"] = ["nothing signed: %s" % e]
+        return res
+    res.update(version=version, policy_sha256=back["policy_sha256"], signed_sha256=back["signed_sha256"],
+               signer=signer.name, signer_key_sha256=signer.pk_sha256, audience=audience,
+               endpoints=len(seen["endpoints"]), warnings=seen["warnings"], keys_pinned_now=pinned)
+    try:
+        ledger(signer.state, dict({k: v for k, v in res.items() if k not in ("signed", "warnings")},
+                                  time=back["issued"], out=os.path.abspath(out)), POLICY_LEDGER)
+        if pinned:      # the policy as it was signed replaces the one that was read; that one is kept
+            endorsement.write_atomic(policy_path + ".bak", original, os.stat(policy_path).st_mode & 0o777)
+            endorsement.write_atomic(policy_path, data, os.stat(policy_path).st_mode & 0o777)
+        endorsement.write_atomic(out, signed)
+    except OSError as e:
+        res["reasons"] = ["signed policy not written: %s" % e]
+        return res
+    res.update(signed=True, out=out)
+    return res
+
+
+def ask_policy(seen, out=None, stdin=None):
+    """The operator's confirmation at the terminal before a policy is signed: True only for "yes"."""
+    out, stdin = out or sys.stderr, stdin or sys.stdin
+    print("\nabout to sign %s as version %d (the last signed: %d) with key %s%s\n  policy sha256     %s" % (
+        seen["policy"], seen["version"], seen["previous_version"], seen["signer"],
+        ", for fleet %s" % seen["audience"] if seen["audience"] else "", seen["policy_sha256"]), file=out)
+    for e in seen["endpoints"]:
+        print("  endpoint          %s (%s) at %s: %s; %d allowed measurement(s)%s" % (
+            e["name"], e["kind"], e["address"], e["key"], e["allowed"], "; gets a session" if e["provision"] else ""),
+            file=out)
+    print("  enforcement       %s\n  endorsers         %s\n  attestation results %s, audit log %s" % (
+        " ".join(map(str, seen["enforce_cmd"])) if isinstance(seen["enforce_cmd"], list) else seen["enforce_cmd"],
+        ", ".join(map(str, seen["endorsers"])) or "none", "on" if seen["attestation_results"] else "off",
+        "on" if seen["audit_log"] else "off"), file=out)
+    for w in seen["warnings"]:
+        print("  WARNING           %s" % w, file=out)
+    if not stdin.isatty():
+        print("no terminal to confirm at: nothing signed (--yes confirms without asking)", file=out)
+        return False
+    print("Is this the policy the fleet shall run from? Type yes to sign: ", end="", file=out, flush=True)
+    return stdin.readline().strip() == "yes"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Aegis provisioning tool (endorser)")
-    ap.add_argument("cmd", choices=["init", "show", "export", "reference", "endorse"])
-    ap.add_argument("args", nargs="*", help="export: DIR; reference: POLICY DEVICE [DEVICE...]; "
-                                            "endorse: DEVICE [DEVICE...]")
-    ap.add_argument("--state", default=default_state())
+    ap.add_argument("cmd", choices=["init", "show", "export", "reference", "endorse",
+                                    "policy-init", "policy-show", "policy-export", "policy-sign"])
+    ap.add_argument("args", nargs="*", help="export, policy-export: DIR; reference: POLICY DEVICE [DEVICE...]; "
+                                            "endorse: DEVICE [DEVICE...]; policy-sign: POLICY.json")
+    ap.add_argument("--state", help="the endorser's state directory (default: $AEGIS_ENDORSER_DIR, else "
+                                    "~/.local/state/aegis-endorser); for the policy-* commands the policy signer's "
+                                    "(default: $AEGIS_POLICY_SIGNER_DIR, else ~/.local/state/aegis-policy-signer)")
+    ap.add_argument("--audience", help="policy-export, policy-sign: the fleet's name, where one key signs for more "
+                                       "than one fleet; a verifier given one accepts only policies signed for it")
+    ap.add_argument("--policy-version", type=int, help="policy-sign: the version to sign (default: one more than "
+                                                       "the last this signer signed)")
+    ap.add_argument("--pin-keys", action="store_true",
+                    help="policy-sign: write each post-quantum entry's key hash into the policy (pq_pub_sha256) "
+                         "before signing, from the key files beside it")
     ap.add_argument("--name", help="init: the endorser's name")
     ap.add_argument("--key-store", choices=["auto", "tpm", "software"], default="auto",
                     help="init: where the endorser's key lives (auto: the TPM if usable, else a 0600 file)")
     ap.add_argument("--tpm-pcrs", default="", help="init with the TPM: comma-separated sha256 PCRs the seal requires")
-    ap.add_argument("--force", action="store_true", help="init: replace the endorser's key; reference: replace the file")
+    ap.add_argument("--force", action="store_true",
+                    help="init, policy-init: replace the key; reference, policy-export: replace the file; "
+                         "policy-sign: sign a version that is not higher than the last signed")
     ap.add_argument("--reference", help="endorse: the endorser's reference file (default: STATE/%s); reference: "
                                         "where the draft goes (default the same)" % REFERENCE)
     ap.add_argument("--host", help="endorse: HOST:PORT of the device, as the operator knows it (one DEVICE per call); "
                                    "needed when the reference has no address for it")
     ap.add_argument("--expect-key-sha256", help="endorse: refuse unless the device's key has this SHA-256 (one DEVICE "
                                                 "per call)")
-    ap.add_argument("--yes", action="store_true", help="endorse: sign without asking the operator to confirm")
-    ap.add_argument("--out", help="endorse: where the records go (default: STATE/issued)")
+    ap.add_argument("--yes", action="store_true", help="endorse, policy-sign: sign without asking the operator to "
+                                                       "confirm")
+    ap.add_argument("--out", help="endorse: where the records go (default: STATE/issued); policy-sign: the signed "
+                                  "policy's file (default: POLICY.cose beside POLICY.json)")
     ap.add_argument("--serial", help="endorse: the board's serial number or label (one DEVICE per call then)")
     ap.add_argument("--notes", help="endorse: free text for the record")
     ap.add_argument("--valid-days", type=float, help="endorse: the record expires after this many days (default: "
@@ -421,6 +645,9 @@ def main(argv=None):
                          "ML-DSA-65, docs/evidence-format.md)")
     ap.add_argument("--timeout", type=float, default=20.0)
     a = ap.parse_args(argv)
+    if a.cmd.startswith("policy-"):
+        return policy_main(ap, a)
+    a.state = a.state or default_state()
     if a.cmd == "init":
         if not a.name or a.args:
             ap.error("init needs --name and nothing else")
@@ -495,6 +722,53 @@ def main(argv=None):
         failed += not res["endorsed"]
         print(json.dumps(res, indent=1), flush=True)
     return 1 if failed else 0
+
+
+def policy_main(ap, a):
+    """The policy-* commands."""
+    state = a.state or default_policy_state()
+    if a.cmd == "policy-init":
+        if not a.name or a.args:
+            ap.error("policy-init needs --name and nothing else")
+        body = init(state, a.name, a.key_store, [int(p) for p in a.tpm_pcrs.split(",") if p.strip()], a.force,
+                    role=PolicySigner)
+        print("policy signer %s created in %s, public key sha256 %s" % (a.name, state, hashlib.sha256(
+            bytes.fromhex(body["pk"])).hexdigest()))
+        print("key store: %s" % (body.get("key_storage") or "TPM 2.0, sealed (%s)" % body["key_store"]))
+        return 0
+    try:
+        signer = PolicySigner(state)
+    except (OSError, ValueError, KeyError) as e:
+        raise SystemExit("no usable policy signer in %s (aegis_provision.py policy-init --name NAME): %s" % (state, e))
+    if a.cmd == "policy-show":
+        print(json.dumps({"policy_signer": signer.name, "pk_sha256": signer.pk_sha256,
+                          "key_store": signer.body["key_store"], "state": state,
+                          "last_signed_version": last_signed_version(state)}, indent=1))
+        return 0
+    if a.cmd == "policy-export":
+        if len(a.args) != 1:
+            ap.error("policy-export DIR")
+        path = os.path.join(a.args[0], signed_policy.SIGNERS_FILE)
+        if os.path.exists(path) and not a.force:
+            raise SystemExit("%s exists (--force replaces it)" % path)
+        endorsement.write_atomic(path, signed_policy.signers_file([(signer.name, signer.pk)], a.audience))
+        print("%s\nPut it into the verifier's state directory (/var/lib/aegis on the gateway), or name it with "
+              "fleet.py --policy-signers: from then on that verifier runs only from a policy signed by %s (key "
+              "sha256 %s)%s." % (path, signer.name, signer.pk_sha256,
+                                 ", for fleet %s" % a.audience if a.audience else ""))
+        return 0
+    if len(a.args) != 1:
+        ap.error("policy-sign POLICY.json")
+    if a.policy_version is not None and a.policy_version < 1:
+        ap.error("--policy-version is 1 or more")
+    try:
+        signer.sk           # before anything is asked: a key that cannot be loaded (another TPM, a missing file)
+    except (OSError, RuntimeError, ValueError) as e:
+        raise SystemExit("the policy signer's key in %s cannot be used: %s" % (state, e))
+    res = sign_policy(signer, a.args[0], a.out, a.policy_version, a.audience, a.pin_keys, a.force,
+                      None if a.yes else ask_policy)
+    print(json.dumps(res, indent=1), flush=True)
+    return 0 if res["signed"] else 1
 
 
 if __name__ == "__main__":
