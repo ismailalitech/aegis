@@ -29,6 +29,18 @@
      raises. A COSE record that is not the one the entry pins never makes a key trusted. The standalone checker
      (tools/verify_evidence.py; skipped without pycose, cbor2 and ML-DSA in cryptography) never reports any of
      these as verified, and never verifies evidence the verifier's own decoder refuses.
+  7. audit log and signed policy (policy "audit_log": true; policy-signing keys; docs/audit-and-policy.md). A log
+     that is not exactly what the verifier wrote (bytes mutated, cut off anywhere, a batch removed, repeated, moved,
+     taken from another log of the same key, an entry edited under the old signature or under another key's, an item
+     put between batches) is never accepted by a reader that holds the last batch record as its anchor: the
+     verifier's reader (common/audit.py) raises audit.Refused and nothing else, the standalone checker
+     (tools/verify_audit.py) never verifies it, and without the anchor the two readers still agree on every one of
+     them. A policy file that is not a policy signer's statement of a version this verifier has not gone past
+     (mutated, signed by another key, the signer's signature under another typ or header, over claims that are not
+     a policy's, an older version, another policy under an accepted version) is never loaded: fleet.load_policy
+     raises PolicyRefused and nothing else, and the checker never verifies it. Whatever a verdict holds (random
+     CBOR in every field), the audit trail never raises, and the log it wrote verifies under both readers, which
+     read the same entries from it.
 
   fuzz_host.py [iterations]     prints a JSON summary, exit 0 only if no property broke
 """
@@ -541,9 +553,9 @@ def std_sign(sk, protected, payload, unprotected=None, tag=18):
     return cbor.dumps(cbor.Tag(tag, body) if tag is not None else body)
 
 
-def hostile_header(pk, sk, payload):
+def hostile_header(pk, sk, payload, typ=cose.TYP_EAT_CWT):
     """A valid signature over a header that is not the profile's, or around it."""
-    hdr = {1: -49, 4: cose.key_thumbprint(pk), 16: cose.TYP_EAT_CWT}
+    hdr = {1: -49, 4: cose.key_thumbprint(pk), 16: typ}
     kw = {}
     which = R.randrange(11)
     if which == 0:
@@ -783,8 +795,276 @@ for i in range(min(N, 900)):
     if kind == 2 and checker_says(checker and checker.check_endorsement, data, e_pk):
         std_broken("the standalone checker verified an endorsement signed by another key")
 
+# ---- 7. the audit log and the signed policy ----
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+import audit  # noqa: E402
+import signed_policy  # noqa: E402
+
+try:
+    import verify_audit as audit_checker    # third-party libraries only; a second reading of the document
+except Exception:  # noqa: BLE001
+    audit_checker = None
+
+ap = {"checker": audit_checker is not None, "logs": 0, "accepted_with_the_anchor": 0, "raised_other_than_Refused": 0,
+      "a_shorter_log_without_the_anchor": 0,
+      "checker_verified_with_the_anchor": 0, "readers_disagree": 0, "policies": 0, "policy_loaded": 0,
+      "policy_raised_other_than_PolicyRefused": 0, "checker_verified_policy": 0, "hostile_verdicts": 0,
+      "trail_raised": 0, "trail_entries": 0}
+
+
+def ap_broken(text):
+    if len(broken) < 20:
+        broken.append("audit and policy: " + text)
+
+
+def make_log(pk, sk, batches, t0=1_800_000_000):
+    """A log of that many batches in a new directory; returns its records."""
+    d = os.path.join(tempfile.mkdtemp(), "audit")
+    lg = audit.Log(d, pk, lambda: sk)
+    for i in range(batches):
+        for j in range(R.randrange(1, 4)):
+            lg.add(R.choice(["admit", "refuse", "issue", "revoke"]), "dev%d" % j,
+                   {"kind": "aegis-device", "measurements": {"SPE": bytes(32)}, "reasons": ["r%d" % i]}, t0 + i)
+        lg.flush(t0 + i)
+    out = []
+    for _, path in audit.segments(d):
+        with open(path, "rb") as f:
+            out += [raw for _, raw in audit.split(f.read())]
+    return out
+
+
+def readers(data, anchor):
+    """(accepted by the verifier's reader, verified by the checker) for one log file's bytes; None for the checker
+    without its libraries. anchor: a batch record both must find in the log, or None."""
+    with open(os.path.join(ap_dir, "audit-000001.cbor"), "wb") as f:
+        f.write(data)
+    try:
+        audit.verify(ap_dir, [v_pk], anchors=[anchor] if anchor else [])
+        ours = True
+    except audit.Refused:
+        ours = False
+    except Exception as e:  # noqa: BLE001
+        ours = False
+        ap["raised_other_than_Refused"] += 1
+        ap_broken("audit.verify raised %r" % (e,))
+    theirs = None
+    if audit_checker is not None:
+        try:
+            audit_checker.check_log([ap_dir], [v_pk], [ap_anchor] if anchor else [])
+            theirs = True
+        except Exception:  # noqa: BLE001 - its main() prints every exception as "not verified"
+            theirs = False
+    return ours, theirs
+
+
+ap_dir = os.path.join(tempfile.mkdtemp(), "audit")
+os.makedirs(ap_dir)
+good_log = make_log(v_pk, v_sk, 6)
+other_log = make_log(v_pk, v_sk, 6)         # another log of the same key
+ap_anchor = os.path.join(tempfile.mkdtemp(), "anchor.cbor")
+with open(ap_anchor, "wb") as f:
+    f.write(good_log[-1])
+good_blob = b"".join(good_log)
+if readers(good_blob, good_log[-1]) not in ((True, True), (True, None)):
+    ap_broken("the control (the log as written, with its anchor) was not accepted")
+
+
+def hostile_log():
+    """The bytes of a log that is not the one the verifier wrote."""
+    recs = list(good_log)
+    i = R.randrange(len(recs))
+    which = R.randrange(10)
+    if which == 0:
+        return mutate(good_blob)
+    if which == 1:
+        return good_blob[:R.randrange(len(good_blob))]                  # cut off anywhere, between batches too
+    if which == 2:
+        del recs[i]
+    elif which == 3:
+        j = R.randrange(len(recs))
+        recs[i], recs[j] = recs[j], recs[i]
+    elif which == 4:
+        recs.insert(R.randrange(len(recs) + 1), recs[i])
+    elif which == 5:
+        recs[i] = other_log[i]                                          # the same number, another log
+    elif which == 6:
+        recs.insert(R.randrange(len(recs) + 1), cbor.dumps(rand_cbor(1)))
+    else:
+        c = cbor.loads(cose.parse(recs[i]).payload)
+        edit = R.randrange(5)
+        if edit == 0 and c[7]:
+            c[7][R.randrange(len(c[7]))][2] = R.choice(["admit", "refuse", "revoke"])
+        elif edit == 1:
+            c[R.choice([3, 5, 6])] += R.choice([-1, 1])
+        elif edit == 2:
+            c[R.choice(list(c))] = rand_cbor(1)
+        elif edit == 3:
+            c[7] = c[7] + [{1: c[5], 2: "admit", 3: "evil"}]
+        else:
+            del c[R.choice(list(c))]
+        payload = cbor.dumps(c, sort=True)
+        if which == 7:      # the verifier's signature of the batch as it was
+            tag = cbor.loads(recs[i])
+            recs[i] = cose.assemble(tag.value[0], payload, tag.value[3])
+        elif which == 8:    # a key that is not the verifier's
+            recs[i] = cose.sign1(r_sk, r_pk, payload, typ=audit.TYP)
+        else:               # the verifier's key under a header that is not a batch's
+            recs[i] = hostile_header(v_pk, v_sk, cose.parse(recs[i]).payload, typ=audit.TYP)
+    return b"".join(recs)
+
+
+for _ in range(min(N, 1500)):
+    data = hostile_log()
+    if data == good_blob:
+        continue
+    ap["logs"] += 1
+    ours, theirs = readers(data, good_log[-1])
+    if ours:
+        ap["accepted_with_the_anchor"] += 1
+        ap_broken("a log that is not the one written was accepted with its anchor: %s..." % data.hex()[:120])
+    if theirs:
+        ap["checker_verified_with_the_anchor"] += 1
+        ap_broken("the standalone checker verified a log that is not the one written")
+    ours, theirs = readers(data, None)      # without the anchor a log cut off between batches is a log, for both
+    ap["a_shorter_log_without_the_anchor"] += ours
+    if theirs is not None and ours != theirs:
+        ap["readers_disagree"] += 1
+        ap_broken("the two readers disagree on a log (verifier %s, checker %s): %s..." % (ours, theirs, data.hex()[:120]))
+
+# 7b. policy files
+pol_state, pol_dir = tempfile.mkdtemp(), tempfile.mkdtemp()
+o_pk, o_sk = mldsa.keypair()                # the operator's policy-signing key
+with open(os.path.join(pol_state, signed_policy.SIGNERS_FILE), "wb") as f:
+    f.write(signed_policy.signers_file([("ops", o_pk)]))
+POLICY_JSON = json.dumps({"endpoints": [{"name": "dev", "kind": "aegis-pq", "host": "192.0.2.1", "port": 7444,
+                                         "pq_pub_file": "dev.pub", "allowed": []}]}).encode()
+OTHER_JSON = POLICY_JSON.replace(b"192.0.2.1", b"192.0.2.9")
+pol_file = os.path.join(pol_dir, "fleet.cose")
+ACCEPTED = 6                                # the version this verifier has accepted
+good_policy = signed_policy.sign(o_sk, o_pk, POLICY_JSON, ACCEPTED, "ops")
+with open(pol_file, "wb") as f:
+    f.write(good_policy)
+if fleet.load_policy(pol_file, pol_state, remember=True)[1] != POLICY_JSON or (
+        audit_checker and audit_checker.check_policy(good_policy, [o_pk], None, ACCEPTED)["version"] != ACCEPTED):
+    ap_broken("the control (a signed policy) was not loaded")
+good_pclaims = cbor.loads(cose.parse(good_policy, signed_policy.MAX_SIGNED).payload)
+WRONG = {1: lambda: rand_cbor(1), 2: lambda: R.choice([0, -1, "7", None, True, [7], 1 << 60]),
+         3: lambda: R.choice(["now", -5, None, 1 << 41]),
+         4: lambda: R.choice([b"", b"{", b"[]", b"{}", "text", 5, json.dumps(rand_json()).encode(), POLICY_JSON[:-1],
+                              b'{"endpoints": [], "endpoints": []}', bytes(R.randrange(256) for _ in range(40))]),
+         5: lambda: R.choice([5, "", "x" * 65, None, b"ops"]), 6: lambda: R.choice(["", 7, "y" * 65, None])}
+
+
+def hostile_policy():
+    """A policy file that this verifier must not run from."""
+    which = R.randrange(8)
+    if which == 0:
+        return mutate(good_policy)
+    if which == 1:          # somebody else's key; the verifier's own identity
+        sk, pk = R.choice([(r_sk, r_pk), (v_sk, v_pk)])
+        return signed_policy.sign(sk, pk, POLICY_JSON, ACCEPTED + 1, "ops")
+    if which == 2:          # an older version, or another policy under the accepted one
+        version = R.randrange(1, ACCEPTED + 1)
+        return signed_policy.sign(o_sk, o_pk, OTHER_JSON if version == ACCEPTED or R.random() < 0.5 else POLICY_JSON,
+                                  version, "ops")
+    c = {**good_pclaims, 2: ACCEPTED + 1}
+    if which == 3:          # the signer's signature under another typ
+        return cose.sign1(o_sk, o_pk, cbor.dumps(c, sort=True), typ=R.choice([cose.TYP_EAT_CWT, audit.TYP, "", "x"]))
+    if which == 4:          # ... or a header that is not the profile's
+        return hostile_header(o_pk, o_sk, cbor.dumps(c, sort=True), typ=signed_policy.TYP)
+    if which == 5:
+        k = R.choice(list(WRONG))
+        c[k] = WRONG[k]()
+        if c[k] is None and k != 6:
+            del c[k]
+        elif k == 1 and c[k] == signed_policy.FORMAT:
+            c[k] = 1
+    elif which == 6:
+        c[R.choice([0, 7, 8, -1, "x", 265])] = rand_cbor(1)
+    else:                   # the claims in another order of the map
+        return cose.sign1(o_sk, o_pk, cbor.dumps(dict(reversed(list(c.items())))), typ=signed_policy.TYP)
+    return cose.sign1(o_sk, o_pk, cbor.dumps(c, sort=True), typ=signed_policy.TYP)
+
+
+for _ in range(min(N, 1500)):
+    data = hostile_policy()
+    if data == good_policy:
+        continue
+    ap["policies"] += 1
+    with open(pol_file, "wb") as f:
+        f.write(data)
+    try:
+        fleet.load_policy(pol_file, pol_state, remember=True)
+        ap["policy_loaded"] += 1
+        ap_broken("a policy file that is not an accepted signed policy was loaded: %s..." % data.hex()[:160])
+    except fleet.PolicyRefused:
+        pass
+    except Exception as e:  # noqa: BLE001
+        ap["policy_raised_other_than_PolicyRefused"] += 1
+        ap_broken("load_policy raised %r" % (e,))
+    if audit_checker is not None:
+        try:
+            audit_checker.check_policy(data, [o_pk], None, ACCEPTED + 1 if data[:1] == b"\xd2" else None)
+            # the checker knows no counter: told the version this verifier has reached, it must refuse what the
+            # verifier refuses, unless that is a new version the verifier would also take
+            try:
+                signed_policy.check_version(signed_policy.open_signed(
+                    data, signed_policy.load_signers(os.path.join(pol_state, signed_policy.SIGNERS_FILE))["keys"]),
+                    signed_policy.last_version(pol_state))
+            except ValueError:
+                ap["checker_verified_policy"] += 1
+                ap_broken("the standalone checker verified a policy the verifier refuses: %s..." % data.hex()[:160])
+        except Exception:  # noqa: BLE001
+            pass
+if signed_policy.last_version(pol_state)["version"] != ACCEPTED:
+    ap_broken("a hostile policy moved the verifier's version counter")
+
+# 7c. the audit trail fed verdicts that hold anything
+trail_state = tempfile.mkdtemp()
+with open(os.path.join(trail_state, "identity.json"), "w") as f:
+    json.dump({"body": {"v": 1, "type": "identity", "pk": v_pk.hex()}}, f)
+with open(os.path.join(trail_state, "identity.sk"), "wb") as f:
+    f.write(v_sk)
+trail = fleet.AuditTrail(trail_state, fleet.AUDIT_SETTINGS, promise=False, start={"cmd": "fuzz"})
+VERDICT_KEYS = ("endpoint", "kind", "time", "admitted", "reasons", "measurements", "device_pk_sha256", "enrolment",
+                "trust", "endorsement", "quote", "attestation_result", "warning", "credential", "enforcement",
+                "session_binding")
+with contextlib.redirect_stderr(io.StringIO()):
+    for i in range(min(N, 800)):
+        v = {k: rand_cbor() for k in R.sample(VERDICT_KEYS, R.randrange(len(VERDICT_KEYS) + 1))}
+        if R.random() < 0.5:
+            v["endpoint"] = R.choice(["dev", "dev2", "x" * 200, "../../etc/passwd", "\ud800"])
+        ap["hostile_verdicts"] += 1
+        try:
+            trail.decision(v, {k: rand_cbor() for k in R.sample(["stage", "format"], R.randrange(3))})
+            if i % 7 == 0:
+                trail.session_change({"name": rand_cbor()}, R.choice([None, {"id": rand_cbor(), "expires": rand_cbor()}]),
+                                     rand_cbor())
+                trail.policy({"sha256": rand_cbor(), "signed": rand_cbor()}, R.choice([None, rand_cbor(), {"endpoints": rand_cbor()}]))
+                trail.policy_refused(rand_cbor())
+            if i % 40 == 39 and not trail.flush(final=True):
+                ap_broken("the trail wrote nothing for hostile verdicts")
+        except Exception as e:  # noqa: BLE001
+            ap["trail_raised"] += 1
+            ap_broken("the audit trail raised %r on a hostile verdict" % (e,))
+    trail.flush(final=True)
+try:
+    rep = audit.verify(os.path.join(trail_state, "audit"), [v_pk], with_entries=True)
+    ap["trail_entries"] = len(rep["entries"])
+    if ap["trail_entries"] < ap["hostile_verdicts"] // 4:
+        ap_broken("the trail lost entries (%d of %d verdicts)" % (ap["trail_entries"], ap["hostile_verdicts"]))
+    if audit_checker is not None:
+        theirs = audit_checker.check_log([os.path.join(trail_state, "audit")], [v_pk], with_entries=True)
+        if theirs["entries"] != json.loads(json.dumps(fleet._jsonable(rep["entries"]))):
+            ap_broken("the two readers read different entries from the log of hostile verdicts")
+except Exception as e:  # noqa: BLE001
+    ap_broken("the log written from hostile verdicts does not verify: %r" % (e,))
+
 print(json.dumps({"token_parser": token_result, "aegisd_service": service_result,
                   "hostile_endpoint": endpoint_result, "one_transcript": transcript_result,
-                  "endorsed_enrolment": endorsement_result, "standard_evidence": std, "broken": broken},
+                  "endorsed_enrolment": endorsement_result, "standard_evidence": std, "audit_and_policy": ap,
+                  "broken": broken},
                  indent=1))
 sys.exit(1 if broken else 0)

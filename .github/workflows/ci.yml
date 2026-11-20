@@ -18,7 +18,8 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/pip install -q cryptography pytest requests pyyaml pillow pycryptodome tpm2-pytss
-          # the standalone evidence checker's libraries (tools/verify_evidence.py, docs/evidence-format.md); pycose
+          # the standalone checkers' libraries (tools/verify_evidence.py, docs/evidence-format.md;
+          # tools/verify_audit.py, docs/audit-and-policy.md); pycose
           # 1.1.0 does not work with cbor2 6. Without them its tests would be skipped, so their presence is checked.
           .venv/bin/pip install -q pycose==1.1.0 'cbor2<6'
           .venv/bin/python -c "import pycose, cbor2; from cryptography.hazmat.primitives.asymmetric import mldsa"
@@ -76,6 +77,12 @@ jobs:
           .venv/bin/python -m unittest -v tests.host.test_evidence_format.Pack tests.host.test_sdk_eat > $RUNNER_TEMP/evidence.log 2>&1 || { cat $RUNNER_TEMP/evidence.log; exit 1; }
           tail -n 4 $RUNNER_TEMP/evidence.log
           if grep -q skipped $RUNNER_TEMP/evidence.log; then echo "a test of the standalone checker was skipped"; exit 1; fi
+
+      - name: Standalone checker of the audit log and of a signed policy (third-party libraries only; no skips)
+        run: |
+          .venv/bin/python -m unittest -v tests.host.test_audit_policy.Checker > $RUNNER_TEMP/audit.log 2>&1 || { cat $RUNNER_TEMP/audit.log; exit 1; }
+          tail -n 4 $RUNNER_TEMP/audit.log
+          if grep -q skipped $RUNNER_TEMP/audit.log; then echo "a test of the standalone checker was skipped"; exit 1; fi
 
       - name: Enforcement ruleset (three network namespaces, real hook and ruleset)
         run: sudo tests/host/test_enforcement.sh
