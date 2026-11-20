@@ -31,3 +31,5 @@ c7004ac26b8ffa5371d325bfd3fdea9903ca94a4cc56d3682548e2d7f0e7c181  endpoints/stm3
 d29843fdbd8338f1762a188ad9bd9c93c618a429bbfa013cea3be6eb743b7759  endpoints/stm32h573/artifacts/prover-ns-0.6.0-sstack.bin
 91624d77c1a6ec60957f9e92eef929bb5d43cafe0a18d1460565358607ae8a09  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix-sstack-expiry.hex
 755d6869656e9cde92b5b148e09577d203cf38a3e1ae233f0a81db1ee027ff75  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix-sstack-expiry.bin
+7246ae397b15c5022581f4aaa5683b00145d7ca98d5ddd3bb2892c0baba289a2  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix-sstack-expiry-freshkem.hex
+9320aa53cf829e7453d0c96e0328ba3327609038b769ffd3f6a83b0c8b43157e  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix-sstack-expiry-freshkem.bin

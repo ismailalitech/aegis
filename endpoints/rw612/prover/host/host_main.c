@@ -22,9 +22,21 @@
 static const char *image_path, *image2_path;
 static time_t t0;
 
+/* With AEGIS_TEST_STALE_RNG in the environment (tests/host/test_reset_replay_check.py and nothing else): the bytes of
+ * a generator that starts again at every start of the program, to show what the reset-and-replay check sees on an
+ * endpoint whose keys are not new after a reset. */
 static int host_random(uint8_t *out, size_t n)
 {
-	return getrandom(out, n, 0) == (ssize_t)n ? 0 : -1;
+	static uint64_t x = 0x9e3779b97f4a7c15ull;
+
+	if (!getenv("AEGIS_TEST_STALE_RNG")) {
+		return getrandom(out, n, 0) == (ssize_t)n ? 0 : -1;
+	}
+	for (size_t i = 0; i < n; i++) {
+		x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+		out[i] = (uint8_t)(x >> 24);
+	}
+	return 0;
 }
 
 static void host_measure(uint8_t out[32], size_t *len)

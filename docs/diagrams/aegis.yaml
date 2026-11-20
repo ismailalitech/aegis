@@ -49,7 +49,7 @@
   steps: [c1, e0, c2, e1, c3, e2, ok, e3, bad, e4, c4, e5, c5, e6, c6]
 
 - id: key-derivation
-  alt: "How the endpoint's keys are made. The hardware-unique key, which software cannot read, is used by the SAES peripheral to AES-encrypt a fixed 32-byte label; the result is a seed, wiped after use, for the ML-DSA-65 key that signs quotes. A second secret from the same hardware key, with the gateway's nonce and a counter, seeds a fresh ML-KEM-768 key pair for each exchange, which yields the session key held in secure RAM."
+  alt: "How the endpoint's keys are made. The hardware-unique key, which software cannot read, is used by the SAES peripheral to AES-encrypt a fixed 32-byte label; the result is a seed, wiped after use, for the ML-DSA-65 key that signs quotes. A second secret from the same hardware key, with 32 bytes from the random number generator, the gateway's nonce and a counter, seeds a fresh ML-KEM-768 key pair for each exchange, which yields the session key held in secure RAM."
   width: 900
   height: 330
   nodes:
@@ -58,7 +58,7 @@
     seed: {x: 510, y: 40,  w: 170, h: 66, kind: plain, title: "Seed", sub: "wiped after key\ngeneration"}
     dsa:  {x: 720, y: 40,  w: 160, h: 66, kind: good,  title: "ML-DSA-65 key", sub: "signs the quotes"}
     root: {x: 260, y: 230, w: 200, h: 66, kind: hart,  title: "Second secret", sub: "prov_root, also from\nthe DHUK"}
-    kem:  {x: 510, y: 230, w: 170, h: 66, kind: plain, title: "ML-KEM-768 pair", sub: "fresh per exchange\nnonce + counter"}
+    kem:  {x: 510, y: 230, w: 170, h: 66, kind: plain, title: "ML-KEM-768 pair", sub: "per exchange: random\nbytes, nonce, counter"}
     sess: {x: 720, y: 230, w: 160, h: 66, kind: good,  title: "Session key", sub: "decapsulated, kept in\nsecure RAM only"}
   edges:
     - {from: dhuk.right@0.3, to: saes.left}
