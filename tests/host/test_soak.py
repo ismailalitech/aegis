@@ -452,6 +452,69 @@ class Runs(unittest.TestCase):
             self.assertEqual(reg2.runs[0], "middle")        # then it runs again
             self.assertIn("from before the restart ended", read(d, "events.log"))
 
+    def test_hung_regression_times_out(self):
+        with tempfile.TemporaryDirectory() as d:
+            clock = soak.FakeClock(T0)
+            cfg = soak.make_cfg(hours=8, absent=["stm32h573-dk"])
+            gw = soak.FakeGateway(clock, cfg["endpoints"])
+            reg = soak.FakeRegression(clock, gw, hang=("middle",))
+            s = soak.Soak(d, cfg, gw, clock, reg)
+            self.assertFalse(s.loop())                      # ends: the soak does not wait for it forever
+            self.assertEqual(s.st["done"]["middle"]["rc"], "timeout")
+            self.assertLessEqual(s.st["done"]["middle"]["min"], 46)
+            self.assertIn("regression:middle", s.st["failures"])
+            self.assertEqual(len(reg.killed), 1)
+            self.assertEqual(sorted(s.st["done"]), ["end", "middle", "start"])
+        with tempfile.TemporaryDirectory() as d:
+            clock = soak.FakeClock(T0)
+            cfg = soak.make_cfg(hours=8, absent=["stm32h573-dk"], expiry_every_h=2, expiry_timeout_min=10)
+            gw = soak.FakeGateway(clock, cfg["endpoints"])
+            reg = soak.FakeRegression(clock, gw, hang=("expiry-1",))
+            s = soak.Soak(d, cfg, gw, clock, reg)
+            self.assertFalse(s.loop())
+            self.assertLessEqual(s.st["done"]["expiry-1"]["min"], 11)
+
+    def excuse_soak(self, d):
+        clock = soak.FakeClock(T0)
+        cfg = soak.make_cfg(hours=8, absent=["stm32h573-dk"], interval_min=5)
+        gw = soak.FakeGateway(clock, cfg["endpoints"])
+        s = soak.Soak(d, cfg, gw, clock, soak.FakeRegression(clock, gw))
+        s.st["planned"].append([T0, T0 + 3600, "regression", "regression middle"])
+        return s
+
+    def test_regression_window_excuses_only_its_events(self):
+        F = soak.finding
+        with tempfile.TemporaryDirectory() as d:
+            s = self.excuse_soak(d)
+            s.apply([F("FAIL", "aegis-fleet", "aegis-fleet:pid:900", "new process", once=True),
+                     F("FAIL", "frdm-rw612", "frdm-rw612:replaced:abc", "replaced", once=True),
+                     F("FAIL", "zynqmp-te0808", "zynqmp-te0808:quarantined:1", "q", once=True),
+                     F("FAIL", "aegis-fleet", "aegis-fleet:inactive", "inactive"),
+                     F("FAIL", "frdm-rw612", "frdm-rw612:silent", "silent")], T0 + 300)
+            self.assertEqual(s.st["failures"], {})
+            # never excused: an SSH hang, aegisd, systemd restarting the fleet, a bad journal line
+            s.apply([F("FAIL", "gateway", "ssh:hang", "hang"),
+                     F("FAIL", "aegisd", "aegisd:inactive", "inactive"),
+                     F("FAIL", "aegis-fleet", "aegis-fleet:nrestarts:1", "restarted itself", once=True),
+                     F("FAIL", "aegis-fleet", "journal:bad:5", "Traceback", once=True)], T0 + 600)
+            self.assertEqual(sorted(s.st["failures"]), ["aegis-fleet:nrestarts", "aegisd:inactive",
+                                                        "journal:bad", "ssh:hang"])
+
+    def test_regression_gap_budget(self):
+        F = soak.finding
+        with tempfile.TemporaryDirectory() as d:
+            s = self.excuse_soak(d)
+            fs = [F("FAIL", "aegis-fleet", "aegis-fleet:inactive", "inactive"),
+                  F("FAIL", "frdm-rw612", "frdm-rw612:silent", "silent")]
+            for k in range(3):                              # 0, 5, 10 min: within the 600 s budget
+                s.apply(fs, T0 + 300 + k * 300)
+            self.assertEqual(s.st["failures"], {})
+            s.apply(fs, T0 + 300 + 3 * 300)                 # 15 min: longer than the expiry stage's stop
+            self.assertEqual(sorted(s.st["failures"]), ["aegis-fleet:inactive", "frdm-rw612:silent"])
+            s.apply([], T0 + 1800)                          # cleared, then a new short gap is excused again
+            s.apply(fs[:1], T0 + 2100)
+            self.assertEqual(s.st["open"]["aegis-fleet:inactive"], "EXPECTED")
+
     def test_garbled_answer_and_short_outage_do_not_fail(self):
         with tempfile.TemporaryDirectory() as d:
             passed, s = soak.simulate(d, hours=8, faults={"garble_at": T0 + 3600,
@@ -509,6 +572,58 @@ class Runner(unittest.TestCase):
             self.assertFalse(reg.kill_group(pgid))         # ignored SIGTERM: killed after the grace
             self.assertFalse(reg.alive(pgid))
             self.assertFalse(soak.RegressionRunner.alive(0))
+
+
+FAKE_SSH = r"""#!/bin/sh
+# records its arguments; answers like the gateway would, enough for tools/regression.sh
+printf '%s\n' "$*" | tr '\n' ' ' >> "$FAKE_SSH_LOG"; echo >> "$FAKE_SSH_LOG"
+cat > /dev/null
+case "$*" in
+    *"date +%s"*) date +%s ;;
+    *"fleet.py session"*)
+        n=$(cat "$FAKE_SSH_LOG.session" 2>/dev/null || echo 0); echo $((n+1)) > "$FAKE_SSH_LOG.session"
+        [ "$n" -ge "${FAKE_SESSION_FAILS:-0}" ] ;;
+    *) exit 0 ;;
+esac
+"""
+
+
+def run_regression(d, args, **env):
+    """tools/regression.sh copied into a tree of its own (no bench.env, no .venv) with a fake ssh first on PATH."""
+    import shutil
+    import subprocess
+    tree = os.path.join(d, "repo")
+    os.makedirs(os.path.join(tree, "tools"))
+    os.makedirs(os.path.join(tree, "tests", "board"))
+    shutil.copy(os.path.join(ROOT, "tools", "regression.sh"), os.path.join(tree, "tools"))
+    open(os.path.join(tree, "tests", "board", "expiry_check.py"), "w").close()
+    bindir = os.path.join(d, "bin")
+    os.makedirs(bindir)
+    with open(os.path.join(bindir, "ssh"), "w") as fh:
+        fh.write(FAKE_SSH)
+    os.chmod(os.path.join(bindir, "ssh"), 0o755)
+    log = os.path.join(d, "ssh.log")
+    e = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"], FAKE_SSH_LOG=log, GATEWAY="192.0.2.10",
+             STM32="192.0.2.21:7444")
+    for k in ("AEGIS_SOAK", "AEGIS_STM32_OVERRIDE", "EXPIRY_ENDPOINTS", "AEGIS_REGRESSION_EXPIRY"):
+        e.pop(k, None)
+    e.update(env)
+    p = subprocess.run(["sh", os.path.join(tree, "tools", "regression.sh")] + args, env=e, capture_output=True,
+                       stdin=subprocess.DEVNULL, text=True, timeout=120)
+    calls = read(d, "ssh.log").splitlines() if os.path.exists(log) else []
+    return p, calls
+
+
+class RegressionScript(unittest.TestCase):
+    def test_expiry_ssh_calls_give_up_on_a_dead_link(self):
+        with tempfile.TemporaryDirectory() as d:
+            p, calls = run_regression(d, ["--expiry-only"], EXPIRY_ENDPOINTS="frdm-rw612 zynqmp-te0808")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn("PASS endpoint-expiry", p.stdout)
+            self.assertGreaterEqual(len(calls), 6)
+            for c in calls:
+                for opt in ("BatchMode=yes", "ConnectTimeout=10", "ServerAliveInterval=15", "ServerAliveCountMax=3"):
+                    self.assertIn(opt, c)
 
 
 class BenchWatch(unittest.TestCase):

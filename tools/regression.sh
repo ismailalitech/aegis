@@ -41,27 +41,29 @@ stage() {
     if "$@" > "$OUT/$name.log" 2>&1; then echo "PASS $name"; pass=$((pass+1)); else echo "FAIL $name (see $OUT/$name.log)"; fail=$((fail+1)); fi
 }
 
+# The expiry stage's SSH calls give up on a dead link instead of hanging (and the soak's regression timeout with it).
+SSHX="-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
 # endpoint-expiry: the fleet service would provision again in the middle of a check, so it is stopped for the stage.
 # The EXIT trap (reached from Ctrl-C and kill through the INT/TERM/HUP traps) starts it again; a timer on the gateway
 # starts it after 15 minutes should this PC or the link go away first. fleet_start prints the gateway's clock.
 fleet_start() {
-    ssh -o BatchMode=yes -o ConnectTimeout=10 "$B" \
+    ssh $SSHX "$B" \
         'date +%s; systemctl start aegis-fleet; systemctl stop aegis-expiry-guard.timer 2>/dev/null; true'
 }
 endpoint_expiry() {
-    names=${EXPIRY_ENDPOINTS:-$(ssh -o BatchMode=yes "$B" \
+    names=${EXPIRY_ENDPOINTS:-$(ssh $SSHX "$B" \
         'cd /var/lib/aegis/credentials && for f in *.session; do [ -f "$f" ] && echo "${f%.session}"; done')}
     [ -n "$names" ] || { echo "no endpoint holds a session"; return 1; }
     echo "endpoints:" $names
     trap fleet_start EXIT
     trap 'exit 130' INT TERM HUP
-    ssh -o BatchMode=yes "$B" 'systemctl stop aegis-expiry-guard.timer 2>/dev/null; systemctl reset-failed aegis-expiry-guard.service 2>/dev/null
+    ssh $SSHX "$B" 'systemctl stop aegis-expiry-guard.timer 2>/dev/null; systemctl reset-failed aegis-expiry-guard.service 2>/dev/null
         systemd-run --quiet --unit=aegis-expiry-guard --on-active=900 systemctl start aegis-fleet
         systemctl stop aegis-fleet && echo "aegis-fleet stopped"' || return 1
     rc=0
     for n in $names; do
         echo "== $n"
-        ssh -o BatchMode=yes "$B" "python3 - /root/aegis/gateway/policy/fleet.json $n" < tests/board/expiry_check.py \
+        ssh $SSHX "$B" "python3 - /root/aegis/gateway/policy/fleet.json $n" < tests/board/expiry_check.py \
             || { echo "FAIL $n"; rc=1; }
     done
     started=$(fleet_start)
@@ -71,14 +73,14 @@ endpoint_expiry() {
     case $since in ''|*[!0-9]*) echo "could not start aegis-fleet"; return 1 ;; esac
     deadline=$(( $(date +%s) + 240 ))
     for n in $names; do
-        until ssh -o BatchMode=yes "$B" \
+        until ssh $SSHX "$B" \
                 "journalctl -u aegis-fleet --since @$since -o cat --no-pager | grep -qF ' $n ADMITTED'"; do
             [ "$(date +%s)" -lt "$deadline" ] || { echo "FAIL $n not ADMITTED within 240 s of the restart"; rc=1; break; }
             sleep 5
         done
     done
     echo "== gateway journal since the restart"
-    ssh -o BatchMode=yes "$B" "journalctl -u aegis-fleet --since @$since -o cat --no-pager" | grep -F ' ADMITTED'
+    ssh $SSHX "$B" "journalctl -u aegis-fleet --since @$since -o cat --no-pager" | grep -F ' ADMITTED'
     return $rc
 }
 

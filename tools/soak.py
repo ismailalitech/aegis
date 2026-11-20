@@ -333,7 +333,15 @@ BOUNDS = {
     "root_avail_min_frac": 0.10,
     "mem_avail_min_kb": 65536,
     "fds_max": 256,
+    "regression_gap_s": 600,      # longest gap a regression's expiry stage excuses: its ~3 min stop + 240 s readmission
 }
+
+# What a regression's window excuses (Soak.excused): events of its stages, and gaps for at most regression_gap_s.
+REG_FLEET_EVENTS = {"pid"}                                    # the expiry stage stops and starts aegis-fleet
+REG_EP_EVENTS = {"replaced", "quarantined"}                   # sessions ended and issued again, the expiry check
+REG_FLEET_GAPS = {"inactive", "quiet", "stale"}
+REG_EP_GAPS = {"silent", "nosession", "hbstop", "overdue", "expired", "ttllow"}
+DEFAULT_TIMEOUT_MIN = {"regression_timeout_min": 45.0, "expiry_timeout_min": 20.0}
 
 TRENDS = [  # (column, bound key, sign: +1 growth is bad, -1 decline is bad)
     ("fleet_rss_kb", "fleet_rss_14d_kb", 1),
@@ -692,6 +700,9 @@ class Soak:
             with open(self.state_path) as fh:
                 self.st = json.load(fh)
             self.cfg = self.st["cfg"]
+            for w in self.st["planned"]:          # a state from before regression windows had their own item
+                if w[2] == "*" and w[3].startswith("regression "):
+                    w[2] = "regression"
             self.event(None, "INFO", "runner", "soak runner resumed (%d s after the last sample)" % (
                 clock.now() - (self.st.get("last_pc") or clock.now())))
             run = self.st.get("running")
@@ -745,10 +756,35 @@ class Soak:
             json.dump(self.st, fh, indent=1)
         os.replace(tmp, self.state_path)
 
-    def planned(self, item, t):
-        for t0, t1, it, _ in self.st["planned"]:
-            if t0 <= t <= t1 and it in ("*", item):
+    def windows(self, t):
+        """The planned windows open at t (a regression's included)."""
+        return [w for w in self.st["planned"] if w[0] <= t <= w[1]]
+
+    def excused(self, f, t):
+        """Whether a planned window excuses the finding f seen at t. A window announced with `plan` excuses every
+        failure of its item (or of all, for *). A regression's window excuses only what its stages do: the
+        expiry stage's new aegis-fleet process, sessions replaced and quarantines of the endpoints under test,
+        and, for at most bounds regression_gap_s (the stage's 3 min stop and the 240 s readmission), the gaps
+        that stop leaves: aegis-fleet inactive, its journal quiet, its state file stale, an endpoint silent,
+        without a session, with its counter stopped or its credential overdue. Never an SSH hang, aegisd, or a
+        gap that lasts longer."""
+        for _, _, it, _ in self.windows(t):
+            if it == "regression":
+                if self.regression_excuses(f, t):
+                    return True
+            elif it in ("*", f["item"]):
                 return True
+        return False
+
+    def regression_excuses(self, f, t):
+        parts = f["key"].split(":")
+        kind = parts[1] if len(parts) > 1 else ""
+        eps = self.cfg["endpoints"]
+        if (f["item"] == "aegis-fleet" and kind in REG_FLEET_EVENTS) or (f["item"] in eps and kind in REG_EP_EVENTS):
+            return True
+        if (f["item"] == "aegis-fleet" and kind in REG_FLEET_GAPS) or (f["item"] in eps and kind in REG_EP_GAPS):
+            since = self.st.setdefault("since", {}).get(f["key"], t)
+            return t - since <= self.cfg["bounds"].get("regression_gap_s", BOUNDS["regression_gap_s"])
         return False
 
     def load_plans(self):
@@ -766,11 +802,14 @@ class Soak:
     def apply(self, findings, t):
         """Log findings: conditions when they start and clear, events every time; planned windows excuse."""
         seen = set()
+        since = self.st.setdefault("since", {})
         for f in findings:
-            level = f["level"]
-            if level in ("FAIL", "WARN") and not f["always"] and self.planned(f["item"], t):
-                level = "EXPECTED"
             key = f["key"]
+            if not f["once"]:
+                since.setdefault(key, t)       # when the condition was first seen (a regression's gap budget)
+            level = f["level"]
+            if level in ("FAIL", "WARN") and not f["always"] and self.excused(f, t):
+                level = "EXPECTED"
             if not f["once"]:
                 seen.add(key)
                 if self.st["open"].get(key) == level:
@@ -787,6 +826,8 @@ class Soak:
             if self.st["open"][key] in ("FAIL", "WARN", "EXPECTED"):
                 self.event(t, "CLEARED", key.split(":")[0], key)
             del self.st["open"][key]
+        for key in [k for k in since if k not in seen]:
+            del since[key]
 
     # -- one sample --
 
@@ -802,7 +843,7 @@ class Soak:
         cur = parse_answer(text) if err is None else None
         self.st["samples"] += 1
         self.load_plans()
-        row = {"pc_time": round(t), "ok": 0, "planned": int(self.planned("*", t))}
+        row = {"pc_time": round(t), "ok": 0, "planned": int(bool(self.windows(t)))}
         if cur is None or not cur["complete"]:
             self.st["ssh_fail"] += 1
             self.st["ssh_fail_since"] = self.st["ssh_fail_since"] or t
@@ -912,21 +953,36 @@ class Soak:
 
     # -- the regression --
 
+    def timeout_s(self, stage):
+        key = "expiry_timeout_min" if stage.startswith("expiry") else "regression_timeout_min"
+        return int(self.cfg.get(key, DEFAULT_TIMEOUT_MIN[key]) * 60)
+
     def regression_step(self):
         t = self.clock.now()
         run = self.st["running"]
+        limit = self.timeout_s(run["stage"]) if run else None
         if run and run.get("orphan"):
             if self.reg.alive(run["pgid"]):
+                if t - run["t"] <= limit:
+                    return
+                self.reg.kill_group(run["pgid"])
+            else:
+                self.event(t, "INFO", "regression", "%s from before the restart ended; it runs again" % run["stage"])
+                self.st["running"] = None
+                self.save()
                 return
-            self.event(t, "INFO", "regression", "%s from before the restart ended; it runs again" % run["stage"])
-            self.st["running"] = None
-            self.save()
-            return
         if run:
-            rc = self.reg.poll()
-            if rc is None:
+            rc = None if run.get("orphan") else self.reg.poll()
+            if rc is None and t - run["t"] <= limit:
                 return
             stage = run["stage"]
+            if rc is None:
+                # hung (an SSH call that never returns, a stage that never ends): its process group is stopped
+                # (SIGTERM: the restart trap starts aegis-fleet again; SIGKILL after the grace) and it fails
+                if not run.get("orphan"):
+                    self.reg.stop()
+                rc = "timeout"
+                self.event(t, "WARN", "regression", "%s still running after %d min: stopped" % (stage, limit // 60))
             self.st["done"][stage] = {"rc": rc, "start": iso(run["t"]), "end": iso(t), "min": round((t - run["t"]) / 60, 1)}
             for w in self.st["planned"]:
                 if w[3] == "regression " + stage:
@@ -943,7 +999,7 @@ class Soak:
             if stage not in self.st["done"] and t >= when:
                 pid = self.reg.start(stage)
                 self.st["running"] = {"stage": stage, "t": t, "pid": pid, "pgid": pid}
-                self.st["planned"].append([t, t + 6 * 3600, "*", "regression " + stage])
+                self.st["planned"].append([t, t + self.timeout_s(stage) + 300, "regression", "regression " + stage])
                 self.event(t, "INFO", "regression", "%s started (pid %s)" % (stage, pid))
                 self.save()
                 return
@@ -1245,12 +1301,14 @@ def make_cfg(a=None, **kw):
     cfg = {"gateway": "192.0.2.10", "hours": 24.0, "interval_min": 5.0, "endpoints": ENDPOINTS.split(","),
            "absent": ABSENT.split(","), "cred_lifetime": 3600, "expiry_every_h": 0.0, "regression": True,
            "console_dir": None, "bounds": dict(BOUNDS)}
+    cfg.update(DEFAULT_TIMEOUT_MIN)
     if a is not None:
         cfg.update({"gateway": a.gateway, "hours": a.hours, "interval_min": a.interval_min,
                     "endpoints": [e for e in a.endpoints.split(",") if e],
                     "absent": [e for e in a.absent.split(",") if e], "cred_lifetime": a.cred_lifetime,
                     "expiry_every_h": a.expiry_every_h, "regression": not a.no_regression,
-                    "console_dir": a.console_dir})
+                    "console_dir": a.console_dir, "regression_timeout_min": a.regression_timeout_min,
+                    "expiry_timeout_min": a.expiry_timeout_min})
         for kv in a.bound or []:
             k, _, v = kv.partition("=")
             if k not in BOUNDS or to_float(v) is None:
@@ -1319,6 +1377,10 @@ def main(argv=None):
                    help="the STM32 the regression's device stages use (default $STM32_2, else $STM32)")
     r.add_argument("--regression-cmd", default="tools/regression.sh --board --with-expiry")
     r.add_argument("--expiry-cmd", default="tools/regression.sh --expiry-only")
+    r.add_argument("--regression-timeout-min", type=float, default=DEFAULT_TIMEOUT_MIN["regression_timeout_min"],
+                   help="a full regression still running after this is stopped and fails")
+    r.add_argument("--expiry-timeout-min", type=float, default=DEFAULT_TIMEOUT_MIN["expiry_timeout_min"],
+                   help="the same for an extra expiry round")
     r.add_argument("--no-regression", action="store_true")
     r.add_argument("--console-dir", help="tools/console_logger.py's directory: panics there fail the soak")
     r.add_argument("--commands", help="JSON {section: template} replacing or adding sampling commands")
@@ -1360,7 +1422,7 @@ def main(argv=None):
         sys.exit("no STM32 for the regression: --stm32 or STM32_2 / STM32 in the environment (bench.env)")
     # bench.env, which regression.sh reads, would set STM32 back to board 1: AEGIS_STM32_OVERRIDE wins over it
     env = {"GATEWAY": a.gateway or "", "AEGIS_STM32_OVERRIDE": a.stm32 or "",
-           "EXPIRY_ENDPOINTS": " ".join(cfg["endpoints"])}
+           "EXPIRY_ENDPOINTS": " ".join(cfg["endpoints"]), "AEGIS_SOAK": "1"}
     if a.dry_run:
         print("# sampling script (ssh root@%s sh -s), every %g min for %g h\n" % (a.gateway, a.interval_min, a.hours))
         print(build_script(cmds, int(time.time()) - 600))
