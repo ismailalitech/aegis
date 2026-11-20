@@ -22,6 +22,16 @@
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO" || exit 2
+# The container's machine id (aegisd's Linux identity is bound to one): the image carries none, only a link from
+# /etc/machine-id to /tmp/machine-id (container/Dockerfile), so each container makes its own, random, when it starts.
+# On a PC, which has a machine id, this does nothing.
+if [ -L /etc/machine-id ] && ! [ -s /etc/machine-id ]; then
+    mid=$(readlink /etc/machine-id)
+    case $mid in
+        /tmp/*) { od -An -N16 -tx1 /dev/urandom | tr -d ' \n'; echo; } > "$mid" ||
+                    echo "cannot write $mid: the gateway-quote stage will fail" >&2 ;;
+    esac
+fi
 ALL="release-hygiene sdk-golden sdk-api-reference simulated-device gateway-quote host-tests redteam-host"
 QUICK="release-hygiene sdk-golden sdk-api-reference simulated-device gateway-quote"
 usage() { sed -n '4,22p' "$0" | cut -c3-; }
