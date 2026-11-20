@@ -1,0 +1,25 @@
+# Aegis fleet verifier on an ordinary Linux host (a PC or server), as a systemd USER unit: attests every endpoint in
+# the policy every 30 s, observe-only (no enforce_cmd is run), credentials only for endpoints whose image pins this
+# host's key (policy "verifier_pin_sha256"). See docs/pc-verifier.md.
+#   install -D -m 0644 gateway/systemd/aegis-fleet-pc.service ~/.config/systemd/user/aegis-fleet-pc.service
+#   systemctl --user daemon-reload && systemctl --user start aegis-fleet-pc
+#   journalctl --user -u aegis-fleet-pc -f          (loginctl enable-linger $USER to keep it running logged out)
+# Paths assume the checkout in ~/aegis with its .venv, the policy in ~/.config/aegis/fleet.pc.json and the state in
+# ~/.local/state/aegis; edit them here if yours differ. Do not run it against endpoints the gateway's aegis-fleet is
+# polling at the same time unless both run a fleet.py with the busy retry (docs/pc-verifier.md, "Two verifiers").
+[Unit]
+Description=Aegis fleet verifier (Linux host, observe-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/aegis/gateway/aegisd
+Environment=AEGIS_STATE_DIR=%h/.local/state/aegis
+ExecStart=%h/aegis/.venv/bin/python %h/aegis/gateway/aegisd/fleet.py watch %h/.config/aegis/fleet.pc.json --platform linux --interval 30
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

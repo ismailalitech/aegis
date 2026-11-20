@@ -40,6 +40,9 @@ Copy `bench.env.example` to `bench.env` and set your addresses. Then:
     tests/fuzz/run.sh                     # fuzz the RW612 partition's protocol code (STM32=1: the STM32 partition)
     tools/bench_watch.py --gateway <addr> # log when the gateway or an endpoint goes quiet (--once: one check)
 
+The verifier also runs on an ordinary Linux host instead of the gateway (`fleet.py --platform linux`, observe-only,
+attestation without credentials on the current images): `docs/pc-verifier.md`.
+
 ## Layout
 
 `gateway/` services and policy, `common/` wire formats and crypto glue, `host/` PC tools,

@@ -28,6 +28,13 @@ firewall rule), with AEGIS_ADMIT_TTL set to the seconds an admission may live
 without being refreshed by the next cycle (admit_ttl()). A hook that fails is
 reported in the verdict and in the journal line ("enforcement FAILED"). Without
 the hook the gateway only decides and records.
+
+The same loop runs on an ordinary Linux host (--platform linux, docs/pc-verifier.md). There it is observe-only (an
+"enforce_cmd" runs only with --enforce), keeps its state under the user's state directory instead of /var/lib/aegis,
+and issues credentials only to endpoints whose policy entry names this verifier's key in "verifier_pin_sha256"
+(the key the endpoint's firmware pins, tools/gen_gateway_pin.py): any other endpoint would refuse the credential, and
+the attempt would cancel a provisioning exchange the gateway may have in flight. Attestation needs no pin and
+touches no session state on the endpoint.
 """
 import argparse
 import json
@@ -66,17 +73,57 @@ CRED_LABEL = b"aegis-credential-v1"
 CRED_LIFETIME_S = 3600
 
 
+class EndpointBusy(ConnectionError):
+    """The endpoint reset or closed the connection before sending a single byte. The STM32 and RW612 provers serve one
+    connection at a time and reset a second one at once (tcp_abort in on_accept), so this is what a request sees while
+    another verifier is talking to the endpoint."""
+
+
+BUSY_RETRIES = 3            # attempts after the first, for requests that change nothing on the endpoint
+BUSY_BACKOFF_S = (0.4, 1.2)  # random pause before each retry, so two verifiers that collided do not collide again
+
+
+def _send_line(host, port, line, timeout, limit):
+    """One request line on a fresh connection; the first reply line. EndpointBusy if the endpoint reset the connection
+    or closed it without a byte."""
+    got = False
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            s.sendall(line + b"\n")
+            buf = b""
+            while b"\n" not in buf and len(buf) < limit:
+                chunk = s.recv(min(limit, 65536))
+                if not chunk:
+                    break
+                got = True
+                buf += chunk
+    except (ConnectionResetError, BrokenPipeError) as e:
+        if got:
+            raise
+        raise EndpointBusy("endpoint reset the connection (busy with another verifier?): %s" % e) from e
+    if not got:
+        raise EndpointBusy("endpoint closed the connection without a reply (busy with another verifier?)")
+    return buf.split(b"\n")[0].strip().decode(errors="replace")
+
+
+def _request(host, port, line, timeout, limit=16384, retry_busy=True):
+    """_send_line, retried while the endpoint is busy. Only for requests that are safe to repeat: a quote (fresh
+    challenge every time), the public key, the session id and the heartbeat (fresh nonce; its counter rises anyway).
+    A connection the endpoint resets at accept was never processed, so a retry is the first attempt it sees."""
+    import random
+    attempts = 1 + (BUSY_RETRIES if retry_busy else 0)
+    for i in range(attempts):
+        try:
+            return _send_line(host, port, line.encode() if isinstance(line, str) else line, timeout, limit)
+        except EndpointBusy:
+            if i == attempts - 1:
+                raise
+            time.sleep(random.uniform(*BUSY_BACKOFF_S))
+
+
 def request_token(host, port, challenge, timeout):
-    with socket.create_connection((host, port), timeout=timeout) as s:
-        s.settimeout(timeout)
-        s.sendall(b"CHAL " + challenge.hex().encode() + b"\n")
-        buf = b""
-        while b"\n" not in buf and len(buf) < 4096:
-            chunk = s.recv(4096)
-            if not chunk:
-                break
-            buf += chunk
-    line = buf.split(b"\n")[0].strip().decode(errors="replace")
+    line = _request(host, port, b"CHAL " + challenge.hex().encode(), timeout, limit=4096)
     parts = line.split()
     if len(parts) != 4 or parts[0] != "TOKEN" or parts[3] != "END":
         raise ValueError("no token in reply: %r" % line[:40])
@@ -86,22 +133,9 @@ def request_token(host, port, challenge, timeout):
     return tok
 
 
-def _read_line(s, limit=16384):
-    buf = b""
-    while b"\n" not in buf and len(buf) < limit:
-        chunk = s.recv(8192)
-        if not chunk:
-            break
-        buf += chunk
-    return buf.split(b"\n")[0].strip().decode(errors="replace")
-
-
 def request_pq(host, port, challenge, timeout):
     """Aegis PQ quote: returns (token, ML-DSA-65 signature)."""
-    with socket.create_connection((host, port), timeout=timeout) as s:
-        s.settimeout(timeout)
-        s.sendall(b"PQCHAL " + challenge.hex().encode() + b"\n")
-        line = _read_line(s)
+    line = _request(host, port, "PQCHAL " + challenge.hex(), timeout)
     p = line.split()
     if len(p) != 6 or p[0] != "PQTOKEN" or p[5] != "END":
         raise ValueError("no PQ quote in reply: %r" % line[:40])
@@ -112,10 +146,7 @@ def request_pq(host, port, challenge, timeout):
 
 
 def request_pq_key(host, port, timeout=10):
-    with socket.create_connection((host, port), timeout=timeout) as s:
-        s.settimeout(timeout)
-        s.sendall(b"PQKEY\n")
-        line = _read_line(s)
+    line = _request(host, port, "PQKEY", timeout)
     p = line.split()
     if len(p) != 4 or p[0] != "PQKEY" or p[3] != "END":
         raise ValueError("no PQ key in reply: %r" % line[:40])
@@ -126,10 +157,9 @@ def request_pq_key(host, port, timeout=10):
 
 
 def _exchange(host, port, line, timeout):
-    with socket.create_connection((host, port), timeout=timeout) as s:
-        s.settimeout(timeout)
-        s.sendall(line.encode() + b"\n")
-        return _read_line(s, limit=65536)
+    """One request, one attempt: KEM provisioning steps are never repeated (a PQKEMINIT replaces the pending
+    exchange). EndpointBusy if the endpoint answered nothing."""
+    return _request(host, port, line, timeout, limit=65536, retry_busy=False)
 
 
 def _sha3(*parts):
@@ -205,7 +235,7 @@ def heartbeat(ep, session_key, timeout=10.0):
     heartbeat_tag(ep["heartbeat_mac"], ...)."""
     import hmac
     nonce = secrets.token_bytes(32)
-    p = _exchange(ep["host"], int(ep["port"]), "PQHB " + nonce.hex(), timeout).split()
+    p = _request(ep["host"], int(ep["port"]), "PQHB " + nonce.hex(), timeout, limit=65536).split()
     if len(p) != 5 or p[0] != "PQHB" or p[4] != "END":
         raise ValueError("no heartbeat: %r" % " ".join(p)[:40])
     status, ctr, tag = bytes.fromhex(p[1]), bytes.fromhex(p[2]), bytes.fromhex(p[3])
@@ -216,7 +246,7 @@ def heartbeat(ep, session_key, timeout=10.0):
 
 
 def query_session(ep, timeout=10.0):
-    p = _exchange(ep["host"], int(ep["port"]), "PQSESSION", timeout).split()
+    p = _request(ep["host"], int(ep["port"]), "PQSESSION", timeout).split()
     if len(p) != 4 or p[0] != "PQSESSION" or p[3] != "END":
         raise ValueError("no session: %r" % " ".join(p)[:40])
     return p[1], p[2]
@@ -273,6 +303,9 @@ def policy_errors(ep):
         elif pin in DEV_PROFILES and ep.get("allow_dev_profile") is not True:
             errors.append("policy: profile %s is a development profile (one key for every chip); "
                           "set \"allow_dev_profile\": true to admit it on the bench" % pin)
+    pin = ep.get("verifier_pin_sha256")
+    if pin is not None and not (isinstance(pin, str) and len(pin) == 64 and all(c in "0123456789abcdefABCDEF" for c in pin)):
+        errors.append("policy: verifier_pin_sha256 is not 64 hex digits")
     mac = ep.get("heartbeat_mac")
     if mac is not None and mac not in HEARTBEAT_MACS:
         errors.append("policy: unknown heartbeat_mac %r" % mac)
@@ -446,9 +479,28 @@ def journal_line(v):
 
 
 GATEWAY_STATE = "/var/lib/aegis"
+SYSSERV_DEVICE = "/dev/mpfs_generic_service"   # gateway/sysserv/aegis_sysserv.py DEVICE
+
+
+def detect_platform():
+    """polarfire on the gateway (its system-controller device, or a RISC-V machine), linux anywhere else; the same
+    rule as aegisd.pick_platform."""
+    return "polarfire" if (os.path.exists(SYSSERV_DEVICE) or os.uname().machine == "riscv64") else "linux"
+
+
+def default_state_dir(platform):
+    """$AEGIS_STATE_DIR; else /var/lib/aegis on the gateway or for root; else the user's state directory
+    ($XDG_STATE_HOME/aegis, ~/.local/state/aegis), so an ordinary Linux user can run the loop."""
+    if os.environ.get("AEGIS_STATE_DIR"):
+        return os.environ["AEGIS_STATE_DIR"]
+    if platform == "polarfire" or os.geteuid() == 0:
+        return GATEWAY_STATE
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(base, "aegis")
 
 
 def load_gateway_identity(state=GATEWAY_STATE):
+    """This verifier's ML-DSA-65 identity, as aegisd.py init made it in STATE: (secret key, identity sha256)."""
     import wire
     with open(os.path.join(state, "identity.json")) as f:
         rec = json.load(f)
@@ -457,11 +509,50 @@ def load_gateway_identity(state=GATEWAY_STATE):
     return sk, wire.digest(rec["body"])
 
 
-def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE):
+load_verifier_identity = load_gateway_identity
+
+
+def verifier_pk_sha256(state):
+    """SHA-256 of this verifier's ML-DSA-65 public key: the value tools/gen_gateway_pin.py prints for the key it pins
+    in endpoint firmware, and what a policy entry names in "verifier_pin_sha256". None without an identity."""
+    import hashlib
+    try:
+        with open(os.path.join(state, "identity.json")) as f:
+            return hashlib.sha256(bytes.fromhex(json.load(f)["body"]["pk"])).hexdigest()
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def issuer_refusal(ep, state, require_pin):
+    """Why this verifier must not provision ep, or None. Every endpoint image accepts credentials only from the one
+    verifier key pinned in it (gateway_pk.h); a credential signed by another key is refused, and its PQKEMINIT would
+    still cancel a provisioning exchange that verifier has pending. So: with "verifier_pin_sha256" in the entry,
+    provision only if it is this verifier's key; without it, provision only where require_pin is off (the gateway,
+    whose key the current images pin)."""
+    pin = ep.get("verifier_pin_sha256")
+    if pin is None:
+        if require_pin:
+            return ("not issued: no verifier_pin_sha256 in the policy entry, so the endpoint's pinned verifier key is "
+                    "unknown (attestation only)")
+        return None
+    own = verifier_pk_sha256(state)
+    if own is None:
+        return "not issued: no verifier identity in %s (aegisd.py --platform linux init --state %s)" % (state, state)
+    if own != str(pin).lower():
+        return ("not issued: the endpoint pins verifier key %s..., this verifier is %s... (attestation only)"
+                % (str(pin)[:16], own[:16]))
+    return None
+
+
+def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=False):
     """Zero trust: admitted aegis-pq endpoints with "provision": true get (or keep) a fresh
-    credential; quarantined ones lose it."""
+    credential; quarantined ones lose it. Endpoints that would not accept this verifier's credential
+    (issuer_refusal) are left alone: no KEM exchange, no heartbeat."""
     if not ep.get("provision"):
         return None
+    refusal = issuer_refusal(ep, state, require_pin)
+    if refusal:
+        return refusal
     cdir = os.path.join(state, "credentials")
     os.makedirs(cdir, mode=0o700, exist_ok=True)
     meta = os.path.join(cdir, ep["name"] + ".json")
@@ -506,7 +597,9 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE):
     return "issued session %s..." % r["session_id"][:12] + (" (heartbeat failed: %s)" % hb_error if hb_error else "")
 
 
-def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, state=GATEWAY_STATE):
+def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, state=GATEWAY_STATE, require_pin=False,
+             enforce_hooks=True):
+    """One cycle over every endpoint. enforce_hooks=False is observe-only: the policy's enforce_cmd is not run."""
     out = []
     ttl = admit_ttl(policy, interval)
     for ep in policy["endpoints"]:
@@ -515,7 +608,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
         except Exception as e:  # noqa: BLE001 - one endpoint must never stop the loop for the others
             v = {"endpoint": ep.get("name", "?"), "kind": ep.get("kind", "psa"), "time": int(time.time()),
                  "admitted": False, "reasons": ["attestation error: %s: %s" % (type(e).__name__, e)]}
-        result = enforce(policy, v, ttl)
+        result = enforce(policy, v, ttl) if enforce_hooks else None
         note = record_enforcement(v, result)
         if note:
             v["enforce_note"] = note
@@ -524,7 +617,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
                 LOG_ERR, file=sys.stderr)
         if credentials and ep.get("provision"):
             try:
-                cs = credential_step(ep, v, base_dir, state=state)
+                cs = credential_step(ep, v, base_dir, state=state, require_pin=require_pin)
             except Exception as e:  # noqa: BLE001
                 cs = "credential step failed: %s: %s" % (type(e).__name__, e)
             if cs:
@@ -539,14 +632,26 @@ def main(argv=None):
     ap.add_argument("--force", action="store_true", help="enroll-pq: replace keys that are already pinned")
     ap.add_argument("policy")
     ap.add_argument("--interval", type=float, default=30)
-    ap.add_argument("--state", default="/var/lib/aegis/fleet-state.json")
+    ap.add_argument("--platform", choices=["auto", "polarfire", "linux"], default="auto",
+                    help="polarfire: the gateway; linux: an ordinary Linux host (observe-only, credentials only where "
+                         "verifier_pin_sha256 names this verifier). auto: polarfire on the board, linux elsewhere")
+    ap.add_argument("--state-dir", help="identity and credentials (default: $AEGIS_STATE_DIR, /var/lib/aegis on the "
+                                        "gateway or as root, else ~/.local/state/aegis)")
+    ap.add_argument("--state", help="the verdict file watch writes (default: STATE_DIR/fleet-state.json)")
     ap.add_argument("--verifier", choices=["openssl", "cryptography"], default="openssl")
     ap.add_argument("--no-credentials", action="store_true",
                     help="attest only; do not issue, check or revoke credentials (use while the service runs)")
+    ap.add_argument("--enforce", action="store_true",
+                    help="--platform linux: run the policy's enforce_cmd (default there: observe-only)")
     a = ap.parse_args(argv)
     with open(a.policy) as f:
         policy = json.load(f)
     base = os.path.dirname(os.path.abspath(a.policy))
+    platform = detect_platform() if a.platform == "auto" else a.platform
+    state_dir = a.state_dir or default_state_dir(platform)
+    state_file = a.state or os.path.join(state_dir, "fleet-state.json")
+    on_host = platform == "linux"
+    enforce_hooks = not on_host or a.enforce
     ev = psa_token.verify_with_openssl_cli if a.verifier == "openssl" else psa_token.verify_with_cryptography
     if a.cmd == "enroll-pq":
         # Trust on first use: fetch the ML-DSA-65 key of each PQ endpoint that has none pinned yet. An existing pin is
@@ -564,11 +669,11 @@ def main(argv=None):
             print("enrolled %s: ML-DSA-65 key sha256 %s -> %s" % (ep["name"], __import__("hashlib").sha256(pk).hexdigest(), path))
         return 0
     if a.cmd == "session":
-        # compare the gateway's stored credential/session with what the endpoint's secure side reports
+        # compare this verifier's stored credential/session with what the endpoint's secure side reports
         for ep in policy["endpoints"]:
             if not ep.get("provision"):
                 continue
-            meta = os.path.join(GATEWAY_STATE, "credentials", ep["name"] + ".json")
+            meta = os.path.join(state_dir, "credentials", ep["name"] + ".json")
             mine = json.load(open(meta)) if os.path.exists(meta) else None
             try:
                 sid, ch = query_session(ep)
@@ -586,28 +691,44 @@ def main(argv=None):
             bad += bool(errs)
             print("%s %s%s" % (ep.get("name"), "REFUSED: " + "; ".join(errs) if errs else "ok",
                                "".join(" " + w for w in warns)))
+            if not errs and ep.get("provision") and not a.no_credentials:
+                refusal = issuer_refusal(ep, state_dir, on_host)
+                print("  credentials: %s" % (refusal or "issued by this verifier"))
         print("admission TTL: %d s (interval %g s)" % (admit_ttl(policy, a.interval), a.interval))
+        print("platform %s, state %s, %s, this verifier's key sha256 %s" % (
+            platform, state_dir, "enforcing" if enforce_hooks and policy.get("enforce_cmd") else "observe-only",
+            verifier_pk_sha256(state_dir) or "(no identity)"))
         return 1 if bad else 0
+    run = dict(credentials=not a.no_credentials, interval=a.interval, state=state_dir, require_pin=on_host,
+               enforce_hooks=enforce_hooks)
+    if policy.get("enforce_cmd") and not enforce_hooks:
+        log("aegis-fleet: observe-only on platform %s: enforce_cmd in the policy is not run (--enforce runs it)"
+            % platform, file=sys.stderr)
     if a.cmd == "once":
-        res = run_once(policy, base, ev, credentials=not a.no_credentials, interval=a.interval)
+        res = run_once(policy, base, ev, **run)
         for v in res:
             v.pop("enforce_note", None)
         print(json.dumps(res, indent=1))
         return 0
+    os.makedirs(os.path.dirname(os.path.abspath(state_file)), mode=0o700, exist_ok=True)
+    log("aegis-fleet: platform %s, %s, credentials %s, state %s" % (
+        platform, "enforcing" if enforce_hooks and policy.get("enforce_cmd") else "observe-only",
+        "off" if a.no_credentials else ("only where verifier_pin_sha256 names this verifier" if on_host else "on"),
+        state_file))
     while True:
         try:  # reload every cycle, so policy updates apply without a restart
             with open(a.policy) as f:
                 policy = json.load(f)
         except (OSError, ValueError) as e:
             print("policy reload failed, keeping the previous one: %s" % e, flush=True)
-        res = run_once(policy, base, ev, interval=a.interval)
+        res = run_once(policy, base, ev, **run)
         lines = [journal_line(v) for v in res]
         for v in res:
             v.pop("enforce_note", None)
-        tmp = a.state + ".tmp"
+        tmp = state_file + ".tmp"
         with open(tmp, "w") as f:
             json.dump({"updated": int(time.time()), "verdicts": res}, f, indent=1)
-        os.replace(tmp, a.state)
+        os.replace(tmp, state_file)
         for text, prio in lines:
             log(text, prio)
         time.sleep(a.interval)
