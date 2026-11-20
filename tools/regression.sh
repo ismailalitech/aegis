@@ -1,22 +1,24 @@
 #!/bin/sh
 # Aegis regression run. Host stages need no hardware; --board adds the checks on the real boards
 # (gateway at $GATEWAY, STM32 line protocol at $STM32, the STM32 on its own Ethernet).
-#   tools/regression.sh [--board [--with-expiry]]
+#   tools/regression.sh [--board [--with-expiry]] | --expiry-only
 # REDTEAM_STM32=host:port picks the STM32 the device red-team attacks (default $STM32), e.g. REDTEAM_STM32=$STM32_2
 # while board 1 is not connected. The heartbeat stage checks every endpoint that holds a session on the gateway.
 # --with-expiry (or AEGIS_REGRESSION_EXPIRY=1 with --board) adds the stage endpoint-expiry, off by default: it stops
 # the aegis-fleet service, runs tests/board/expiry_check.py on the gateway for each endpoint that holds a session
 # (EXPIRY_ENDPOINTS="name ..." to choose), starts the service again however the stage ends (failure, Ctrl-C) and
 # waits until those endpoints are ADMITTED again. About 3 minutes, during which the fleet is not re-attested.
+# --expiry-only runs that one stage and nothing else (tools/soak.py's extra expiry rounds, docs/soak-and-watchdogs.md).
 # Writes logs/regression/<time>/, runs every stage and exits non-zero if any failed.
 # SPDX-License-Identifier: Apache-2.0
 set -u
-usage() { sed -n '2,11p' "$0" | cut -c3-; }
-BOARD=; WITH_EXPIRY=
+usage() { sed -n '2,12p' "$0" | cut -c3-; }
+BOARD=; WITH_EXPIRY=; ONLY_EXPIRY=
 for arg in "$@"; do
     case $arg in
         --board) BOARD=1 ;;
         --with-expiry) WITH_EXPIRY=1 ;;
+        --expiry-only) ONLY_EXPIRY=1; BOARD=1; WITH_EXPIRY=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $arg" >&2; usage >&2; exit 2 ;;
     esac
@@ -26,6 +28,8 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 [ -f "$REPO/bench.env" ] && { set -a; . "$REPO/bench.env"; set +a; }
 [ "${AEGIS_REGRESSION_EXPIRY:-0}" = 1 ] && WITH_EXPIRY=1
+# AEGIS_STM32_OVERRIDE=host:port wins over bench.env for STM32 and REDTEAM_STM32 (tools/soak.py, board 1 not connected)
+[ -n "${AEGIS_STM32_OVERRIDE:-}" ] && { STM32=$AEGIS_STM32_OVERRIDE; REDTEAM_STM32=$AEGIS_STM32_OVERRIDE; }
 PY=.venv/bin/python
 GATEWAY=${GATEWAY:-}
 STM32=${STM32:-}
@@ -78,6 +82,14 @@ endpoint_expiry() {
     return $rc
 }
 
+if [ -n "$ONLY_EXPIRY" ]; then
+    : "${GATEWAY:?set GATEWAY in bench.env (see bench.env.example)}"
+    B=root@$GATEWAY
+    stage endpoint-expiry endpoint_expiry
+    echo "passed $pass, failed $fail -> $OUT"
+    [ "$fail" -eq 0 ]
+    exit
+fi
 stage host-unit-tests      $PY -m unittest discover -s tests/host
 stage host-redteam         $PY tests/redteam/fuzz_host.py 2000
 stage rtl-simulation       hw/tb/run_all.sh --fast
