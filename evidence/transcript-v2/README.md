@@ -21,3 +21,14 @@ build one; the transcript adds nothing against that (`docs/threat-model.md`, T24
 Order on board 2: `ts-before-b2.txt` on 67a452b1; a first upgrade to 3183f74a (its log
 is not kept here); `ts-live-b2.txt`, `ts-swapreset-b2.txt`, `ts-realswap-quote.txt`; 67a452b1 flashed and reset;
 `ts-realswap-b2.txt`; `flash-ts-b2-final.txt`. Both boards run 3183f74a since.
+
+## RW612 (20 November 2026)
+
+| File | What it shows |
+|---|---|
+| `ts-before-rw612.txt` | TF-M 0.2.2 (SPE 1b38ab1a): `live` exits 3, `image_knows_the_transcript: false`; the gateway refuses the unbound exchange under v2 |
+| `flash-rw612-transcript.txt` | `endpoints/rw612/tfm/flash.sh` writing TF-M 0.3.0 (SPE 76f89751, NSPE 24979a1f unchanged), verified; only the two partitions are written |
+| `ts-live-rw612.txt` | 0.3.0: bound exchange accepted (L1), same or older quote refused (L2, L3), credentials without or for another transcript refused with `ERR cred other-transcript` and the session kept (L4) |
+
+After these runs the gateway policy requires `"transcript": "v2"` for both STM32s and the RW612; the full board regression
+then passed 14 of 14.

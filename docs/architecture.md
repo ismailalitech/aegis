@@ -116,7 +116,7 @@ Both sides keep session = SHA3-256("aegis-session-v1" || K || nonce || SHA3(ct))
 A credential lasts an hour and is renewed five minutes before it expires.
 
 **One transcript** (policy `"transcript": "v2"`; audit finding 2. STM32: on both boards since 20 November 2026
-(`evidence/transcript-v2/`); RW612: image built, not yet flashed; ZynqMP TA and Linux prover: source only.) The two
+(`evidence/transcript-v2/`); RW612: TF-M 0.3.0 (SPE 76f89751) on the board since 20 November 2026; ZynqMP TA and Linux prover: source only.) The two
 exchanges above share nothing but the endpoint's key: the signature on the ML-KEM key covers `nonce || ek` and says
 nothing about the code that reported the measurements. Where one key serves two firmware images, the gateway can
 appraise one and finish the session with the other. That is the case on this bench: the RW612's single-image prover
@@ -205,7 +205,7 @@ from before the transcript, the endpoint is still attested and admitted, and get
 | Endpoint | Where | State |
 |---|---|---|
 | STM32H573 (TF-M) | `aegis_pq_attest.c`; non-secure prover 0.6.0 unchanged | on both boards since 20 November 2026: image `...-freshkem-transcript`, SPE 3183f74a, same MCUboot version (2.3.0) and signer as the image before (67a452b1); deepest stack path by GCC's figures 18712 bytes (18720 before); both boards report `sstack=18880/26624` (18888 before). `transcript_swap_check.py` live, reset and swap to 67a452b1 (`evidence/transcript-v2/`) |
-| RW612 (TF-M) | `aegis_proto.c` in the secure image, 0.3.0 | image built (SPE 76f89751; the non-secure image is byte for byte 0.2.2's, NSPE 24979a1f), not yet flashed |
+| RW612 (TF-M) | `aegis_proto.c` in the secure image, 0.3.0 | image built (SPE 76f89751; the non-secure image is byte for byte 0.2.2's, NSPE 24979a1f), on the board since 20 November 2026; bound exchange accepted, replays and foreign credentials refused (`evidence/transcript-v2/ts-live-rw612.txt`) |
 | RW612 (single image) | the same `aegis_proto.c` | source only (no Zephyr workspace on the build PC) |
 | ZynqMP (OP-TEE TA) | the same `aegis_proto.c` | source only; `optee/tests/run.sh` checks the TA's transcript on the PC |
 | Linux prover | `aegis_linux_prover.py` 0.3.0 (needs `common/transcript.py` beside it) | source only; its own `PROVER` measurement changes with the file |

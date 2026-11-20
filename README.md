@@ -51,7 +51,7 @@ What has run on the bench, each with the record or test that shows it:
   an image holds the key and can sign a transcript for a quote it saw. Closing that needs a device key that depends
   on the measured code. On both STM32s since 20 November 2026, including the swap to the previous image
   ([`evidence/transcript-v2/`](evidence/transcript-v2/)); tested on the PC
-  ([`tests/host/test_transcript.py`](tests/host/test_transcript.py)); the RW612 image is built, not yet flashed.
+  ([`tests/host/test_transcript.py`](tests/host/test_transcript.py)); the RW612 (TF-M 0.3.0) since the same day; the gateway requires it for all three ([`evidence/transcript-v2/`](evidence/transcript-v2/)).
 
 One decision cycle, every 30 seconds per endpoint (the default `--interval` of `gateway/aegisd/fleet.py`):
 
