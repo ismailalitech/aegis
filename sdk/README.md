@@ -1,7 +1,12 @@
 # Aegis Prover SDK
 
 The device's side of Aegis attestation, as one C source that every chip builds, and the small platform layer a
-device maker writes for it. API version 1 (`AEGIS_SDK_API_VERSION` in `include/aegis_sdk.h`).
+device maker writes for it. Release 1.0.0, API version 1 (`AEGIS_SDK_API_VERSION` in `include/aegis_sdk.h`).
+
+For a device maker: [`docs/sdk-porting-guide.md`](../docs/sdk-porting-guide.md) (step by step, with the sizes),
+[`docs/sdk-api-reference.md`](../docs/sdk-api-reference.md) (generated from the header),
+[`docs/sdk-versioning.md`](../docs/sdk-versioning.md) (what API version 1 promises), and a device to start from,
+[`examples/simulated-device/`](examples/simulated-device/), which one command builds and has attested end to end.
 
 A device with the SDK can do four things for a verifier (the Aegis gateway, or the portable verifier of
 `docs/pc-verifier.md`):
@@ -26,7 +31,9 @@ sdk/
   crypto/                    configurations for mldsa-native and mlkem-native v2.0.0 (not included: see Build)
   ports/host/                reference port for a PC: the worked example below, and what the tests run
   ports/linux/               a prover for Linux userspace on the same core
+  examples/simulated-device/ a device in one file, built against the installed library only, and run.sh
   tests/                     small PC checks of KMAC and of the ML-DSA configuration
+  CMakeLists.txt, Makefile   the static library libaegis_sdk.a, the ports and the example (CMake, or GNU make)
 ```
 
 The ports to chips live with their build systems:
@@ -80,7 +87,9 @@ sdk/crypto/mlkem_unit.c                     (mlkem-native, compiled in its own u
 include paths: sdk/include sdk/src sdk/crypto/mldsa sdk/crypto/mlkem <mldsa-native>/mldsa <mlkem-native>/mlkem
 ```
 
-and your platform file. The PC build, complete:
+and your platform file. Or build the static library with `cmake -S sdk -B build/sdk` or `make -C sdk` and link
+`libaegis_sdk.a` (options and install: [`docs/sdk-porting-guide.md`](../docs/sdk-porting-guide.md), step 1). The PC
+build by hand, complete:
 
 ```sh
 N=~/aegis-tools

@@ -19,3 +19,6 @@ endpoints/stm32h573/tfm-aegis-partition/gateway_pk.h
 bench.env
 build-dv101.out
 gateway/policy/fleet.json
+sdk/build-eat/
+.venv
+container/out/

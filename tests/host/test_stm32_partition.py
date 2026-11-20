@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The STM32H573 secure partition (endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c with the Prover SDK's
 core, sdk/src/aegis_proto.c: the files TF-M builds), on the PC against the stand-ins and the model of tests/fuzz/stm32/fuzz_stm32_partition.c, without libFuzzer: every
 seed of tests/fuzz/stm32/seeds must pass the harness's checks.
