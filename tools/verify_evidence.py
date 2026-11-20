@@ -103,9 +103,15 @@ def load_key(path):
 def open_sign1(data, pub, what):
     """Verify an Aegis COSE_Sign1 under pub; returns (claims, Sig_structure)."""
     try:
+        raw = cbor2.loads(data)
         msg = Sign1Message.decode(data, allow_unknown_attributes=True)
     except Exception as e:  # noqa: BLE001 - whatever pycose or cbor2 make of bytes that are not a COSE_Sign1
         raise Failed("%s: not a COSE_Sign1: %s: %s" % (what, type(e).__name__, e)) from None
+    # one object, one byte string: cbor2 reads past a complete item, and accepts lengths longer than they need be
+    need(cbor2.dumps(raw) == data, "%s: not in deterministic encoding, or followed by other bytes" % what)
+    prot = raw.value[0]
+    need(isinstance(prot, bytes) and cbor2.dumps(cbor2.loads(prot), canonical=True) == prot,
+         "%s: the protected header is not in deterministic encoding" % what)
     need(msg.phdr.get(headers.Algorithm) is MlDsa65, "%s: the protected algorithm is not ML-DSA-65 (-49)" % what)
     need(msg.uhdr == {}, "%s: the unprotected header is not empty" % what)
     need(set(msg.phdr) == {headers.Algorithm, headers.KID, HDR_TYP}, "%s: protected header is not {alg, kid, typ}" % what)
@@ -115,8 +121,12 @@ def open_sign1(data, pub, what):
     need(len(msg.signature) == SIG_LEN, "%s: the signature is not %d bytes" % (what, SIG_LEN))
     tbs = msg._create_sig_structure()       # pycose's Sig_structure: ["Signature1", protected, h'', payload]
     need(MlDsa65.verify(pub, tbs, msg.signature), "%s: the ML-DSA-65 signature does not verify" % what)
-    claims = cbor2.loads(msg.payload)
+    try:
+        claims = cbor2.loads(msg.payload)
+    except Exception as e:  # noqa: BLE001 - signed bytes that are not CBOR
+        raise Failed("%s: the payload is not CBOR: %s: %s" % (what, type(e).__name__, e)) from None
     need(isinstance(claims, dict), "%s: the payload is not a claims map" % what)
+    need(cbor2.dumps(claims, canonical=True) == msg.payload, "%s: the claims are not in deterministic encoding" % what)
     return claims, tbs
 
 
@@ -126,15 +136,28 @@ def read_components(value, what):
     for entry in value:
         need(isinstance(entry, list) and len(entry) == 2 and entry[0] == 295 and isinstance(entry[1], bytes),
              "%s: a measurement is not [295, bstr] (application/measured-component+cbor, RFC 10013)" % what)
-        mc = cbor2.loads(entry[1])
+        try:
+            mc = cbor2.loads(entry[1])
+        except Exception:  # noqa: BLE001
+            raise Failed("%s: a measured component is not CBOR" % what) from None
         need(isinstance(mc, dict) and set(mc) <= {1, 2, 3} and {1, 2} <= set(mc), "%s: not a measured component" % what)
-        need(mc[2][0] == 1 and len(mc[2][1]) == 32, "%s: a digest is not SHA-256" % what)
-        c = {"name": mc[1][0], "sha256": mc[2][1].hex()}
-        if len(mc[1]) > 1:
-            c["version"] = mc[1][1][0]
+        need(cbor2.dumps(mc, canonical=True) == entry[1], "%s: a measured component is not in deterministic encoding" % what)
+        cid, dig = mc[1], mc[2]
+        need(isinstance(cid, list) and 1 <= len(cid) <= 2 and isinstance(cid[0], str) and 0 < len(cid[0]) <= 64,
+             "%s: a component's id is not [name, [version]]" % what)
+        need(isinstance(dig, list) and len(dig) == 2 and type(dig[0]) is int and dig[0] == 1
+             and isinstance(dig[1], bytes) and len(dig[1]) == 32, "%s: a digest is not [1 (sha-256), 32 bytes]" % what)
+        c = {"name": cid[0], "sha256": dig[1].hex()}
+        if len(cid) > 1:
+            need(isinstance(cid[1], list) and len(cid[1]) == 1 and isinstance(cid[1][0], str) and len(cid[1][0]) <= 64,
+                 "%s: a component's version is not [text]" % what)
+            c["version"] = cid[1][0]
         if 3 in mc:
+            need(isinstance(mc[3], list) and len(mc[3]) == 1 and isinstance(mc[3][0], bytes) and 0 < len(mc[3][0]) <= 64,
+                 "%s: a component's authorities is not [signer]" % what)
             c["signer"] = mc[3][0].hex()
         out.append(c)
+    need(len(out) <= 16 and len({c["name"] for c in out}) == len(out), "%s: more than 16 components, or a name twice" % what)
     return out
 
 
@@ -144,8 +167,12 @@ def check_evidence(data, pub, nonce=None):
     need(set(claims) <= {10, 256, 263, 265, 266, 273, 275, -82400}, "evidence: a claim outside the profile")
     need(isinstance(claims.get(10), bytes) and len(claims[10]) == 32, "evidence: eat_nonce is not 32 bytes")
     need(claims.get(256) == b"\x01" + hashlib.sha256(pub).digest(), "evidence: ueid is not 0x01 || SHA-256(device key)")
-    need(claims.get(275) == 1, "evidence: intuse is not 1")
+    need(type(claims.get(275)) is int and claims[275] == 1, "evidence: intuse is not 1")
     need((273 in claims) != (266 in claims), "evidence: needs measurements or a nested platform token, not both")
+    need((273 in claims) == (-82400 in claims), "evidence: the platform profile goes with measurements, and only with them")
+    need(-82400 not in claims or (isinstance(claims[-82400], str) and 0 < len(claims[-82400]) <= 64),
+         "evidence: the platform profile is not a short text")
+    need(263 not in claims or (type(claims[263]) is int and 0 <= claims[263] <= 4), "evidence: dbgstat is not 0 to 4")
     if nonce is not None:
         need(claims[10] == nonce, "evidence: eat_nonce is not the expected nonce")
     report = {"profile": claims[265], "eat_nonce": claims[10].hex(), "ueid": claims[256].hex(),
@@ -160,11 +187,21 @@ def check_evidence(data, pub, nonce=None):
     if 273 in claims:
         report["measurements"] = read_components(claims[273], "evidence")
     else:
-        tok = claims[266].get("platform")
-        need(isinstance(tok, bytes) and tok[:2] == b"\xd8\x3d", "evidence: submods is not {platform: CWT-tagged token}")
-        inner = Sign1Message.decode(tok[2:], allow_unknown_attributes=True)
+        sm = claims[266]
+        need(isinstance(sm, dict) and set(sm) == {"platform"} and isinstance(sm["platform"], bytes)
+             and len(sm["platform"]) > 2 and sm["platform"][:2] == b"\xd8\x3d",
+             "evidence: submods is not {platform: CWT-tagged token}")
+        tok = sm["platform"]
+        try:
+            inner = Sign1Message.decode(tok[2:], allow_unknown_attributes=True)
+            inner_claims = cbor2.loads(inner.payload)
+            need(isinstance(inner_claims, dict), "evidence: the nested platform token's payload is not a claims map")
+        except Failed:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise Failed("evidence: the nested platform token is not a COSE_Sign1: %s" % type(e).__name__) from None
         report["platform_token"] = {"sha256": hashlib.sha256(tok[2:]).hexdigest(),
-                                    "claims": sorted(str(k) for k in cbor2.loads(inner.payload)),
+                                    "claims": sorted(str(k) for k in inner_claims),
                                     "note": "the platform's own token (a PSA token on the STM32H573); its signature is "
                                             "checked with the platform's key, not here"}
     return report
@@ -364,8 +401,8 @@ def main(argv=None):
     except Failed as e:
         print(json.dumps({"verified": False, "reason": str(e)}, indent=1))
         return 1
-    except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError) as e:
-        print(json.dumps({"verified": False, "reason": "not readable: %s: %s" % (type(e).__name__, e)}, indent=1))
+    except Exception as e:  # noqa: BLE001 - whatever hostile bytes provoke in this file, cbor2 or pycose: not verified
+        print(json.dumps({"verified": False, "reason": "not readable: %s: %s" % (type(e).__name__, str(e)[:200])}, indent=1))
         return 1
     print(json.dumps(dict(report, verified=True), indent=1))
     return 0

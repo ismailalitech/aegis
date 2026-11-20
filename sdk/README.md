@@ -248,9 +248,15 @@ Nothing of these is in version 1; the seams are marked in `src/aegis_proto.c`.
   new command: a pair of load and store functions added to `struct aegis_platform` and a line in
   `aegis_prover_handle_line`, with a new `AEGIS_SDK_API_VERSION`, golden vectors and a fuzz seed family. And an
   endorsement means more once the identity key depends on the measured code (next item but one).
-- **EAT and COSE.** The claims are encoded in one function, `make_claims()`; a platform can already supply a
-  finished token through `evidence`. An EAT profile replaces the first or comes in through the second, and the
-  signature framing is in `sign_work()`.
+- **EAT and COSE** are here as an option, off by default: build the core with `-DAEGIS_EAT_COSE=1` and it also
+  answers `PQEAT <challenge>` (binary: `aegis_prover_quote_eat()`) with the quote as an EAT (RFC 9711) in a
+  COSE_Sign1 (RFC 9052) signed with ML-DSA-65 (RFC 9964, algorithm -49): the platform's measurements as measured
+  components, or the platform's own token nested in it. A verifier asks for it with `"evidence_format":
+  "eat-cose-v1"` in the policy entry, and anyone with a COSE library and the device's public key can read it
+  (`tools/verify_evidence.py`). The profile, the memory it needs (a work buffer of at least 1962 bytes) and what the
+  transcript hashes for such a quote are in [`docs/evidence-format.md`](../docs/evidence-format.md). Without the
+  flag the core is byte for byte what it was. What remains: a PSA message for it in the STM32 partition, and images
+  built with it.
 - **A measurement-dependent key** (see Limits): `identity_public_key` and `identity_sign`.
 
 ## Tests
@@ -263,4 +269,5 @@ Nothing of these is in version 1; the seams are marked in `src/aegis_proto.c`.
 | One fuzz harness on the core, both transports, every configuration, with an independent model of the protocol | `tests/fuzz/fuzz_sdk_core.c`, `tests/fuzz/run.sh`; seeds of all families in `tests/fuzz/seeds` |
 | The STM32 port's own code (PSA messages, the RTC, the stack mark) on PC stand-ins | `tests/fuzz/stm32`, `STM32=1 tests/fuzz/run.sh`, `tests/host/test_stm32_partition.py` |
 | The OP-TEE port on a stand-in for OP-TEE | `endpoints/zynqmp/optee/tests/run.sh` |
+| The option for standard evidence (`-DAEGIS_EAT_COSE=1`): an EAT at every length that changes an encoding, read by the verifier's decoder and by a COSE library; the core behind a socket against `fleet.py` with a session bound to the EAT quote; the fuzz harness and corpus with the option | `tests/host/test_sdk_eat.py` (`sdk/tests/eat_check.c`), `EAT=1 tests/fuzz/run.sh`, seeds `tests/fuzz/seeds/sdk-eat-*` (`tests/fuzz/make_eat_seeds.py`) |
 | The Linux port | `tests/host/test_sdk_linux_port.py` |

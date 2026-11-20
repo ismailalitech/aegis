@@ -82,6 +82,12 @@ Copy `bench.env.example` to `bench.env` and set your addresses. Then:
 The verifier also runs on an ordinary Linux host instead of the gateway (`fleet.py --platform linux`, observe-only,
 attestation without credentials on the current images): `docs/pc-verifier.md`.
 
+Evidence, the verifier's attestation results and endorsement records also exist in standard formats: EAT (RFC 9711)
+and EAR in COSE_Sign1 signed with ML-DSA-65 (RFC 9964). `fleet.py export-evidence` writes an evidence pack that
+`tools/verify_evidence.py` checks with third-party libraries only (pycose, cbor2, cryptography), without this
+repository's code: [`docs/evidence-format.md`](docs/evidence-format.md). On the device it is an option of the SDK that
+is off by default; the boards on the bench do not run it yet.
+
 ## Layout
 
 `gateway/` services and policy, `common/` wire formats and crypto glue, `host/` PC tools,

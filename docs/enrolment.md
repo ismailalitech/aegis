@@ -142,13 +142,12 @@ endorsement. `device_pk` is outside the signature; the body names its hash, and 
 malformed. A version 1 verifier refuses a body with a claim it does not know: a later version cannot add a
 restriction that an old verifier would silently drop.
 
-**Towards EAT and COSE (WP10).** The body is a flat claims set so that it can move into an EAT without being
-redesigned: a CBOR claims map in a COSE_Sign1 with ML-DSA-65, the endorser's key hash as `kid`. The intended mapping
-(not implemented, and not checked against a profile yet): `endorser` to `iss`, `device` to `sub`, `issued` to `iat`,
-`expires` to `exp`, `profile` to `eat_profile`, `instance_id` to `ueid`, `evidence.challenge` to `eat_nonce`,
-`device_pk_sha256` to a key-confirmation claim (`cnf` with a thumbprint), `measurements` to the software-components
-list the PSA token already uses (`common/psa_token.py`, claim 2399, keys 1, 2, 5), and `kind`, `serial`,
-`device_state`, `evidence.token_sha3_256`, `notes` to private claims. `format` is what a verifier will switch on.
+**The same record in a standard form (WP10).** The body is a flat claims set so that it could move into an EAT
+without being redesigned, and it has: `aegis_provision.py endorse --record-format cose` writes `<device>.cbor`, a
+COSE_Sign1 signed with ML-DSA-65 (RFC 9964) whose payload carries the body's claims one for one (`endorser` as `iss`,
+`device` as `sub`, `issued` and `expires` as `iat` and `exp`, the device key itself in `cnf`, the measurements as
+measured components, the rest as private claims). [evidence-format.md](evidence-format.md) has the table. A verifier
+reads either form into the same body, so everything below applies to both; JSON stays the default.
 
 ## The verifier's rules
 

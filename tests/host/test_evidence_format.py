@@ -336,6 +336,7 @@ class Evidence(unittest.TestCase):
         self.refused({**c, 266: {"other": b"\xd8\x3d" + tok}}, "submods is not")
         self.refused({**c, 266: {"platform": b"\xd8\x3d" + tok, "more": b""}}, "submods is not")
         self.refused({**c, 273: [component("SPE", MEAS)]}, "not both")
+        self.refused({**c, -82400: PLATFORM}, "goes with measurements")
 
     def test_claims_outside_the_profile_are_refused(self):
         c = evidence_claims(self.CH)
@@ -345,6 +346,7 @@ class Evidence(unittest.TestCase):
         for k in (10, 256, 265, 275):
             self.refused({a: b for a, b in c.items() if a != k}, "lacks claim %d" % k)
         self.refused({a: b for a, b in c.items() if a != 273}, "measurements or a platform token")
+        self.refused({a: b for a, b in c.items() if a != -82400}, "goes with measurements")
         self.refused({**c, 265: "tag:github.com,2026:ismailalitech/aegis/evidence/v2"}, "eat_profile")
         self.refused({**c, 265: "tag:psacertified.org,2023:psa#tfm"}, "eat_profile")
         self.refused({**c, 10: self.CH[:31]}, "eat_nonce")
@@ -571,13 +573,17 @@ class Verifier(Bench):
 
     def test_signed_claims_outside_the_profile_are_refused(self):
         cases = [(lambda c: c.update({1: "x"}), "does not know"),
-                 (lambda c: c.pop(-82400), "profile is not"),
+                 (lambda c: c.pop(-82400), "goes with measurements"),
                  (lambda c: c.update({-82400: "aegis-rw612-els-v1"}), "policy requires"),
                  (lambda c: c.update({273: [component("SPE", "99" * 32)]}), "not allowed"),
                  (lambda c: c.update({273: [component("SPE", MEAS), component("EXTRA", MEAS)]}), "EXTRA not allowed"),
                  (lambda c: c.update({265: "tag:example.com,2026:other"}), "eat_profile"),
                  (lambda c: c.update({256: b"\x01" + bytes(32)}), "ueid"),
+                 (lambda c: c.update({266: {"platform": b"\xd8\x3d" + tf.make_token(self.iak, c[10])}}), "not both"),
                  (lambda c: (c.pop(273), c.update({266: {"platform": b"\xd8\x3d" + tf.make_token(self.iak, c[10])}})),
+                  "goes with measurements"),
+                 (lambda c: (c.pop(273), c.pop(-82400),
+                             c.update({266: {"platform": b"\xd8\x3d" + tf.make_token(self.iak, c[10])}})),
                   "the platform's token, not measurements")]
         for i, (edit, text) in enumerate(cases):
             facts = {}

@@ -14,7 +14,7 @@ Evidence (profile EVIDENCE_PROFILE), signed by the device's ML-DSA-65 identity k
                                                                     section 4.2.18): TF-M's PSA token on the STM32
   275   intuse         1 (generic)
   -82400 platform      text              the Aegis platform profile the policy pins ("aegis-rw612-tfm-v1", ...);
-                                         absent on a platform that sends its own token
+                                         with measurements, and only with them
 
   measured-component = {1: [name, [version]], 2: [1 (sha-256), digest .size 32], ? 3: [signer]}
   "authorities" (3) is the component's signer, where the platform knows one; "flags" (4) is not used.
@@ -222,6 +222,8 @@ def _read_evidence(payload, pk):
         raise Refused("the platform profile is not a short text")
     if (MEASUREMENTS in c) == (SUBMODS in c):
         raise Refused("the evidence must carry measurements or a platform token, and not both")
+    if (MEASUREMENTS in c) != (P_PLATFORM in c):
+        raise Refused("the platform profile goes with measurements, and only with them")
     out = {"nonce": c[NONCE], "ueid": c[UEID], "platform": c.get(P_PLATFORM), "dbgstat": c.get(DBGSTAT),
            "components": None, "platform_token": None}
     if MEASUREMENTS in c:
