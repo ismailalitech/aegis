@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ML-KEM-768 (FIPS 203), with the same two backends and the same choice as mldsa.py.
 
 Encapsulation keys, ciphertexts and shared secrets are the FIPS 203 encodings in both. Decapsulation keys differ:

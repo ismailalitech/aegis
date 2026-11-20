@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # U-Boot script for the Zynq UltraScale+ Aegis endpoint.
 # mkimage -A arm64 -T script -C none -d boot.cmd boot.scr
 # 1. Our kernel (linux-xlnx xilinx-v2025.2, Image) with our device tree (dts/zynqmp-te0807-aegis.dts). That tree

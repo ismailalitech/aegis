@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Replace an STM32H573I-DK's secure image (the TF-M slot only) and move the gateway's policy with it, as done for
 # board 2 on 18 November 2026 (evidence/stm32-kemfix/board2-kemfix.txt):
 #   1. checks: one ST-LINK with that serial; the new image is a signed MCUboot image with the same version and signer

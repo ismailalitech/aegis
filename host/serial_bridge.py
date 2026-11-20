@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """TEMPORARY transport: expose the STM32 prover's serial line protocol on TCP.
 
 Used only while the STM32's Ethernet port has no link. The gateway connects to

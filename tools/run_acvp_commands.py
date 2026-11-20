@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Run the command list made by acvp_commands.py with a given directory of liboqs test binaries.
 Standard library only (runs on the PolarFire). Prints a JSON summary; exit 0 only if every case
 returned its expected code.

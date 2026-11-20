@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Build BL2-compatible TF-M v2.3.0 secure image for the STM32H573I-DK with the Aegis partition.
 # Same configuration as the SecureBench reference build (securebench-ws/build/spe) plus the
 # out-of-tree partition; reuses that build's already fetched and patched dependencies.

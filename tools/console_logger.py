@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Record a serial console to timestamped files, for the gateway's kernel console (ttyS1 on the PolarFire SoC
 Discovery Kit, the embedded FlashPro5's second UART on the PC). Each line gets the PC's time; a new file starts
 every day and when one reaches 20 MB; NUL bytes and escape sequences are dropped. Runs until killed; if the port

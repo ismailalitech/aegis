@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
 # The gateway on one Ethernet port with an 802.1Q switch (gateway/enforce/vlan-setup.sh), tested in network namespaces.
 # A Linux bridge with VLAN filtering plays the switch: the endpoint ports are untagged members of VLAN 20 only, the
 # gateway's port carries VLAN 1 (the LAN) untagged and VLAN 20 tagged, the LAN host is on VLAN 1. vlan-setup.sh and the

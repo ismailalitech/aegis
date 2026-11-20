@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Turn the first SQUEEZE_DMA of the tb_aegis_pqc2 trace (VCD) into a `type: wave` diagram for tools/gen_diagrams.py.
 
   extract_wave_dma.py TRACE.vcd OUT.yaml

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Configure the Debian 12 armhf root filesystem for the Zybo Z7 Aegis endpoint (after debootstrap's second stage).
 #   sudo endpoints/zybo/setup_rootfs.sh <work dir> <ssh public key file> <gateway ML-DSA-65 public key (hex) file> \
 #        <liboqs.so for armhf>

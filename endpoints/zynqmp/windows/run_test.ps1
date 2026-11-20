@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 param([string]$name, [string]$fsbl, [string]$pmufw, [int]$secs = 140)
 $ErrorActionPreference = 'Stop'
 $out = "C:\tz\jtag\$name"

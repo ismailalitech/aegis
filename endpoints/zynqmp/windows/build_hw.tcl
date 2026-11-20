@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 set_param board.repoPaths {C:/tz/sk/StarterKit/board_files}
 set outdir C:/tz/aegis/vivado
 file delete -force $outdir

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Configure the Debian 12 arm64 root filesystem for the Zynq UltraScale+ Aegis endpoint (TE0808 on a TEBF0808), step 3
 # of README.md: the Linux prover, "software trust". Run after debootstrap:
 # haveged: the ZynqMP has no TRNG that Linux 4.19 uses, and without it the kernel took 3 minutes to seed its RNG,

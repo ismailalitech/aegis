@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Build liboqs 0.16.0 for the PolarFire's RISC-V Linux with every Keccak-f[1600] permutation
 # routed through the aegis_pqc fabric core when AEGIS_PQC_KECCAK=hw|check is set
 # (gateway/pqc/aegis_pqc_drv.c). Works on a copy of the liboqs source; the pristine tree and

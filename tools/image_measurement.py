@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Print the measurement MCUboot (TF-M BL2) records for a signed image: the SHA-256 image
 hash TLV (type 0x10) and the signer ID (SHA-256 of the public key TLV, type 0x02 with
 MCUBOOT_HW_KEY). These are the values that appear in the PSA token's sw_components.

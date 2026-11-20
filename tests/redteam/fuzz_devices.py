@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Red-team checks against the real devices (no physical action needed).
 
   STM32 prover (via the TCP port that serves its line protocol, today the PC relay):

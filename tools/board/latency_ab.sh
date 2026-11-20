@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # runtime-only experiment: IRQ affinity and CPU pinning for the Linux UIO latency path. Restores affinity on exit.
 trap "echo 7 > /proc/irq/80/smp_affinity" EXIT INT TERM
 run() { name=$1; shift; printf "%s " "$name"; "$@" 2>&1 | tail -1 | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); l=d[\"latency_us\"]; print(json.dumps({\"overrun\":d[\"overrun\"],\"mean\":l[\"mean\"],\"p999\":l[\"p999_le\"],\"max\":l[\"max\"]}))"; }

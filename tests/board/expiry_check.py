@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """The session's end on a real endpoint (docs/endpoint-expiry.md), without waiting an hour.
 
 Runs on the gateway, which holds the key that signs credentials, with the aegis-fleet service stopped: the service

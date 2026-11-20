@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # On the board with the accelerator v2 fabric (aegis_pqc2, ID 0xAE150002): the same checks as
 # tests/host/test_sponge_provider.sh but with AEGIS_PQC_SPONGE=hw, plus raw timings and liboqs speed.
 # Run from the PC; copies the RISC-V build (tools/build_liboqs_sponge.sh rv64) to the gateway.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Mutual-authentication checks against the real STM32 secure partition (via its TCP line port).
 
   A. credential signed by a key that is not the pinned gateway key      -> refused (no session)

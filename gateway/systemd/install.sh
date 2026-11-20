@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # On the gateway: install and start the Aegis services, and keep the journal on the SD card (takes effect at the next
 # boot).  Undo: ./install.sh remove ; reboot
 set -eu

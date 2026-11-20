@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Line coverage reached by a fuzz corpus (clang source-based coverage):
 #   tests/fuzz/coverage.sh <corpus dir> [<out dir>]            endpoints/rw612/prover/src/aegis_proto.c
 #   STM32=1 tests/fuzz/coverage.sh <corpus dir> [<out dir>]    endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c

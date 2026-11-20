@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Verify a PSA initial attestation token (COSE_Sign1, ES256) from TF-M.
 
 Standard library only. The ECDSA P-256 check is done by a pluggable function

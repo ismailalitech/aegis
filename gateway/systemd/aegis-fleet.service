@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Aegis fleet verifier: re-attest every endpoint in the policy every 30 s.
 # State: /var/lib/aegis/fleet-state.json; verdict log in the journal (journalctl -u aegis-fleet).
 [Unit]

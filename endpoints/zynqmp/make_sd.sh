@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Write the Zynq UltraScale+ Aegis endpoint image (TE0808 on a TEBF0808) to a microSD card. Erases the card.
 #   sudo endpoints/zynqmp/make_sd.sh /dev/sdX <work dir with boot/BOOT.BIN, boot/image.ub and rootfs/>
 # Partition 1 (FAT, label BOOT): BOOT.BIN (FSBL, PMU firmware, TF-A, U-Boot) and image.ub (kernel and device tree),

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Hedged ML-DSA-65 signing on the endpoint verifies with the gateway's liboqs, and is not repeatable.
 
 Builds endpoints/stm32h573/tfm-aegis-partition/mldsa/host_check_hedged.c with the partition's own

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Delete everything that holds the red key except red_key.hex itself: the build directory (patched sources,
 # Vitis workspace, ELF) and any left-over bootgen-* temporary directory. Run it whenever a build or a run stopped
 # half-way.   powershell -ExecutionPolicy Bypass -File cleanup_puf_build.ps1

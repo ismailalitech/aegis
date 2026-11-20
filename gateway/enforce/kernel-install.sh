@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Install the Aegis gateway kernel (pfdaq kernel + nf_tables, bridge, VLAN, USB Ethernet).
 # Run ON THE GATEWAY, from this directory, with someone at the board: if the new kernel does not
 # boot, recovery needs the SD card in a PC (copy fitImage.pre-aegis or fitImage.good to fitImage).

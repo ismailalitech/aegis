@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Run the NIST ACVP ML-KEM-768 / ML-DSA-65 vectors (same groups liboqs' test uses) against the
 Aegis KAT core (endpoints/stm32h573/kat-ns), either the PC harness or the STM32 over its console.
 

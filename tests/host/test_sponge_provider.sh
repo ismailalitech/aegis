@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # The aegis_pqc2 SHA-3 provider (gateway/pqc/aegis_sponge_drv.c) on the PC, against the C register model:
 #   1. the model behaves as the RTL: it replays the RTL test script (hw/tb/vectors/sponge_ops.txt, from hw/tb/run_all.sh)
 #   2. liboqs is built with the provider (tools/build_liboqs_sponge.sh x86); liboqs' own test_sha3 passes through it

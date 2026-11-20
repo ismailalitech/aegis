@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Negative test of the Aegis peripheral rules on the FRDM-RW612: build the non-secure prover with a probe that reads
 # one register of a peripheral from the non-secure side, flash it with the normal secure image, and record the console.
 # A peripheral that endpoints/rw612/tfm/aegis_s/platform/target_cfg.c makes secure-only must fault (no "read ok").

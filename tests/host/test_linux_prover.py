@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The aegis-linux prover (endpoints/zybo/aegis_linux_prover.py) against the gateway's own code (fleet.py), on the PC:
 attestation with software trust, ML-KEM provisioning with the credential checks, KMAC256 heartbeats, the session query,
 and the refusals (a changed boot file, a wrong pinned key, a credential from another key or for another exchange), and

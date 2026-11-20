@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 [Unit]
 Description=Aegis bridge to the OP-TEE trusted application (Zynq UltraScale+ endpoint, TrustZone), TCP 7444
 After=network-online.target

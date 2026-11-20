@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """KMAC128 and KMAC256 (NIST SP 800-185), standard library only.
 
 Python's hashlib offers SHA-3 and SHAKE but not cSHAKE, which KMAC is built on, so this module carries its own

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Build (and optionally flash) the Aegis prover for the NXP FRDM-RW612.
 #   endpoints/rw612/build.sh [flash]
 # Needs: a Zephyr v4.5.0 workspace ($ZEPHYR_WS, default ~/aegis-tools/zephyrproject, modules hal_nxp and cmsis_6),

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Record the FRDM-RW612 tamper demo as a screen recording: an xterm (X11, so ffmpeg can grab it on a Wayland desktop
 # too) with three tmux panes (the gateway's aegis-fleet journal, the board console, the operator's steps), then a
 # 4x-speed WebM and MP4 and a poster frame for the site.

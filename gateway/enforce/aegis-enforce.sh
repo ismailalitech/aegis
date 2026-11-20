@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Zero-trust enforcement hook for fleet.py (policy key "enforce_cmd").
 #   aegis-enforce.sh init <endpoint_if>          load the ruleset (empty admitted set)
 #   aegis-enforce.sh <endpoint> admit|quarantine add/remove the endpoint's address (from the policy)

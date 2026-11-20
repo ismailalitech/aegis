@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Read-only snapshot over JTAG: eFUSE cache registers and boot status. Reads only (mrd); writes nothing.
 #   xsdb efuse_status.tcl            (board on, booted from the card in a NON-secure boot, so JTAG is enabled)
 # Used before the registration run and again after a power cycle: the two outputs must be identical in the

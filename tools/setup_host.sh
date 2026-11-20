@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Rebuild the Aegis host tool set without root. Everything goes under
 # $AEGIS_TOOLS (default ~/aegis-tools) and the repo's .venv; nothing system-wide.
 # Undo: rm -rf ~/aegis-tools <repo>/.venv ~/.local/share/cmsis-pack-manager/Keil/STM32H5xx_DFP

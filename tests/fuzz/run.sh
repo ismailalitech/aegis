@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Build a fuzz harness with libFuzzer, ASan and UBSan, and run it:
 #   tests/fuzz/run.sh [seconds] [workers]           the RW612 protocol code (fuzz_rw612_proto.c); default 600 s, 8
 #   STM32=1 tests/fuzz/run.sh [seconds] [workers]   the STM32H573 partition on PC stand-ins (stm32/)

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # PC tests of the OP-TEE side of the ZynqMP endpoint (gcc, ASan and UBSan):
 #   endpoints/zynqmp/optee/tests/run.sh
 # 1. The hand-off checks of the OP-TEE patch (../os-patches). Takes the Aegis files out of the patches into a
