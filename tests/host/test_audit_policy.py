@@ -800,6 +800,38 @@ class Trail(Fleet):
         self.assertEqual(len(self.cycle(trail)[1]), 1)
         self.assertEqual(self.events()[1:], [("start", None), ("admit", "good"), ("refuse", "legacy")])
 
+    def test_settings_changed_while_the_log_cannot_be_written_lose_nothing_silently(self):
+        os.rename(os.path.join(self.state, "identity.sk"), os.path.join(self.state, "identity.sk.away"))
+        trail = self.trail()
+        self.cycle(trail)
+        self.assertIn("could NOT be written", self.said)
+        held = len(trail.log.pending)
+        self.policy["audit_log"] = {"checkpoint_s": 1800, "min_interval_s": 0}
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            new = fleet.open_audit(self.policy, self.state, trail, start={"cmd": "test"})
+        self.assertIsNot(new, trail)
+        self.assertIn("3 entries carried over, 0 lost", err.getvalue())     # start, admit, refuse; not log-start
+        self.assertEqual(held, 4)
+        os.rename(os.path.join(self.state, "identity.sk.away"), os.path.join(self.state, "identity.sk"))
+        self.cycle(new)
+        self.assertEqual([e for e in self.events() if e[0] != "log-start"][:5],
+                         [("start", None), ("admit", "good"), ("refuse", "legacy"), ("gap", None), ("start", None)])
+        gap = [e for e in self.entries() if e["event"] == "gap"][0]["details"]
+        self.assertEqual((gap["carried"], gap["dropped"]), (3, 0))
+        self.assertIn("settings changed", gap["why"])
+        # more than memory holds: what does not fit is counted in the gap, not dropped unsaid
+        old = fleet.AuditTrail(self.state, fleet.audit_settings(self.policy))
+        for i in range(audit.MAX_PENDING + 5):
+            old.log.add("refuse", "dev%d" % i)
+        old.log._load_sk = mock.Mock(side_effect=OSError("no key"))
+        new = fleet.AuditTrail(self.state, dict(fleet.AUDIT_SETTINGS), start={"cmd": "test"})
+        with contextlib.redirect_stderr(err):
+            fleet._hand_over(old, new)
+        g = new.log.pending[audit.MAX_PENDING - 2]
+        self.assertEqual((g[audit.E_EVENT], g[audit.E_DETAILS]["carried"], g[audit.E_DETAILS]["dropped"]),
+                         ("gap", audit.MAX_PENDING - 2, 3))      # 512 + its own "gap" entry, less what fits
+
     def test_an_identity_made_again_while_the_loop_runs_writes_nothing_and_is_said(self):
         trail = self.trail()
         self.cycle(trail)

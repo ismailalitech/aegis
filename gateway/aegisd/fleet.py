@@ -1693,6 +1693,25 @@ class AuditTrail:
         return self.flush(last=True)
 
 
+def _hand_over(old, new):
+    """The settings changed: old writes what it holds now, without waiting; what it could not write (no key, a full
+    disk) is not lost but goes to new, ahead of its own entries, and new's log says so ("gap", with how many entries
+    were carried over and how many did not fit in memory)."""
+    import audit
+    old.flush(final=True)
+    held = [e for e in old.log.pending if e[audit.E_EVENT] != "log-start"]     # new begins its own log if need be
+    lost = old.log.dropped
+    if not held and not lost:
+        return
+    room = max(0, audit.MAX_PENDING - len(new.log.pending) - 1)
+    carried, lost = held[:room], lost + len(held[room:])
+    new.log.pending[:0] = carried + [audit.entry("gap", None, {
+        "carried": len(carried), "dropped": lost, "error": str(old.error)[:200],
+        "why": "the audit log could not be written when its settings changed"})]
+    log("aegis-audit: the audit settings changed while the log could not be written: %d entries carried over, %d lost"
+        % (len(carried), lost), LOG_ERR, file=sys.stderr)
+
+
 def open_audit(policy, state, current=None, grace_s=120, promise=True, start=None, said=None):
     """The audit trail a policy asks for: current, if it is one with the same settings; a new one if the policy asks
     and there is none (or the settings changed); None if the policy does not ask, after a last entry in current.
@@ -1710,7 +1729,7 @@ def open_audit(policy, state, current=None, grace_s=120, promise=True, start=Non
             settings, why = None, "no verifier identity in %s to sign it with (%s: %s)" % (state, type(e).__name__, e)
         else:
             if current is not None:
-                current.flush()
+                _hand_over(current, new)
             current = new
     if settings is None and current is not None:
         current.stop(why or "the policy no longer asks for an audit log")
