@@ -69,7 +69,7 @@ echo '#define AEGIS_GATEWAY_PK { 0 }' > "$T/gateway_pk.h"
 SAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined"
 cc() {
 	gcc -std=gnu11 -g -D_GNU_SOURCE $SAN $LIMITS -DMLD_CONFIG_FILE='"aegis_mldsa_config.h"' \
-		-DAEGIS_DEVICE_FW='"zynqmp-optee"' -DAEGIS_DEVICE_VERSION='"0.1.1"' \
+		-DAEGIS_DEVICE_FW='"zynqmp-optee"' -DAEGIS_DEVICE_VERSION='"0.2.0"' \
 		-I"$HERE/stub" -I"$HERE" -I"$T" -I"$SRC" -I"$OPTEE/ta" -I"$OPTEE/include" -I"$OPTEE/../handoff" \
 		-I"$SDK/include" -I"$SDK/src" -I"$SDK/crypto/mldsa" -I"$MLDSA" -I"$SDK/crypto/mlkem" -I"$MLKEM" "$@"
 }

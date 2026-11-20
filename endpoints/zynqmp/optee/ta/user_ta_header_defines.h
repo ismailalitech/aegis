@@ -10,7 +10,7 @@
 #define TA_FLAGS (TA_FLAG_SINGLE_INSTANCE | TA_FLAG_MULTI_SESSION | TA_FLAG_INSTANCE_KEEP_ALIVE)
 #define TA_STACK_SIZE (64 * 1024)
 #define TA_DATA_SIZE  (512 * 1024)
-#define TA_VERSION "0.1.1"
+#define TA_VERSION "0.2.0"
 #define TA_DESCRIPTION "Aegis post-quantum attestation (ML-DSA-65, ML-KEM-768, KMAC heartbeats)"
 
 #endif

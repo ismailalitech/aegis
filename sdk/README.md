@@ -43,7 +43,7 @@ The ports to chips live with their build systems:
 | STM32H573, TF-M | `endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c` | TF-M secure partition | PSA messages, one per operation | built, PC-tested against the image in the field, byte for byte |
 | RW612, TF-M | `endpoints/rw612/tfm/aegis_pq/aegis_pq.c` | TF-M secure partition | lines through one PSA message | secure image built, not on a board |
 | RW612, single image | `endpoints/rw612/prover/src/main.c` | none (the whole firmware) | lines over TCP | source only (no Zephyr workspace on the build PC) |
-| ZynqMP, OP-TEE | `endpoints/zynqmp/optee/ta/aegis_ta.c` | trusted application | lines through one TA command | PC-tested on a stand-in for OP-TEE (`optee/tests/run.sh`); no `.ta` built on this PC |
+| ZynqMP, OP-TEE | `endpoints/zynqmp/optee/ta/aegis_ta.c` | trusted application | lines through one TA command | TA 0.2.0 built into OP-TEE, PC-tested with the bridge on a stand-in for OP-TEE against the gateway's code (`tests/host/test_zynqmp_ta_port.py`, `optee/tests/run.sh`); not on the board yet (`docs/zynqmp-sdk-port.md`) |
 | Linux | `sdk/ports/linux/aegis_port_linux.c` | none (a process) | lines over TCP | PC-tested; the Linux endpoints on the bench still run the Python prover, `endpoints/zybo/aegis_linux_prover.py` |
 | PC | `sdk/ports/host/aegis_port_host.c` | none | lines over TCP | the tests and the fuzzers run it |
 
@@ -277,6 +277,6 @@ Nothing of these is in version 1; the seams are marked in `src/aegis_proto.c`.
 | The core's contracts at their exact boundaries: inputs read once, the credential against the work buffer, the evidence's reported length, a status buffer one byte short, a generator that repeats | `tests/host/test_sdk_core_contract.py` (`sdk/tests/core_contract_check.c`), with and without sanitizers |
 | One fuzz harness on the core, both transports, every configuration, with an independent model of the protocol | `tests/fuzz/fuzz_sdk_core.c`, `tests/fuzz/run.sh`; seeds of all families in `tests/fuzz/seeds` |
 | The STM32 port's own code (PSA messages, the RTC, the stack mark) on PC stand-ins | `tests/fuzz/stm32`, `STM32=1 tests/fuzz/run.sh`, `tests/host/test_stm32_partition.py` |
-| The OP-TEE port on a stand-in for OP-TEE | `endpoints/zynqmp/optee/tests/run.sh` |
+| The OP-TEE port on a stand-in for OP-TEE | `endpoints/zynqmp/optee/tests/run.sh`; with the Linux bridge against `fleet.py` and the endorser: `tests/host/test_zynqmp_ta_port.py` |
 | The option for standard evidence (`-DAEGIS_EAT_COSE=1`): an EAT at every length that changes an encoding, read by the verifier's decoder and by a COSE library; the core behind a socket against `fleet.py` with a session bound to the EAT quote; the fuzz harness and corpus with the option | `tests/host/test_sdk_eat.py` (`sdk/tests/eat_check.c`), `EAT=1 tests/fuzz/run.sh`, seeds `tests/fuzz/seeds/sdk-eat-*` (`tests/fuzz/make_eat_seeds.py`) |
 | The Linux port | `tests/host/test_sdk_linux_port.py` |
