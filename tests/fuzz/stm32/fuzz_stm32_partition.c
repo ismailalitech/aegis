@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: Apache-2.0
  *
- * libFuzzer harness for the STM32H573 TF-M partition (endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c),
- * built on the PC with ASan and UBSan against stand-ins for TF-M's PSA service API, the attestation service and the
- * SAES unit (stub/). Build and run: STM32=1 tests/fuzz/run.sh.
+ * libFuzzer harness for the STM32H573 TF-M partition (endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c: the
+ * Prover SDK's port to that chip, with the SDK's core, sdk/src/aegis_proto.c, behind it), built on the PC with ASan
+ * and UBSan against stand-ins for TF-M's PSA service API, the attestation service and the SAES unit (stub/). Build
+ * and run: STM32=1 tests/fuzz/run.sh. The core by itself is fuzzed by ../fuzz_sdk_core.c; this harness is for what
+ * is the port's own: the PSA messages and their sizes, the session clock's hardware, the stack mark, the statuses.
  *
  * The harness sends PSA messages as the non-secure prover would, and as a hostile non-secure image could (any
  * message type, any input and output sizes). It also plays the gateway, so the fuzzer gets past the credential
@@ -83,14 +85,18 @@ static uintptr_t fz_sp;
 static void fz_hw_step(void);
 #define AEGIS_TEST_HW_STEP() fz_hw_step()
 #define SCLK_WAIT 64u
+/* the partition and the SDK's core it is built on, included so the harness can reach their state between messages
+ * and use the core's SHA3-256; neither is changed */
+#include "aegis_proto.c"
 #include "aegis_pq_attest.c"
+#include "../fz_trace.h"
 
 /* stand-in for the partition's stack (TF-M's generated tfm_sp_aegis_pq_stack) */
 uint8_t tfm_sp_aegis_pq_stack[AEGIS_PQ_STACK_SIZE];
 
 #define DIE(...) do { fprintf(stderr, "ORACLE: " __VA_ARGS__); fputc('\n', stderr); abort(); } while (0)
-#define SIG_LEN MLDSA_BYTES(65)
-#define PK_LEN MLDSA_PUBLICKEYBYTES(65)
+#define CRED_MAX AEGIS_CRED_MAX
+#define pk core.pk /* the device's public key, in the core's context */
 
 /* ---- stand-ins for TF-M and the HAL ---- */
 static struct {
@@ -356,6 +362,9 @@ static psa_status_t send(int32_t type, const uint8_t *in0, size_t l0, const uint
 	cur.out[0] = malloc(o0 ? o0 : 1); cur.out_cap[0] = o0;
 	cur.out[1] = malloc(o1 ? o1 : 1); cur.out_cap[1] = o1;
 	st = aegis_pq_service_sfn(&msg);
+#if defined(FZ_TRACE)
+	fz_trace_msg((int)type, l0, l1, o0, o1, (int)st, cur.out[0], cur.out_len[0], cur.out[1], cur.out_len[1]);
+#endif
 	free(a);
 	free(b);
 	if (st != PSA_SUCCESS && (cur.out_len[0] || cur.out_len[1])) DIE("an error after writing output");
@@ -612,7 +621,7 @@ static void op_kem_fin(uint8_t sel, const uint8_t *p, size_t n)
 
 	sizes_ok = ctl == KEM_CT_LEN && cl > 0 && cl <= CRED_MAX;
 	lifetime = model_lifetime(body, bl);
-	bound = pending && M.clk && sizes_ok && !memchr(body, '\n', bl) && 20 + bl <= sizeof(signed_msg) &&
+	bound = pending && M.clk && sizes_ok && !memchr(body, '\n', bl) && 20 + bl <= sizeof(work) &&
 		!(flags & F_BAD_SIG) && contains(body, bl, "kem_ct_sha3_256", h_ct) &&
 		contains(body, bl, "kem_ek_sha3_256", h_ek) &&
 		(!M.bound || contains(body, bl, "transcript_sha3_256", M.t2));
@@ -821,13 +830,14 @@ static void op_pubkey(void)
 /* the partition after a reset, on clock hardware from the arguments */
 static void reset(unsigned hw_flags, unsigned rtcsel, uint32_t count)
 {
-	kem_pending = 0; session_ready = 0; session_expired = 0; hb_counter = 0; kem_counter = 0;
-	kem_bound = 0;
+	core.kem_pending = 0; core.session_ready = 0; core.session_expired = 0; core.hb_counter = 0; core.kem_counter = 0;
+	core.kem_bound = 0;
+	core.rng_have = 0; /* the generator's last output is not known after a reset */
 #if !defined(FZ_QUOTE_OUTLIVES_RESET)
-	quote_ready = 0; /* RAM: a quote does not outlive a reset. The control build keeps it, to show the model sees it */
+	core.quote_ready = 0; /* RAM: a quote does not outlive a reset. The control build keeps it, to show the model sees it */
 #endif
-	session_start = session_limit = 0;
-	memset(session_key, 0, sizeof(session_key));
+	core.session_start = core.session_limit = 0;
+	memset(core.session_key, 0, sizeof(core.session_key));
 	memset(&M, 0, sizeof(M));
 	stack_scenario(AEGIS_PQ_STACK_SIZE - 1024, 0);
 	clock_boot(hw_flags, rtcsel, count);
@@ -918,7 +928,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 }
 
 #if defined(FZ_STANDALONE)
-static void put_hex(const char *name, const uint8_t *p, size_t n)
+static void print_hex(const char *name, const uint8_t *p, size_t n)
 {
 	printf("%s=", name);
 	for (size_t i = 0; i < n; i++) printf("%02x", p[i]);
@@ -953,16 +963,16 @@ static int transcript_vector(void)
 	rng_state = RNG_SEED;
 	rng_skip = rng_fail = 0;
 	if (send(AEGIS_PQ_QUOTE, ch, 32, NULL, 0, TOKEN_MAX, SIG_LEN, &r0, &r1, &w0, &w1) != PSA_SUCCESS) return 1;
-	put_hex("pk", pk, PK_LEN);
-	put_hex("challenge", ch, 32);
-	put_hex("token", r0, w0);
-	put_hex("quote_sig", r1, w1);
+	print_hex("pk", pk, PK_LEN);
+	print_hex("challenge", ch, 32);
+	print_hex("token", r0, w0);
+	print_hex("quote_sig", r1, w1);
 	free(r0);
 	free(r1);
 	if (send(AEGIS_PQ_KEM_INIT, ch, 32, NULL, 0, KEM_EK_LEN, SIG_LEN, &r0, &r1, &w0, &w1) != PSA_SUCCESS) return 1;
 	memcpy(ek, r0, KEM_EK_LEN);
-	put_hex("ek", r0, w0);
-	put_hex("kem_sig", r1, w1);
+	print_hex("ek", r0, w0);
+	print_hex("kem_sig", r1, w1);
 	free(r0);
 	free(r1);
 	fflush(stdout);
@@ -983,15 +993,15 @@ static int transcript_vector(void)
 	cl = bl + 1 + SIG_LEN;
 	st = send(AEGIS_PQ_KEM_FINISH, ct, KEM_CT_LEN, cred, cl, 32, 0, &r0, &r1, &w0, &w1);
 	printf("finish=%d\n", (int)st);
-	put_hex("ct", ct, KEM_CT_LEN);
-	put_hex("cred", cred, cl);
-	put_hex("k", k, 32);
-	put_hex("tag", r0, w0);
+	print_hex("ct", ct, KEM_CT_LEN);
+	print_hex("cred", cred, cl);
+	print_hex("k", k, 32);
+	print_hex("tag", r0, w0);
 	free(r0);
 	free(r1);
 	st = send(AEGIS_PQ_SESSION, NULL, 0, NULL, 0, 64, 0, &r0, &r1, &w0, &w1);
 	printf("session_status=%d\n", (int)st);
-	put_hex("session", r0, w0);
+	print_hex("session", r0, w0);
 	free(r0);
 	free(r1);
 	return 0;

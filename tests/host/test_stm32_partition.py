@@ -1,5 +1,5 @@
-"""The STM32H573 secure partition (endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c, the file TF-M builds),
-on the PC against the stand-ins and the model of tests/fuzz/stm32/fuzz_stm32_partition.c, without libFuzzer: every
+"""The STM32H573 secure partition (endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c with the Prover SDK's
+core, sdk/src/aegis_proto.c: the files TF-M builds), on the PC against the stand-ins and the model of tests/fuzz/stm32/fuzz_stm32_partition.c, without libFuzzer: every
 seed of tests/fuzz/stm32/seeds must pass the harness's checks.
 
 Among them the replay after a reset: someone records a KEM_INIT and the gateway's KEM_FINISH, resets the board and
@@ -42,9 +42,13 @@ SWAP = "transcript-swap-after-reset"
 PSA_ERROR_INVALID_SIGNATURE = -149
 
 
+SDK = os.path.join(ROOT, "sdk")
+
+
 def gcc(*args):
     subprocess.run(["gcc", "-O2", "-D_GNU_SOURCE", '-DMLD_CONFIG_FILE="aegis_mldsa_config.h"',
-                    "-I", PART, "-I", os.path.join(PART, "mldsa"), "-I", MLDSA, "-I", os.path.join(PART, "mlkem"),
+                    "-I", PART, "-I", os.path.join(SDK, "include"), "-I", os.path.join(SDK, "src"),
+                    "-I", os.path.join(SDK, "crypto", "mldsa"), "-I", MLDSA, "-I", os.path.join(SDK, "crypto", "mlkem"),
                     "-I", MLKEM] + list(args), check=True)
 
 
@@ -54,9 +58,9 @@ class Stm32Partition(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.d = d = tempfile.mkdtemp()
-        objs = [os.path.join(d, n) for n in ("kmac.o", "mlkem.o", "mldsa.o")]
-        for src, obj in zip((os.path.join(PART, "aegis_kmac.c"), os.path.join(PART, "mlkem_unit.c"),
-                             os.path.join(MLDSA, "mldsa_native.c")), objs):
+        objs = [os.path.join(d, n) for n in ("kmac.o", "mlkem.o", "mldsa.o", "sha256.o")]
+        for src, obj in zip((os.path.join(SDK, "src", "aegis_kmac.c"), os.path.join(SDK, "crypto", "mlkem_unit.c"),
+                             os.path.join(MLDSA, "mldsa_native.c"), os.path.join(SDK, "src", "aegis_sha256.c")), objs):
             gcc("-c", src, "-o", obj)
         # the partition pins a test gateway key whose secret key the harness holds
         gcc(os.path.join(FUZZ, "gen_gw_pk.c"), objs[2], "-o", os.path.join(d, "gen_gw_pk"))

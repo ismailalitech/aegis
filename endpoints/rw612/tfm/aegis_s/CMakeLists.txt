@@ -10,7 +10,8 @@ include(${SdkRootDirPath}/CMakeLists.txt)
 include(${SdkRootDirPath}/${board_root}/${board}/tfm_examples/tfm_demo/tfm_demo_s/reconfig.cmake)
 
 set(RW ${CMAKE_CURRENT_LIST_DIR}/../..)
-set(PART ${RW}/../stm32h573/tfm-aegis-partition)
+set(SDK ${RW}/../../sdk)                          # the Prover SDK: protocol core, KMAC, SHA-256, PQ configurations
+set(PART ${RW}/../stm32h573/tfm-aegis-partition)  # the pinned gateway key (gateway_pk.h, tools/gen_gateway_pin.py)
 set(MLDSA_NATIVE_DIR "$ENV{HOME}/aegis-tools/mldsa-native/mldsa" CACHE PATH "mldsa-native v2.0.0 mldsa/ directory")
 set(MLKEM_NATIVE_DIR "$ENV{HOME}/aegis-tools/mlkem-native/mlkem" CACHE PATH "mlkem-native v2.0.0 mlkem/ directory")
 
@@ -23,7 +24,7 @@ mcux_add_macro(
         -DENABLE_HEAP\
         -DMLD_CONFIG_FILE=\\\"aegis_mldsa_config.h\\\"\
         -DAEGIS_DEVICE_FW=\\\"rw612-tfm\\\"\
-        -DAEGIS_DEVICE_VERSION=\\\"0.3.0\\\"\
+        -DAEGIS_DEVICE_VERSION=\\\"0.3.2\\\"\
        "
 )
 
@@ -42,16 +43,18 @@ if(DEFINED ENV{AEGIS_EXTRA_DEFINES})
     mcux_add_macro(CC "$ENV{AEGIS_EXTRA_DEFINES}")
 endif()
 
-# the Aegis partition: generated load data (NXP's manifest tool, see ../aegis_pq/README), the service, and the
-# protocol, hash, KMAC and PQ code shared with the Zephyr prover and the STM32 partition
+# the Aegis partition: generated load data (NXP's manifest tool, see ../aegis_pq/README), the service (this chip's
+# port of the Prover SDK), and the SDK's protocol core, hash, KMAC and PQ code, which every Aegis device builds
 mcux_add_source(BASE_PATH ${CMAKE_CURRENT_LIST_DIR}/../aegis_pq
     SOURCES auto_generated/load_info_aegis_pq.c auto_generated/intermedia_aegis_pq.c aegis_pq.c)
-mcux_add_source(BASE_PATH ${RW}/prover/src SOURCES aegis_els.c aegis_proto.c sha256.c)
-mcux_add_source(BASE_PATH ${PART} SOURCES aegis_kmac.c mlkem_unit.c)
+mcux_add_source(BASE_PATH ${RW}/prover/src SOURCES aegis_els.c)
+mcux_add_source(BASE_PATH ${SDK}/src SOURCES aegis_proto.c aegis_kmac.c aegis_sha256.c)
+mcux_add_source(BASE_PATH ${SDK}/crypto SOURCES mlkem_unit.c)
 mcux_add_source(BASE_PATH ${MLDSA_NATIVE_DIR} SOURCES mldsa_native.c)
 mcux_add_include(BASE_PATH ${CMAKE_CURRENT_LIST_DIR}/../aegis_pq INCLUDES .)
 mcux_add_include(BASE_PATH ${RW}/prover/src INCLUDES .)
-mcux_add_include(BASE_PATH ${PART} INCLUDES . mldsa mlkem)
+mcux_add_include(BASE_PATH ${SDK} INCLUDES include src crypto/mldsa crypto/mlkem)
+mcux_add_include(BASE_PATH ${PART} INCLUDES .)
 mcux_add_include(BASE_PATH ${MLDSA_NATIVE_DIR} INCLUDES .)
 mcux_add_include(BASE_PATH ${MLKEM_NATIVE_DIR} INCLUDES .)
 

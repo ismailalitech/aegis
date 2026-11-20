@@ -6,10 +6,13 @@
  *   seed      = ELS: HMAC-SHA256(CKDF(die master key), "aegis-rw612-mldsa65-seed-v1")   (aegis_els.c)
  *   prov_root = ELS: HMAC-SHA256(CKDF(die master key), "aegis-rw612-provision-root-v1")
  *   (pk, sk)  = ML-DSA-65.KeyGen_internal(seed); the seed is wiped
- * Then DHCP on the Ethernet port, and the Aegis line protocol on TCP 7444 (aegis_proto.c), one request per
- * connection. The quote reports one measurement, APP: SHA-256 of this firmware image as it sits in flash.
+ * Then DHCP on the Ethernet port, and the Aegis line protocol on TCP 7444, one request per connection. The protocol
+ * is the Prover SDK's core (sdk/src/aegis_proto.c); this file is the SDK's port to the single-image firmware (struct
+ * aegis_platform, sdk/include/aegis_sdk.h) and the transport. The quote reports one measurement, APP: SHA-256 of this
+ * firmware image as it sits in flash, hashed again at every quote.
  * The MAC address is 02:ae + the first 4 bytes of the ML-DSA public key, as on the STM32 endpoints.
  */
+#include <stdio.h>
 #include <string.h>
 #include <zephyr/drivers/entropy.h>
 #include <zephyr/kernel.h>
@@ -22,7 +25,7 @@
 #include <zephyr/sys/printk.h>
 
 #include "aegis_els.h"
-#include "aegis_proto.h"
+#include "aegis_sdk.h"
 #include "gateway_pk.h"
 #include "aegis_sha256.h"
 
@@ -32,32 +35,65 @@ extern char __rom_region_start[];
 extern char _flash_used[];
 
 static const struct device *const trng = DEVICE_DT_GET(DT_CHOSEN(zephyr_entropy));
-static const uint8_t gateway_pk[1952] = AEGIS_GATEWAY_PK;
+/* what the claims and the status text call this firmware (a build may set them with -D) */
+#ifndef AEGIS_DEVICE_PROFILE
+#define AEGIS_DEVICE_PROFILE "aegis-rw612-els-v1"
+#endif
+#ifndef AEGIS_DEVICE_FW
+#define AEGIS_DEVICE_FW      "rw612"
+#endif
+#ifndef AEGIS_DEVICE_VERSION
+#define AEGIS_DEVICE_VERSION "0.1.0"
+#endif
+#define CLAIMS_MAX 1024u /* the claims with one component take about 280 bytes */
+
+static const uint8_t gateway_pk[AEGIS_PK_LEN] = AEGIS_GATEWAY_PK;
+static struct aegis_prover core; /* the SDK core's context: the keys and the session live here */
+static uint8_t work[AEGIS_WORK_LEN(CLAIMS_MAX)];
+static struct aegis_measurement components[1];
 static char line[AEGIS_LINE_MAX + 2];
 static char reply[AEGIS_REPLY_MAX];
 
-static int dev_random(uint8_t *out, size_t n)
+static int dev_random(void *user, uint8_t *out, size_t n)
 {
+	ARG_UNUSED(user);
 	return entropy_get_entropy(trng, out, (uint16_t)n);
 }
 
 static void dev_measure(uint8_t out[32], size_t *len)
 {
 	*len = (size_t)_flash_used;
-	sha256((const uint8_t *)__rom_region_start, *len, out);
+	aegis_sha256((const uint8_t *)__rom_region_start, *len, out);
 }
 
-static uint32_t dev_uptime(void)
+/* One measured component, APP: the image as it is in flash now. */
+static int dev_measurements(void *user, const struct aegis_measurement **list, size_t *count)
 {
-	return (uint32_t)(k_uptime_get() / 1000);
+	size_t len;
+
+	ARG_UNUSED(user);
+	dev_measure(components[0].value, &len);
+	components[0].label = "APP";
+	snprintf(components[0].desc, sizeof(components[0].desc), "SHA256 of the firmware image (%u bytes)", (unsigned)len);
+	*list = components;
+	*count = 1;
+	return 0;
+}
+
+static int dev_status(void *user, char *buf, size_t cap)
+{
+	ARG_UNUSED(user);
+	return snprintf(buf, cap, "uptime_s=%u;link=1;fw=%s-%s", (unsigned)(uint32_t)(k_uptime_get() / 1000),
+			AEGIS_DEVICE_FW, AEGIS_DEVICE_VERSION);
 }
 
 /* The session clock: Zephyr's uptime, 64 bits of milliseconds counted by the kernel from the RW612's OS timer. This
  * prover is one image with no secure side, so the clock is as trusted as the rest of the firmware ("device-key"). */
-static int dev_monotonic(uint64_t *now)
+static int dev_monotonic(void *user, uint64_t *now)
 {
 	int64_t ms = k_uptime_get();
 
+	ARG_UNUSED(user);
 	if (ms < 0) {
 		return -1;
 	}
@@ -65,8 +101,15 @@ static int dev_monotonic(uint64_t *now)
 	return 0;
 }
 
-static const struct aegis_proto_platform platform = {
-	.random = dev_random, .measure = dev_measure, .uptime_s = dev_uptime, .monotonic_s = dev_monotonic};
+static const struct aegis_platform platform = {
+	.random = dev_random,
+	.clock = dev_monotonic,
+	.clock_hz = 1, /* dev_monotonic gives seconds */
+	.measurements = dev_measurements,
+	.profile = AEGIS_DEVICE_PROFILE,
+	.version = AEGIS_DEVICE_VERSION,
+	.status = dev_status,
+};
 
 static K_SEM_DEFINE(got_ip, 0, 1);
 static struct net_mgmt_event_callback mgmt_cb;
@@ -118,7 +161,7 @@ static void serve(void)
 		if (!nl && got >= AEGIS_LINE_MAX) {
 			n = snprintf(reply, sizeof(reply), "ERR too-long");
 		} else {
-			n = aegis_proto_handle(line, reply, sizeof(reply));
+			n = aegis_prover_handle_line(&core, line, reply, sizeof(reply));
 		}
 		memcpy(reply + n, "\r\n", 2);
 		for (size_t off = 0; off < (size_t)n + 2;) {
@@ -152,14 +195,25 @@ static void prover(void *a, void *b, void *c)
 		printk("aegis: ELS key derivation failed (%d); no prover\n", rc);
 		return;
 	}
-	rc = aegis_proto_init(&platform, seed, root, gateway_pk);
-	memset(seed, 0, sizeof(seed));
-	memset(root, 0, sizeof(root));
-	if (rc != 0) {
+	{
+		const struct aegis_config cfg = {
+			.platform = &platform,
+			.verifier_pk = gateway_pk,
+			.identity_seed = seed,
+			.exchange_root = root,
+			.work = work,
+			.work_len = sizeof(work),
+		};
+
+		rc = AEGIS_PROVER_INIT(&core, &cfg);
+	}
+	aegis_wipe(seed, sizeof(seed));
+	aegis_wipe(root, sizeof(root));
+	if (rc != AEGIS_OK) {
 		printk("aegis: ML-DSA key generation failed\n");
 		return;
 	}
-	sha256(aegis_proto_pk(), 1952, fp);
+	aegis_sha256(aegis_prover_public_key(&core), AEGIS_PK_LEN, fp);
 	dev_measure(meas, &img);
 	printk("aegis: key sha256 %02x%02x%02x%02x%02x%02x%02x%02x..., image %u bytes, sha256 "
 	       "%02x%02x%02x%02x%02x%02x%02x%02x...\n",
@@ -172,7 +226,7 @@ static void prover(void *a, void *b, void *c)
 		uint8_t *mac = p.mac_address.addr;
 
 		mac[0] = 0x02; mac[1] = 0xae;
-		memcpy(mac + 2, aegis_proto_pk(), 4);
+		memcpy(mac + 2, aegis_prover_public_key(&core), 4);
 		net_if_down(iface);
 		rc = net_mgmt(NET_REQUEST_ETHERNET_SET_MAC_ADDRESS, iface, &p, sizeof(p));
 		net_if_up(iface);

@@ -18,3 +18,11 @@
 "\"issued\":"
 "\"expires\":"
 "ERR pq expired"
+# the shared harness's prefix and configurations (fuzz_sdk_core.c): the STM32 partition's, the binary front, lines
+"AEG\x01"
+"AEG\x01\x5f"
+"AEG\x01\x01"
+"AEG\x01\x00"
+"AEG\x01\x21"
+"AEG\x01\x42"
+"\"transcript_sha3_256\":\""

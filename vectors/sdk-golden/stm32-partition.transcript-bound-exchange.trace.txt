@@ -1,0 +1,11 @@
+M 2 in=32,0 out=592,3309 st=0 w=120,3309 9a1b9c5af6bf0ba7 b9fee5bc95b89c11
+M 3 in=32,0 out=1184,3309 st=0 w=1184,3309 baaadb93fce06f91 c87829bec0224576
+M 4 in=1088,3646 out=32,0 st=0 w=32,0 7ea0c5e4592a8828 a7ffc6f8bf1ed766
+M 5 in=0,0 out=64,0 st=0 w=64,0 496ad44d67110fe6 a7ffc6f8bf1ed766
+M 6 in=32,4 out=40,162 st=0 w=40,31 c2b477ea15b72660 437ccc6a6304754f
+M 2 in=32,0 out=592,3309 st=0 w=120,3309 a117814dccce1acc 2ae8c2bd740b5f99
+M 3 in=32,0 out=1184,3309 st=0 w=1184,3309 f9136f75eae85f4c a6e0ac4668a5c0fb
+M 4 in=1088,3646 out=32,0 st=0 w=32,0 9a056403cbe4042d a7ffc6f8bf1ed766
+M 5 in=0,0 out=64,0 st=0 w=64,0 a93f01e9cbe7fa8e a7ffc6f8bf1ed766
+M 6 in=32,4 out=40,162 st=0 w=40,31 2268ee9d0e6747f0 437ccc6a6304754f
+1 inputs, no finding

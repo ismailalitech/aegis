@@ -19,7 +19,7 @@
 
 #include "aegis_boot_pta.h"
 #include "aegis_handoff_kdf.h"
-#include "aegis_proto.h"
+#include "aegis_sdk.h"
 #include "aegis_sha256.h"
 #include "aegis_ta.h"
 #include "host_hmac.h"
@@ -214,13 +214,36 @@ static size_t count_text(const char *s)
 	return c;
 }
 
-/* sha256 of the TA's ML-DSA-65 public key, in hex */
+static const char *line(const char *req);
+
+/* the TA's ML-DSA-65 public key, as the TA gives it to anyone who asks (PQKEY); all zero if it does not */
+static const uint8_t *ta_pk(void)
+{
+	static uint8_t pk[AEGIS_PK_LEN];
+	const char *reply = line("PQKEY");
+	unsigned int len = 0;
+	int off = 0;
+
+	memset(pk, 0, sizeof(pk));
+	CHECK(sscanf(reply, "PQKEY %u %n", &len, &off) == 1 && len == AEGIS_PK_LEN && off != 0);
+	if (len != AEGIS_PK_LEN || off == 0)
+		return pk;
+	for (unsigned int i = 0; i < len; i++) {
+		unsigned int b = 0;
+
+		CHECK(sscanf(reply + off + 2 * i, "%2x", &b) == 1);
+		pk[i] = (uint8_t)b;
+	}
+	return pk;
+}
+
+/* sha256 of that key, in hex */
 static const char *key_hash(void)
 {
 	static char hex[65];
 	uint8_t h[32];
 
-	sha256(aegis_proto_pk(), 1952, h);
+	aegis_sha256(ta_pk(), AEGIS_PK_LEN, h);
 	for (int i = 0; i < 32; i++)
 		sprintf(hex + 2 * i, "%02x", h[i]);
 	return hex;
@@ -581,7 +604,8 @@ static int kem_reply(const char *r, uint8_t ek[1184], uint8_t sig[3309])
 	return !strcmp(r + off + 2 * sl, " END");
 }
 
-/* ML-DSA-65 by the TA's key over label || 0x00 || m (the framing of fleet.py and aegis_proto.c) */
+/* ML-DSA-65 by the TA's key over label || 0x00 || m (the framing of fleet.py and the SDK's core, aegis_proto.c).
+ * The key is asked for after the reply under test has been taken apart: line() has one reply buffer. */
 static int signed_by_ta(const uint8_t sig[3309], const char *label, const uint8_t *m1, size_t n1, const uint8_t *m2,
 			size_t n2)
 {
@@ -593,7 +617,7 @@ static int signed_by_ta(const uint8_t sig[3309], const char *label, const uint8_
 	memcpy(msg + l, m1, n1);
 	if (n2)
 		memcpy(msg + l + n1, m2, n2);
-	return aegis_mldsa_verify_internal(sig, msg, l + n1 + n2, pre, sizeof(pre), aegis_proto_pk(), 0) == 0;
+	return aegis_mldsa_verify_internal(sig, msg, l + n1 + n2, pre, sizeof(pre), ta_pk(), 0) == 0;
 }
 
 /* The TA's side of the transcript, against this file's reading of the layout: a PQKEMINIT with the challenge of the

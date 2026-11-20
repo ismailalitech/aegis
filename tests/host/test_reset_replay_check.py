@@ -1,5 +1,5 @@
-"""tests/board/reset_replay_check.py, the reset-and-replay check for the boards, run on the PC against the RW612
-prover's protocol code (endpoints/rw612/prover/src/aegis_proto.c, built by test_rw612_proto.py's recipe). A reset is
+"""tests/board/reset_replay_check.py, the reset-and-replay check for the boards, run on the PC against the Prover
+SDK's core (sdk/src/aegis_proto.c through sdk/ports/host, built by test_rw612_proto.py's recipe). A reset is
 the program started again with the same device secrets.
 
   - an endpoint that puts fresh random bytes into every ML-KEM key passes: the recorded PQKEMINIT gets another key

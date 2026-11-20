@@ -12,8 +12,9 @@ under NXP's TF-M (v2.1.4, from the MCUXpresso SDK), and the non-secure image onl
   - At the first request: the ML-DSA-65 key from ELS (CKDF from the die key, then HMAC, as in `../prover`). Not at
     initialisation, because TF-M's crypto partition sets ELS up during its own initialisation. Using ELS before that
     left the chip resetting moments later.
-  - Every request: one line of the Aegis protocol in, the reply out. The code is `../prover/src/aegis_proto.c`, the
-    same code the PC tests run against the gateway.
+  - Every request: one line of the Aegis protocol in, the reply out. The code is the Prover SDK's core,
+    `sdk/src/aegis_proto.c`, the same code the PC tests run against the gateway; `aegis_pq/aegis_pq.c` is the SDK's
+    port to this chip (randomness, clock, measurements, status) and the PSA transport.
 - **Non-secure:** a client that passes lines to the partition with `psa_call`. It never holds the key, the seed or the
   session, and it cannot reach ELS, which TF-M makes secure-privileged only.
 
@@ -82,7 +83,7 @@ All re-tested on the board.
 
 ## Fuzzing (tests/fuzz, after the review)
 
-`tests/fuzz/run.sh` builds `aegis_proto.c` into a libFuzzer harness with AddressSanitizer and UndefinedBehaviorSanitizer
+`tests/fuzz/run.sh` builds `sdk/src/aegis_proto.c` into a libFuzzer harness with AddressSanitizer and UndefinedBehaviorSanitizer
 and calls it exactly as `aegis_pq.c` does: raw request bytes up to `AEGIS_LINE_MAX`, a reply buffer of exactly
 `AEGIS_REPLY_MAX`. The harness also plays the gateway (it holds the pinned gateway key, encapsulates, signs
 credentials whose body the input changes), so the fuzzer reaches the paths behind the signature check, and it checks
@@ -116,11 +117,11 @@ left>`:
 
 The secure console prints the choice at start, for example `[Aegis] session clock: ref, 1015625 Hz` (260 MHz / 256).
 
-## One transcript (0.3.0, built; not yet on the board)
+## One transcript (0.3.0; on the board since 20 November 2026)
 
 The partition keeps the last quote it signed, and a `PQKEMINIT` that carries that quote's challenge continues it: the
 ML-KEM key is signed over the transcript of the quote, the credential must name it, and the session key depends on it
-(`docs/architecture.md`, "One transcript"; the code is in `../prover/src/aegis_proto.c`). With `"transcript": "v2"`
+(`docs/architecture.md`, "One transcript"; the code is in `sdk/src/aegis_proto.c`). With `"transcript": "v2"`
 in this endpoint's policy entry the gateway finishes a session only that way. This chip is where it matters most on
 the bench: the single-image prover (`../prover`) has the same key, and before this the gateway could appraise this
 partition's quote and finish the session with that firmware (`tests/host/test_rw612_proto.py`,
@@ -130,3 +131,18 @@ The non-secure image is unchanged, byte for byte (`prover_ns.bin`, sha256 `9af83
 the gateway policy: `tools/rw612_tfm_reference.py` gives SPE `76f89751c178c99d086c362f8334869bd0b0c691a71cf8a244dd1e609035ee28`
 for this build (`aegis_s.bin`, sha256 `8f7a0197...`; NSPE stays `24979a1f...`). The heartbeat status says
 `fw=rw612-tfm-0.3.0`. On the board: `tests/board/transcript_swap_check.py`.
+
+## On the Prover SDK's core (0.3.2)
+
+The partition's protocol code is the Prover SDK's core (`sdk/src/aegis_proto.c`), and `aegis_pq/aegis_pq.c` is
+its port to this chip (`sdk/README.md`). The lines, the claims and the status text are as in 0.3.0, except for the
+version they name. Refusals that are new, none of them reachable with a working chip: a random draw for an
+exchange's ML-KEM key of 32 equal bytes, or equal to the draw before it, answers `ERR rng`; a seed or root of zeros
+from ELS makes no key. The core keeps no copy of the credential, the claims or the gateway's key any more, so the
+secure image uses 161828 bytes of its 192 KB of RAM (176924 before).
+
+The non-secure image is again unchanged, byte for byte (`prover_ns.bin`, sha256 `9af83bab...`):
+`tools/rw612_tfm_reference.py` gives SPE `c8d0f01223ca59f9223fdee4df675f2eaae3a190ed4b2ef11b0e1816b7d242f7` for
+this build (`aegis_s.bin`, sha256 `c312218b...`; NSPE stays `24979a1f...`). The heartbeat status says
+`fw=rw612-tfm-0.3.2`. (0.3.1, SPE `b48d2ecf...`, was the same before the fixes of the review: inputs read once,
+the generator's repeated output refused.)

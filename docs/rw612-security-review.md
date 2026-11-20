@@ -1,7 +1,7 @@
 # Security review of the RW612 TrustZone prover (18 November 2026)
 
 Scope: the TF-M secure partition (`endpoints/rw612/tfm/aegis_pq`), the protocol code it runs on non-secure input
-(`endpoints/rw612/prover/src/aegis_proto.c`), the ELS key derivation, the hardened `target_cfg.c`, the gateway's
+(`endpoints/rw612/prover/src/aegis_proto.c` at the time; since the Prover SDK it is `sdk/src/aegis_proto.c`), the ELS key derivation, the hardened `target_cfg.c`, the gateway's
 verifier for this endpoint, and the build, flash and probe tooling. Threat model: the non-secure image is fully
 compromised (arbitrary code, arbitrary `psa_call` arguments, every peripheral `target_cfg.c` leaves it). Out of scope:
 physical attacks and reflashing the secure image with a debugger (no secure boot is fused on this bench).
@@ -50,7 +50,7 @@ the credential length arithmetic all hold for the worst case.
 
 The "not found" above was a reading of the code. To test it, `tests/fuzz` runs `aegis_proto.c` under libFuzzer with
 AddressSanitizer and UndefinedBehaviorSanitizer, called exactly as the partition calls it, with a harness that also
-plays the gateway and checks every answer against a model of the protocol (details in `tests/fuzz/fuzz_rw612_proto.c`).
+plays the gateway and checks every answer against a model of the protocol (details in `tests/fuzz/fuzz_rw612_proto.c`; since the Prover SDK the harness is `tests/fuzz/fuzz_sdk_core.c`).
 
 - **Found and fixed (low):** a `PQKEMINIT` refused after the ML-KEM key was made (`ERR sign`, `ERR kem`) left the
   older exchange pending with the new key and nonce in it, unusable, and the new decapsulation key stayed in memory.

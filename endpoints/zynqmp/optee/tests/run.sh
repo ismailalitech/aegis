@@ -8,7 +8,8 @@
 #    runs it, also on a page whose digest Python computed.
 # 2. The keys OP-TEE takes from the seed (aegis_handoff_kdf.c of the patch, test_handoff_kdf.c) against values from
 #    Python's hmac module.
-# 3. The TA (../ta/aegis_ta.c) with the real protocol code on a stand-in for OP-TEE (stub/, test_ta.c), with the
+# 3. The TA (../ta/aegis_ta.c) with the real protocol code (the Prover SDK's core, sdk/) on a stand-in for OP-TEE
+#    (stub/, test_ta.c), with the
 #    limits of ../ta/sub.mk: profiles, measurements, and the ML-DSA-65 key, which without a seed of the chip's must
 #    be the one the board had in phase A. Needs the mldsa-native / mlkem-native v2.0.0 trees, as tests/fuzz/run.sh.
 set -eu
@@ -18,8 +19,7 @@ ROOT=$(cd "$OPTEE/../../.." && pwd)
 TOOLS=${AEGIS_TOOLS:-$HOME/aegis-tools}
 MLDSA=${MLDSA_NATIVE_DIR:-$TOOLS/mldsa-native/mldsa}
 MLKEM=${MLKEM_NATIVE_DIR:-$TOOLS/mlkem-native/mlkem}
-PROVER=$ROOT/endpoints/rw612/prover/src
-PART=$ROOT/endpoints/stm32h573/tfm-aegis-partition
+SDK=$ROOT/sdk
 T=$(mktemp -d)
 SRC=$T/core/arch/arm/plat-zynqmp
 for p in "$OPTEE"/os-patches/*.patch; do
@@ -59,7 +59,7 @@ c("KAT_SUBKEY_SSK", mac(root, struct.pack("<I", 1)))
 c("KAT_SUBKEY_BIG_USAGE", mac(root, bytes([1, 2, 3, 4])))
 PY
 gcc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
-	-I"$SRC" -I"$T" -I"$HERE" -I"$PROVER" "$HERE/test_handoff_kdf.c" "$SRC/aegis_handoff_kdf.c" "$PROVER/sha256.c" \
+	-I"$SRC" -I"$T" -I"$HERE" -I"$SDK/src" "$HERE/test_handoff_kdf.c" "$SRC/aegis_handoff_kdf.c" "$SDK/src/aegis_sha256.c" \
 	-o "$T/test_handoff_kdf"
 "$T/test_handoff_kdf"
 
@@ -71,15 +71,15 @@ cc() {
 	gcc -std=gnu11 -g -D_GNU_SOURCE $SAN $LIMITS -DMLD_CONFIG_FILE='"aegis_mldsa_config.h"' \
 		-DAEGIS_DEVICE_FW='"zynqmp-optee"' -DAEGIS_DEVICE_VERSION='"0.1.1"' \
 		-I"$HERE/stub" -I"$HERE" -I"$T" -I"$SRC" -I"$OPTEE/ta" -I"$OPTEE/include" -I"$OPTEE/../handoff" \
-		-I"$PROVER" -I"$PART" -I"$PART/mldsa" -I"$MLDSA" -I"$PART/mlkem" -I"$MLKEM" "$@"
+		-I"$SDK/include" -I"$SDK/src" -I"$SDK/crypto/mldsa" -I"$MLDSA" -I"$SDK/crypto/mlkem" -I"$MLKEM" "$@"
 }
 cc -O1 -Wall -Wextra -Werror -c "$HERE/test_ta.c" -o "$T/test_ta.o"
 cc -O1 -Wall -Wextra -Werror -c "$OPTEE/ta/aegis_ta.c" -o "$T/aegis_ta.o"
 cc -O1 -Wall -Wextra -Werror -c "$SRC/aegis_handoff_kdf.c" -o "$T/kdf.o"
-cc -O1 -Wno-deprecated-declarations -c "$PROVER/aegis_proto.c" -o "$T/proto.o"
-cc -O1 -c "$PROVER/sha256.c" -o "$T/sha256.o"
-cc -O1 -c "$PART/aegis_kmac.c" -o "$T/kmac.o"
-cc -O2 -c "$PART/mlkem_unit.c" -o "$T/mlkem.o"
+cc -O1 -Wall -Wextra -Werror -c "$SDK/src/aegis_proto.c" -o "$T/proto.o"
+cc -O1 -c "$SDK/src/aegis_sha256.c" -o "$T/sha256.o"
+cc -O1 -c "$SDK/src/aegis_kmac.c" -o "$T/kmac.o"
+cc -O2 -c "$SDK/crypto/mlkem_unit.c" -o "$T/mlkem.o"
 cc -O2 -c "$MLDSA/mldsa_native.c" -o "$T/mldsa.o"
 gcc $SAN "$T"/test_ta.o "$T"/aegis_ta.o "$T"/kdf.o "$T"/proto.o "$T"/sha256.o "$T"/kmac.o "$T"/mlkem.o "$T"/mldsa.o -o "$T/test_ta"
 "$T/test_ta"

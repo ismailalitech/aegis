@@ -2,8 +2,9 @@
 /*
  * Aegis post-quantum attestation as an OP-TEE trusted application on the Zynq UltraScale+ (docs/zynqmp-key-design.md).
  *
- * The protocol code is the one the RW612's TF-M partition runs (endpoints/rw612/prover/src/aegis_proto.c): PQKEY,
- * PQCHAL, PQKEMINIT, PQKEMFIN, PQHB, PQSESSION, one line in and one line out. Linux only carries the lines
+ * The protocol code is the Prover SDK's core (sdk/src/aegis_proto.c, the source every Aegis device builds): PQKEY,
+ * PQCHAL, PQKEMINIT, PQKEMFIN, PQHB, PQSESSION, one line in and one line out. This file is the SDK's port to OP-TEE
+ * (struct aegis_platform, sdk/include/aegis_sdk.h) and the transport. Linux only carries the lines
  * (endpoints/zynqmp/optee/bridge): it never holds the key, the seed or the session.
  *
  * Keys: seed and provisioning root come from OP-TEE's system PTA (PTA_SYSTEM_DERIVE_TA_UNIQUE_KEY), that is from the
@@ -32,22 +33,31 @@
 #include "aegis_ta.h"
 #include "user_ta_header_defines.h"
 #include "aegis_boot_pta.h"
-#include "aegis_proto.h"
+#include "aegis_sdk.h"
 #include "gateway_pk.h"
 
 #define PROFILE_CHIP   "aegis-zynqmp-optee-v1"
 #define PROFILE_DEVHUK "aegis-zynqmp-optee-devhuk-v1"
 
-/* every entry of the hand-off is reported, and the claims fit their buffer (aegis_proto.c writes them without a
- * length check): 121 bytes with the longer profile name, then per component 81 with a 5-character version, a label
- * of up to 15 and a description of up to 63 characters behind a 2-byte head */
+/* The TA's own limits, set by its build (sub.mk): how many measured components it reports, and the largest claims
+ * it signs. Every entry of the hand-off is reported, and the claims fit: 121 bytes with the longer profile name, then
+ * per component 81 with a 5-character version, a label of up to 15 and a description of up to 63 characters behind a
+ * 2-byte head. (The core checks the length too and would answer "ERR evidence" instead of a quote; these make sure
+ * at build time that it never has to.) */
+#ifndef AEGIS_DEVICE_VERSION
+#define AEGIS_DEVICE_VERSION "0.1.0"
+#endif
 _Static_assert(AEGIS_MAX_MEASUREMENTS >= AEGIS_HANDOFF_MAX_MEAS, "measurements");
 _Static_assert(sizeof(PROFILE_DEVHUK) - 1 <= 28 && sizeof(AEGIS_DEVICE_VERSION) - 1 <= 23, "claims header");
 _Static_assert(AEGIS_CLAIMS_MAX >= 121 + AEGIS_MAX_MEASUREMENTS * (76 + sizeof(AEGIS_DEVICE_VERSION) - 1 + 15 + 2 + 63),
 	       "claims buffer");
-_Static_assert(AEGIS_REPLY_MAX >= 2 * (AEGIS_CLAIMS_MAX + 3309) + 64, "PQCHAL reply");
+_Static_assert(AEGIS_TA_REPLY_MAX >= AEGIS_REPLY_LEN(AEGIS_CLAIMS_MAX), "PQCHAL reply");
+_Static_assert(AEGIS_TA_LINE_MAX == AEGIS_LINE_MAX && AEGIS_TA_REPLY_MAX == AEGIS_REPLY_MAX, "aegis_ta.h");
 
-static const uint8_t gateway_pk[1952] = AEGIS_GATEWAY_PK;
+static const uint8_t gateway_pk[AEGIS_PK_LEN] = AEGIS_GATEWAY_PK;
+static struct aegis_prover prover; /* the core's context: the keys and the session live here */
+static uint8_t work[AEGIS_WORK_LEN(AEGIS_CLAIMS_MAX)];
+static struct aegis_measurement meas[AEGIS_MAX_MEASUREMENTS];
 /* what OP-TEE kept of the FSBL's hand-off; all zero (AEGIS_BOOT_HO_ABSENT) when there is none */
 static struct {
 	uint32_t status, flags, bh_key_src, csu_status, count, huk;
@@ -59,30 +69,18 @@ static uint32_t served;
 static char line[AEGIS_TA_LINE_MAX + 1];
 static char reply[AEGIS_TA_REPLY_MAX];
 
-static int s_random(uint8_t *out, size_t n)
+static int s_random(void *user, uint8_t *out, size_t n)
 {
+	(void)user;
 	TEE_GenerateRandom(out, n);
 	return 0;
 }
 
-static void s_measure_unused(uint8_t out[32], size_t *len)
-{
-	memset(out, 0, 32);
-	*len = 0;
-}
-
-static uint32_t s_uptime_s(void)
+static int s_monotonic(void *user, uint64_t *now)
 {
 	TEE_Time t = { };
 
-	TEE_GetSystemTime(&t);
-	return t.seconds;
-}
-
-static int s_monotonic(uint64_t *now)
-{
-	TEE_Time t = { };
-
+	(void)user;
 	if (!clock_trusted)
 		return -1;
 	TEE_GetSystemTime(&t);
@@ -90,12 +88,15 @@ static int s_monotonic(uint64_t *now)
 	return 0;
 }
 
-static size_t s_measure_all(struct aegis_measurement *m, size_t max)
+/* The measurements: what the FSBL handed over, as OP-TEE kept it. */
+static int s_measurements(void *user, const struct aegis_measurement **list, size_t *count)
 {
+	struct aegis_measurement *m = meas;
+	const size_t max = AEGIS_MAX_MEASUREMENTS;
 	size_t n;
 
-	if (max < 1)
-		return 0;
+	(void)user;
+	*list = meas;
 	if (boot.status != AEGIS_BOOT_HO_VALID || boot.count == 0) {
 		m[0].label = "BOOTCHAIN";
 		memset(m[0].value, 0, sizeof(m[0].value));
@@ -103,7 +104,8 @@ static size_t s_measure_all(struct aegis_measurement *m, size_t max)
 			 boot.status == AEGIS_BOOT_HO_VALID ? "the boot hand-off has no measurement" :
 			 boot.status == AEGIS_BOOT_HO_REJECTED ? "boot hand-off rejected" :
 			 "phase A: no boot hand-off");
-		return 1;
+		*count = 1;
+		return 0;
 	}
 	for (n = 0; n < boot.count && n < max; n++) {
 		m[n].label = boot.meas[n].label;
@@ -111,21 +113,23 @@ static size_t s_measure_all(struct aegis_measurement *m, size_t max)
 		snprintf(m[n].desc, sizeof(m[n].desc), "SHA3-384/256 of partition %s as stored (%u bytes)",
 			 boot.meas[n].label, (unsigned int)boot.meas[n].length);
 	}
-	return n;
+	*count = n;
+	return 0;
 }
 
-static int s_status(char *buf, size_t cap)
+static int s_status(void *user, char *buf, size_t cap)
 {
+	(void)user;
 	return snprintf(buf, cap, "requests=%u;fw=zynqmp-optee-%s", (unsigned int)served, TA_VERSION);
 }
 
-static struct aegis_proto_platform platform = {
+static struct aegis_platform platform = {
 	.random = s_random,
-	.measure = s_measure_unused,
-	.uptime_s = s_uptime_s,
-	.monotonic_s = s_monotonic,
-	.profile = PROFILE_DEVHUK, /* query_boot() decides */
-	.measure_all = s_measure_all,
+	.clock = s_monotonic,
+	.clock_hz = 1, /* TEE_GetSystemTime's seconds */
+	.measurements = s_measurements,
+	.profile = PROFILE_DEVHUK, /* query_boot() decides, before the core starts */
+	.version = AEGIS_DEVICE_VERSION,
 	.status = s_status,
 };
 
@@ -211,10 +215,21 @@ TEE_Result TA_CreateEntryPoint(void)
 	res = derive("aegis-zynqmp-mldsa65-seed-v1", seed);
 	if (res == TEE_SUCCESS)
 		res = derive("aegis-zynqmp-provision-root-v1", root);
-	if (res == TEE_SUCCESS && aegis_proto_init(&platform, seed, root, gateway_pk) != 0)
-		res = TEE_ERROR_GENERIC;
-	TEE_MemFill(seed, 0, sizeof(seed));
-	TEE_MemFill(root, 0, sizeof(root));
+	if (res == TEE_SUCCESS) {
+		const struct aegis_config cfg = {
+			.platform = &platform,
+			.verifier_pk = gateway_pk,
+			.identity_seed = seed,
+			.exchange_root = root,
+			.work = work,
+			.work_len = sizeof(work),
+		};
+
+		if (AEGIS_PROVER_INIT(&prover, &cfg) != AEGIS_OK)
+			res = TEE_ERROR_GENERIC;
+	}
+	aegis_wipe(seed, sizeof(seed));
+	aegis_wipe(root, sizeof(root));
 	ready = (res == TEE_SUCCESS);
 	if (ready)
 		IMSG("Aegis TA: key ready, profile %s, hand-off status %u flags %#x bh_key_src %#x csu_status %#x, "
@@ -261,7 +276,7 @@ TEE_Result TA_InvokeCommandEntryPoint(void *sess, uint32_t cmd, uint32_t pt, TEE
 	memcpy(line, params[0].memref.buffer, n);
 	line[n] = '\0';
 	served++;
-	r = aegis_proto_handle(line, reply, sizeof(reply));
+	r = aegis_prover_handle_line(&prover, line, reply, sizeof(reply));
 	if (r < 0 || (size_t)r > sizeof(reply))
 		return TEE_ERROR_GENERIC;
 	if (params[1].memref.size < (size_t)r) {

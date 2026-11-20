@@ -1,52 +1,44 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Aegis post-quantum attestation partition for TF-M on the STM32H573.
+ * Aegis post-quantum attestation partition for TF-M on the STM32H573: the Prover SDK's port to this chip.
  *
- * At initialisation:
- *   seed = AES-256-ECB(DHUK, LABEL)          the STM32H5's derived hardware unique key, used
- *                                            inside SAES; the DHUK itself never leaves SAES
- *   (pk, sk) = ML-DSA-65.KeyGen_internal(seed)   (FIPS 204, mldsa-native, reduced RAM)
- * The seed is wiped right after key generation. The same chip and boot flow give the same
- * key pair on every boot; another chip gives another key.
+ * The protocol is the SDK's core (sdk/src/aegis_proto.c, the source every Aegis device builds; its head gives the
+ * constructions, sdk/include/aegis_sdk.h the interface). This file is the platform layer and the transport:
+ *   identity     seed = AES-256-ECB(DHUK, LABEL): the STM32H5's derived hardware unique key, used inside SAES; the DHUK
+ *                itself never leaves SAES. The core makes the ML-DSA-65 key pair from the seed (FIPS 204,
+ *                mldsa-native, reduced RAM); the seed is wiped right after. The same chip and boot flow give the same
+ *                key pair on every boot; another chip gives another key. A second DHUK-derived secret is the
+ *                exchange root.
+ *   evidence     TF-M's PSA initial attestation token for the challenge (from the attestation service: the boot
+ *                measurements of the S and NS images, as BL2 recorded them). The core signs it as it is.
+ *   randomness   TF-M's crypto service: this build's psa_generate_random reads the STM32H5's RNG peripheral directly
+ *                (MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG; TF-M's RNG_GetBytes, which gives nothing when the peripheral
+ *                reports a seed or clock error).
+ *   time         the RTC on the LSI, made secure here ("the session clock" below), 250 counts a second.
+ *   transport    PSA messages to the stateless service AEGIS_PQ_SERVICE, one per operation of the core:
  *
- * Service AEGIS_PQ_SERVICE (stateless):
  *   type 1 GET_PUBKEY: out[0] <- pk (1952 bytes)
  *   type 2 QUOTE:      in[0] = 32-byte challenge
- *                      out[0] <- PSA initial attestation token for that challenge (from TF-M's
- *                                attestation service: boot measurements of S and NS images)
+ *                      out[0] <- the PSA initial attestation token for that challenge
  *                      out[1] <- ML-DSA-65 signature over "aegis-endpoint-quote-v1\0" || token
- *                                (hedged ML-DSA: 32 fresh random bytes from TF-M's crypto service in
- *                                every signature; empty context. AEGIS_DETERMINISTIC_SIGNING=1 builds
- *                                the deterministic variant, rnd = 0)
+ *                                (hedged ML-DSA: 32 fresh random bytes in every signature; empty context.
+ *                                AEGIS_DETERMINISTIC_SIGNING=1 builds the deterministic variant, rnd = 0)
  *   type 3 KEM_INIT:   in[0] = 32-byte gateway nonce
- *                      a fresh ML-KEM-768 key pair for this exchange:
- *                        fresh = 32 bytes from the chip's true random number generator (TF-M's crypto service)
- *                        coins = SHA3-256(prov_root || fresh || nonce || counter || 0)
- *                                || SHA3-256(prov_root || fresh || nonce || counter || 1)
- *                        (ek, dk) = ML-KEM-768.KeyGen_internal(coins)   (FIPS 203; d = the first half, z the second)
- *                      prov_root is a second DHUK-derived secret, the counter (4 bytes LE) counts the key pairs
- *                      made since reset. Without the random bytes the key of an exchange could be made again after
- *                      a reset (kem_coins below); if the generator fails, the message is refused
- *                      (PSA_ERROR_INSUFFICIENT_ENTROPY or the crypto service's code) and no exchange is pending.
+ *                      a fresh ML-KEM-768 key pair for this exchange (32 bytes from the random number generator go
+ *                      into it; if the generator fails or gives zero bytes, the message is refused with
+ *                      PSA_ERROR_INSUFFICIENT_ENTROPY or the crypto service's code, and no exchange is pending)
  *                      out[0] <- encapsulation key ek (1184 bytes)
- *                      out[1] <- ML-DSA-65 signature over "aegis-kem-init-v1\0" || nonce || ek
+ *                      out[1] <- ML-DSA-65 signature over "aegis-kem-init-v1\0" || nonce || ek, or, when the nonce is
+ *                                the challenge of the last QUOTE, over "aegis-kem-init-v2\0" || T2 (one transcript)
  *   type 4 KEM_FINISH: in[0] = ML-KEM ciphertext (1088), in[1] = credential issued by the gateway
- *                      K = ML-KEM.Decaps(dk, ct); the decapsulation key is wiped;
- *                      session = SHA3-256("aegis-session-v1" || K || nonce || SHA3-256(ct))
- *                      out[0] <- tag = SHA3-256("aegis-confirm-v1" || K || nonce || SHA3-256(ct)
- *                                                || SHA3-256(credential))
- *                      Mutual authentication: the credential must be "<canonical JSON body>\n<ML-DSA-65
- *                      signature>" signed by the gateway key pinned in this image (gateway_pk.h,
- *                      label "aegis-credential-v1"), and its body must name SHA3-256(ct) in
- *                      "kem_ct_sha3_256" and SHA3-256(ek) of the pending exchange in "kem_ek_sha3_256";
- *                      otherwise PSA_ERROR_INVALID_SIGNATURE and no session (a refused exchange leaves an
- *                      established session alone). A KEM_INIT with valid arguments cancels the pending
- *                      exchange first, so a refused one leaves nothing pending.
- *                      The body must also carry "issued" and "expires" (seconds, each once, 1 to 10 digits): their
- *                      difference, from 1 to 86400, is the credential's lifetime; otherwise
- *                      PSA_ERROR_NOT_PERMITTED. Without a session clock (below): PSA_ERROR_HARDWARE_FAILURE, the
- *                      exchange stays pending.
+ *                      out[0] <- the confirmation tag (32 bytes)
+ *                      PSA_ERROR_BAD_STATE without a pending exchange; PSA_ERROR_HARDWARE_FAILURE without a session
+ *                      clock (the exchange stays pending); PSA_ERROR_INVALID_SIGNATURE for a credential that is not
+ *                      the pinned gateway key's (gateway_pk.h) or does not name this ciphertext, this exchange's key
+ *                      and, for an exchange that continues a quote, its transcript; PSA_ERROR_NOT_PERMITTED for one
+ *                      without a lifetime of 1 to 86400 seconds. A refused exchange leaves an established session
+ *                      alone. The credential's body is limited to 1214 bytes (the work buffer, AEGIS_WORK_MIN).
  *   type 5 SESSION:    out[0] <- SHA3-256("aegis-session-id-v1" || session) || SHA3-256(credential)
  *   type 6 HEARTBEAT:  in[0] = 32-byte gateway nonce, in[1] = up to 128 bytes of NS status data, which must not
  *                      contain "sstack=" or "ttl=" (those keys are the partition's)
@@ -55,49 +47,34 @@
  *                               || ";ttl=<seconds the session has left on this side's clock>"
  *                      out[0] <- counter (8 bytes LE, increases every call)
  *                                || KMAC256(K = session, X = nonce || counter || status, L = 256,
- *                                           S = "aegis-hb-v2")   (NIST SP 800-185, aegis_kmac.c)
+ *                                           S = "aegis-hb-v2")   (NIST SP 800-185, sdk/src/aegis_kmac.c)
  *                      out[1] <- status (at most HB_STATUS_MAX = 162 bytes; a nonzero out[1] smaller than the
  *                                status is refused with PSA_ERROR_BUFFER_TOO_SMALL). The non-secure side shows this
  *                                text, as MACed.
  *                      Without out[1] (out_size[1] == 0: provers up to 0.5.0) status = data, as before.
- *                      AEGIS_HB_KMAC=0 builds the first version instead:
- *                                SHA3-256("aegis-hb-v1" || session || nonce || counter || status)
- *                      A light, symmetric proof of the session between full attestations.
+ *                      AEGIS_HB_KMAC=0 builds the first version instead (SHA3-256, "aegis-hb-v1").
  *
- * One transcript (docs/architecture.md, common/transcript.py). QUOTE and the exchange after it are one hash chain, so
- * that a verifier can refuse to finish a session with other code than the code whose quote it appraised:
- *   T1 = SHA3-256("aegis-transcript-v2/quote"    || challenge || SHA3-256(token))    kept for the last quote signed
- *   T2 = SHA3-256("aegis-transcript-v2/kem-init" || T1 || ek)
- *   T3 = SHA3-256("aegis-transcript-v2/kem-fin"  || T2 || SHA3-256(ct) || SHA3-256(credential))
- * A KEM_INIT whose nonce is the challenge of the last quote signed since reset continues that quote, once:
- *   KEM_INIT    out[1] <- ML-DSA-65 signature over "aegis-kem-init-v2\0" || T2
- *   KEM_FINISH  the credential must also name T2 in "transcript_sha3_256" (else PSA_ERROR_INVALID_SIGNATURE);
- *               session = SHA3-256("aegis-session-v2" || K || T3), tag = SHA3-256("aegis-confirm-v2" || K || T3)
- * Any other nonce gets the exchange described above, unchanged; a verifier that requires the transcript refuses it
- * (the signature labels differ). Message types, sizes and the non-secure prover's lines are the same in both.
- * What this says and does not say: the token's measurements are the ones BL2 recorded at boot (TF-M's attestation
- * service reads them from the boot data; nothing is measured again, at QUOTE or at KEM_INIT). The quote is kept in
- * this partition's RAM, so after a reset there is none to continue: a transcript shows that one boot of this
- * partition signed exactly that token and then made this key for it. A secure image that holds this key and signs
- * a transcript for a quote it did not make could still lie; the key would have to depend on the measured code to
- * prevent that (it does not: it comes from the DHUK).
+ * Messages, sizes, status codes and every byte answered are those of the partition before it was moved onto the
+ * core (SPE 3183f74a); tests/host/test_sdk_golden.py holds it to that. Two of its ways differ from the other
+ * devices' and are kept through the core's compatibility flags: the heartbeat counter runs from boot across
+ * sessions, and a credential need not name the device's key.
+ *
+ * What a transcript says and does not say here: the token's measurements are the ones BL2 recorded at boot (nothing
+ * is measured again, at QUOTE or at KEM_INIT). The quote is kept in this partition's RAM, so after a reset there is
+ * none to continue: a transcript shows that one boot of this partition signed exactly that token and then made this
+ * key for it. A secure image that holds this key and signs a transcript for a quote it did not make could still
+ * lie; the key would have to depend on the measured code to prevent that (it does not: it comes from the DHUK).
  *
  * The session ends on this side's clock (docs/endpoint-expiry.md). Every message first reads the session clock; a
  * session older than its credential's lifetime plus a sixteenth is wiped, as is one whose age the clock can no
  * longer give. SESSION and HEARTBEAT answer PSA_ERROR_BAD_STATE before the first session and after a reset, and
  * PSA_ERROR_DOES_NOT_EXIST once a session has ended that way, until the next one starts.
- * The session clock is the RTC, clocked by the LSI (the internal 32 kHz oscillator) and run as a 32-bit binary
- * counter at 250 Hz ("the session clock" below): it keeps counting whatever the non-secure image does to the
- * system clock or to the power mode, and the partition makes it and its oscillator secure.
  * The Non-Secure world can ask for quotes and run provisioning but never sees the seed, the
  * secret keys, K or the session key.
  */
 #include <stdint.h>
 #include <string.h>
 
-#include "mldsa_native.h"
-#define MLK_CONFIG_FILE "aegis_mlkem_config.h"
-#include "mlkem_native.h"
 #include "psa/client.h"
 #include "psa/crypto.h"
 #include "psa/service.h"
@@ -110,11 +87,7 @@
 #define AEGIS_GATEWAY_PK_HEADER "gateway_pk.h"
 #endif
 #include AEGIS_GATEWAY_PK_HEADER
-#include "aegis_kmac.h"
-
-#if !defined(AEGIS_HB_KMAC)
-#define AEGIS_HB_KMAC 1
-#endif
+#include "aegis_sdk.h"
 
 #define AEGIS_PQ_GET_PUBKEY 1
 #define AEGIS_PQ_QUOTE      2
@@ -122,27 +95,22 @@
 #define AEGIS_PQ_KEM_FINISH 4
 #define AEGIS_PQ_SESSION    5
 #define AEGIS_PQ_HEARTBEAT  6
-#define KEM_EK_LEN          MLKEM_PUBLICKEYBYTES(768)
-#define KEM_DK_LEN          MLKEM_SECRETKEYBYTES(768)
-#define KEM_CT_LEN          MLKEM_CIPHERTEXTBYTES(768)
-#define CRED_MAX            6144u
-#define CHALLENGE_LEN       32u
 #define TOKEN_MAX           0x250u
-#define QUOTE_LABEL         "aegis-endpoint-quote-v1"
-#define T_QUOTE             "aegis-transcript-v2/quote"
-#define T_KEM_INIT          "aegis-transcript-v2/kem-init"
-#define T_KEM_FIN           "aegis-transcript-v2/kem-fin"
 
 static const uint8_t seed_label[32] = "aegis-stm32h5-mldsa65-seed-v1...";
 static const uint8_t prov_label[32] = "aegis-stm32h5-provision-root-v1.";
 
-static uint8_t pk[MLDSA_PUBLICKEYBYTES(65)];
-static uint8_t sk[MLDSA_SECRETKEYBYTES(65)];
-static uint8_t token[TOKEN_MAX];
-static uint8_t signed_msg[sizeof("aegis-kem-init-v1") + 32 + MLKEM_PUBLICKEYBYTES(768) > sizeof(QUOTE_LABEL) + TOKEN_MAX ?
-			  sizeof("aegis-kem-init-v1") + 32 + MLKEM_PUBLICKEYBYTES(768) : sizeof(QUOTE_LABEL) + TOKEN_MAX];
-static uint8_t sig[MLDSA_BYTES(65)];
+/* The core's context, its work buffer (the smallest: this partition's RAM is what TF-M's secure data region has
+ * left), and what a message's inputs are read into. */
+static struct aegis_prover core;
+static uint8_t work[AEGIS_WORK_MIN];
+static uint8_t kem_ct[AEGIS_KEM_CT_LEN];
+static uint8_t cred[AEGIS_CRED_MAX];
+static uint8_t msg_nonce[AEGIS_CHALLENGE_LEN]; /* a challenge or a nonce: public */
+static const uint8_t gateway_pk[AEGIS_PK_LEN] = AEGIS_GATEWAY_PK;
 static int key_ready;
+/* what the services answered during this message, for the status returned when the core refuses */
+static psa_status_t rng_status, token_status;
 
 /* The partition's stack (generated/aegis_pq_attest/auto_generated/intermedia_aegis_pq_attest.c; its size is stack_size
  * in aegis_pq_attest.yaml). At initialisation the part below the current frame is filled with a pattern; every
@@ -154,14 +122,11 @@ extern uint8_t tfm_sp_aegis_pq_stack[];
 #define STACK_FILL          0xA5u
 #define HB_DATA_MAX         128u
 #define HB_SSTACK_MAX       (sizeof(";sstack=65535/65535") - 1u)
-#define HB_TTL_MAX          (sizeof(";ttl=4294967295") - 1u)
-#define HB_STATUS_MAX       (HB_DATA_MAX + HB_SSTACK_MAX + HB_TTL_MAX)
+#define HB_STATUS_MAX       (HB_DATA_MAX + HB_SSTACK_MAX + AEGIS_HB_TTL_MAX)
 static int stack_filled;
 
-/* The session's end (docs/endpoint-expiry.md): the credential's lifetime, "expires" - "issued", at most a day, plus a
- * sixteenth: the LSI is an RC oscillator, good to a few per cent, and the session must not end here before the
- * gateway's own expiry. */
-#define CRED_LIFETIME_MAX   86400u
+/* The session clock (below). The LSI is an RC oscillator, good to a few per cent: the sixteenth the core adds to a
+ * credential's lifetime covers it, so a session does not end here before the gateway's own expiry. */
 #define SCLK_HZ             250u /* the session clock's counts per second: LSI 32 kHz / 128 */
 #define SCLK_PREDIV_A       127u
 /* polls before a flag is given up: far beyond the 2 RTC clock periods a flag takes, or the 4 ms of one count */
@@ -174,136 +139,9 @@ static int stack_filled;
 #endif
 static int sclk_ok;          /* the counter was started here and has not been found changed since */
 static uint32_t sclk_epoch;  /* the times the 32-bit counter was seen to have passed zero (once in 198 days) */
-static uint64_t now_ticks;   /* this message's clock reading: epoch << 32 | counts in the epoch */
-static int clock_ok;
-
-static uint8_t prov_root[32];
-static uint8_t kem_ek[KEM_EK_LEN];
-static uint8_t kem_dk[KEM_DK_LEN];
-static uint8_t kem_nonce[32];
-static int kem_pending;
-static uint32_t kem_counter;
-static uint8_t quote_ch[32], quote_t1[32]; /* the last quote signed since reset: its challenge and T1 ... */
-static int quote_ready;                    /* ... until a KEM_INIT continues it, or another QUOTE replaces it */
-static uint8_t kem_t2[32];                 /* T2 of the pending exchange, when it continues a quote */
-static int kem_bound;
-static uint8_t kem_ct[KEM_CT_LEN];
-static uint8_t cred[CRED_MAX];
-static uint8_t session_key[32];
-static uint8_t cred_hash[32];
-static int session_ready;
-static int session_expired;  /* the last session ended by the clock */
-static uint64_t session_start, session_limit; /* the clock at KEM_FINISH; the counts the session may live */
-static const uint8_t gateway_pk[MLDSA_PUBLICKEYBYTES(65)] = AEGIS_GATEWAY_PK;
-
-/* ---- SHA3-256 (FIPS 202), small and simple -------------------------------------------- */
-
-static const uint64_t KRC[24] = {
-	0x0000000000000001ULL, 0x0000000000008082ULL, 0x800000000000808aULL, 0x8000000080008000ULL,
-	0x000000000000808bULL, 0x0000000080000001ULL, 0x8000000080008081ULL, 0x8000000000008009ULL,
-	0x000000000000008aULL, 0x0000000000000088ULL, 0x0000000080008009ULL, 0x000000008000000aULL,
-	0x000000008000808bULL, 0x800000000000008bULL, 0x8000000000008089ULL, 0x8000000000008003ULL,
-	0x8000000000008002ULL, 0x8000000000000080ULL, 0x000000000000800aULL, 0x800000008000000aULL,
-	0x8000000080008081ULL, 0x8000000000008080ULL, 0x0000000080000001ULL, 0x8000000080008008ULL};
-static const uint8_t KRHO[25] = {0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14};
-
-static uint64_t krol(uint64_t x, unsigned n)
-{
-	return n ? (x << n) | (x >> (64u - n)) : x;
-}
-
-static void keccak_f(uint64_t a[25])
-{
-	for (int r = 0; r < 24; r++) {
-		uint64_t c[5], b[25];
-
-		for (int x = 0; x < 5; x++) c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
-		for (int x = 0; x < 5; x++) {
-			uint64_t d = c[(x + 4) % 5] ^ krol(c[(x + 1) % 5], 1);
-
-			for (int y = 0; y < 5; y++) a[x + 5 * y] ^= d;
-		}
-		for (int x = 0; x < 5; x++)
-			for (int y = 0; y < 5; y++) b[y + 5 * ((2 * x + 3 * y) % 5)] = krol(a[x + 5 * y], KRHO[x + 5 * y]);
-		for (int x = 0; x < 5; x++)
-			for (int y = 0; y < 5; y++)
-				a[x + 5 * y] = b[x + 5 * y] ^ (~b[(x + 1) % 5 + 5 * y] & b[(x + 2) % 5 + 5 * y]);
-		a[0] ^= KRC[r];
-	}
-}
-
-struct sha3 {
-	uint64_t a[25];
-	unsigned pos;
-};
-
-static void sha3_init(struct sha3 *h)
-{
-	memset(h, 0, sizeof(*h));
-}
-
-static void sha3_update(struct sha3 *h, const uint8_t *p, size_t n)
-{
-	while (n--) {
-		h->a[h->pos / 8] ^= (uint64_t)*p++ << (8 * (h->pos % 8));
-		if (++h->pos == 136) {
-			keccak_f(h->a);
-			h->pos = 0;
-		}
-	}
-}
-
-static void sha3_final(struct sha3 *h, uint8_t out[32])
-{
-	h->a[h->pos / 8] ^= (uint64_t)0x06 << (8 * (h->pos % 8));
-	h->a[135 / 8] ^= (uint64_t)0x80 << (8 * (135 % 8));
-	keccak_f(h->a);
-	for (int i = 0; i < 32; i++) out[i] = (uint8_t)(h->a[i / 8] >> (8 * (i % 8)));
-}
-
-static void sha3_256(const uint8_t *p, size_t n, uint8_t out[32])
-{
-	struct sha3 h;
-
-	sha3_init(&h);
-	sha3_update(&h, p, n);
-	sha3_final(&h, out);
-}
-
-static void wipe(void *p, size_t n)
-{
-	volatile uint8_t *v = p;
-
-	while (n--) {
-		*v++ = 0;
-	}
-}
-
-/* One step of the transcript: SHA3-256(label || a || b || c). Every caller passes fields of fixed lengths, and no
- * label is the beginning of another, so the steps cannot be taken for one another. Its own frame (not inlined), like
- * kem_coins below: the hash state is off the stack again before the callers' deep parts. */
-static __attribute__((noinline)) void transcript_step(uint8_t out[32], const char *label, const uint8_t *a, size_t an,
-						      const uint8_t *b, size_t bn, const uint8_t *c, size_t cn)
-{
-	struct sha3 h;
-
-	sha3_init(&h);
-	sha3_update(&h, (const uint8_t *)label, strlen(label));
-	sha3_update(&h, a, an);
-	sha3_update(&h, b, bn);
-	sha3_update(&h, c, cn);
-	sha3_final(&h, out);
-}
-
-/* The quote just signed (its challenge is in quote_ch, its token in token) becomes the one a KEM_INIT can continue. */
-static __attribute__((noinline)) void quote_keep(size_t token_len)
-{
-	uint8_t h_token[32];
-
-	sha3_256(token, token_len, h_token);
-	transcript_step(quote_t1, T_QUOTE, quote_ch, CHALLENGE_LEN, h_token, 32, NULL, 0);
-	quote_ready = 1;
-}
+static int msg_clock_read;   /* this message's clock reading: taken once, whatever the core asks */
+static int msg_clock_rc;
+static uint64_t msg_clock;
 
 static int derive_from_dhuk(const uint8_t label[32], uint8_t out[32])
 {
@@ -369,7 +207,7 @@ static unsigned stack_used(void)
 	return (unsigned)(AEGIS_PQ_STACK_SIZE - untouched);
 }
 
-static size_t put_text(char *out, const char *t)
+static size_t st_text(char *out, const char *t)
 {
 	size_t n = strlen(t);
 
@@ -377,7 +215,7 @@ static size_t put_text(char *out, const char *t)
 	return n;
 }
 
-static size_t put_uint(char *out, unsigned v)
+static size_t st_uint(char *out, unsigned v)
 {
 	char d[10];
 	size_t n = 0, k = 0;
@@ -395,14 +233,14 @@ static size_t put_uint(char *out, unsigned v)
 /* ";sstack=<used>/<size>" or ";sstack=na"; at most HB_SSTACK_MAX bytes (both numbers are at most 0x6800) */
 static size_t sstack_field(char out[HB_SSTACK_MAX])
 {
-	size_t k = put_text(out, ";sstack=");
+	size_t k = st_text(out, ";sstack=");
 
 	if (!stack_filled) {
-		return k + put_text(out + k, "na");
+		return k + st_text(out + k, "na");
 	}
-	k += put_uint(out + k, stack_used());
+	k += st_uint(out + k, stack_used());
 	out[k++] = '/';
-	return k + put_uint(out + k, AEGIS_PQ_STACK_SIZE);
+	return k + st_uint(out + k, AEGIS_PQ_STACK_SIZE);
 }
 
 /* ---- the session clock ---------------------------------------------------------------------------------------
@@ -511,7 +349,11 @@ static void sclk_start(void)
 	}
 }
 
-/* The clock now, in counts: the wraps seen in the upper word. Nonzero if there is no clock (any more). */
+/* The clock now, in counts, for the core: the counts in this epoch, and above them the wraps seen, two to the 33rd
+ * each. The flag says that the counter wrapped, not how often, so a session must not survive a wrap: with this step
+ * a reading after one lies further from every reading before it than any session may live (at most 91800 s, 23
+ * million counts), and the core ends the session as overdue. Within an epoch the differences are the counter's.
+ * Nonzero if there is no clock (any more). */
 static int sclk_now(uint64_t *ticks)
 {
 	uint32_t count;
@@ -532,7 +374,7 @@ static int sclk_now(uint64_t *ticks)
 		}
 		count = 0xFFFFFFFFu - sclk_count();
 		if ((RTC->SR & RTC_SR_SSRUF) == 0u) {
-			*ticks = (uint64_t)sclk_epoch << 32 | count;
+			*ticks = (uint64_t)sclk_epoch << 33 | count;
 			return 0;
 		}
 	}
@@ -540,418 +382,193 @@ static int sclk_now(uint64_t *ticks)
 	return -1;
 }
 
-static void session_end(void)
+/* ---- the platform layer (struct aegis_platform) ---------------------------------------------------------------- */
+
+/* One reading of the session clock per message: the core reads the clock at every operation, and a message is
+ * several (the sweep, a state query, the operation). aegis_pq_service_sfn asks for a new reading. */
+static int s_clock(void *user, uint64_t *now)
 {
-	wipe(session_key, sizeof(session_key));
-	wipe(cred_hash, sizeof(cred_hash));
-	session_ready = 0;
-	session_expired = 1;
+	(void)user;
+	if (!msg_clock_read) {
+		msg_clock = 0;
+		msg_clock_rc = sclk_now(&msg_clock);
+		msg_clock_read = 1;
+	}
+	*now = msg_clock;
+	return msg_clock_rc;
 }
 
-/* Read the clock once per message, and end a session that has outlived its credential, or whose age the clock cannot
- * give: no clock, a reading below the session's start, or a wrap of the counter in between (the flag says that it
- * wrapped, not how often, so a session does not survive one). */
-static void session_sweep(void)
+/* The chip's true random number generator, through TF-M's crypto service. The status is kept: a refusal for want
+ * of randomness answers with it. */
+static int s_random(void *user, uint8_t *out, size_t n)
 {
-	now_ticks = 0;
-	clock_ok = sclk_now(&now_ticks) == 0;
-	if (session_ready && (!clock_ok || now_ticks < session_start || (now_ticks >> 32) != (session_start >> 32) ||
-			      now_ticks - session_start >= session_limit)) {
-		session_end();
-	}
+	(void)user;
+	rng_status = psa_generate_random(out, n);
+	return rng_status == PSA_SUCCESS ? 0 : -1;
 }
+
+/* The evidence: TF-M's initial attestation token for the challenge, written where the core signs it. */
+static int s_evidence(void *user, const uint8_t challenge[AEGIS_CHALLENGE_LEN], uint8_t *out, size_t cap, size_t *len)
+{
+	psa_invec in[1];
+	psa_outvec o[1];
+
+	(void)user;
+	in[0].base = challenge;
+	in[0].len = AEGIS_CHALLENGE_LEN;
+	o[0].base = out;
+	o[0].len = cap < TOKEN_MAX ? cap : TOKEN_MAX;
+	token_status = psa_call(TFM_ATTESTATION_SERVICE_HANDLE, TFM_ATTEST_GET_TOKEN, in, 1, o, 1);
+	if (token_status != PSA_SUCCESS) {
+		return -1;
+	}
+	*len = o[0].len;
+	return 0;
+}
+
+static const struct aegis_platform platform = {
+	.random = s_random,
+	.clock = s_clock,
+	.clock_hz = SCLK_HZ,
+	.evidence = s_evidence,
+	/* as the partition answered before it was built on the core (the head of this file) */
+	.compat = AEGIS_COMPAT_HB_COUNTER_FROM_BOOT | AEGIS_COMPAT_CRED_WITHOUT_ENDPOINT,
+};
 
 psa_status_t aegis_pq_init(void)
 {
-	uint8_t seed[32];
+	/* seed and exchange root are made in the work buffer, which the core does not write before its first
+	 * operation (aegis_sdk.h says so of struct aegis_config.work): nothing of them on the stack, which the key
+	 * generation below goes deep into */
+	uint8_t *seed = work, *root = work + 32;
+	const struct aegis_config cfg = {
+		.platform = &platform,
+		.verifier_pk = gateway_pk,
+		.identity_seed = seed,
+		.exchange_root = root,
+		.work = work,
+		.work_len = sizeof(work),
+	};
 
 	stack_fill(); /* first, so the key generation below counts towards the high-water mark */
 	sclk_start();
-	if (derive_from_dhuk(seed_label, seed) != 0 || derive_from_dhuk(prov_label, prov_root) != 0) {
-		wipe(seed, sizeof(seed));
-		return PSA_SUCCESS; /* service stays up and answers PSA_ERROR_BAD_STATE */
+	if (derive_from_dhuk(seed_label, seed) == 0 && derive_from_dhuk(prov_label, root) == 0) {
+		key_ready = AEGIS_PROVER_INIT(&core, &cfg) == AEGIS_OK;
 	}
-	key_ready = (aegis_mldsa_keypair_internal(pk, sk, seed) == 0);
-	wipe(seed, sizeof(seed));
-	return PSA_SUCCESS;
+	aegis_wipe(work, 64);
+	return PSA_SUCCESS; /* without a key the service stays up and answers PSA_ERROR_BAD_STATE */
 }
 
-/* FIPS 204 hedged signing: fresh randomness from TF-M's crypto service (backed by the STM32H5 RNG)
- * goes into every signature, so two signatures never share their internal randomness even for the
- * same message. If the service fails, the signature is refused rather than made deterministically. */
-static psa_status_t signing_rnd(uint8_t rnd[32])
-{
-#if defined(AEGIS_DETERMINISTIC_SIGNING) && AEGIS_DETERMINISTIC_SIGNING
-	memset(rnd, 0, 32);
-	return PSA_SUCCESS;
-#else
-	return psa_generate_random(rnd, 32);
-#endif
-}
+/* ---- the transport: PSA messages ------------------------------------------------------------------------------- */
 
-static psa_status_t do_quote(const psa_msg_t *msg)
+/* The core's results as the PSA statuses this service has always answered with. */
+static psa_status_t status_of(int rc)
 {
-	uint8_t rnd[32] = {0};
-	const uint8_t pre[2] = {0, 0}; /* pure ML-DSA, empty context: M' = 0 || 0 || M */
-	psa_invec in[1];
-	psa_outvec out[1];
-	psa_status_t st;
-	size_t token_len;
-
-	if (msg->in_size[0] != CHALLENGE_LEN || msg->out_size[0] < TOKEN_MAX || msg->out_size[1] < sizeof(sig)) {
+	switch (rc) {
+	case AEGIS_OK:
+		return PSA_SUCCESS;
+	case AEGIS_ERR_EVIDENCE: /* the attestation service's own status */
+		return token_status != PSA_SUCCESS ? token_status : PSA_ERROR_GENERIC_ERROR;
+	case AEGIS_ERR_RNG:      /* the crypto service's status, or success with zero bytes */
+		return rng_status != PSA_SUCCESS ? rng_status : PSA_ERROR_INSUFFICIENT_ENTROPY;
+	case AEGIS_ERR_SIGN_RNG:
+		return rng_status != PSA_SUCCESS ? rng_status : PSA_ERROR_GENERIC_ERROR;
+	case AEGIS_ERR_NO_EXCHANGE:
+	case AEGIS_ERR_NO_SESSION:
+		return PSA_ERROR_BAD_STATE;
+	case AEGIS_ERR_EXPIRED:
+		return PSA_ERROR_DOES_NOT_EXIST;
+	case AEGIS_ERR_CLOCK:
+		return PSA_ERROR_HARDWARE_FAILURE;
+	case AEGIS_ERR_BAD_REQUEST:
 		return PSA_ERROR_INVALID_ARGUMENT;
-	}
-	/* Only a quote that was signed can be continued, and only the last one: the quote before this one ends here,
-	 * and its challenge's place takes this one's (read there directly: one array less in this frame, which lies
-	 * under the signature's). */
-	quote_ready = 0;
-	if (psa_read(msg->handle, 0, quote_ch, CHALLENGE_LEN) != CHALLENGE_LEN) {
-		return PSA_ERROR_INVALID_ARGUMENT;
-	}
-	in[0].base = quote_ch;
-	in[0].len = CHALLENGE_LEN;
-	out[0].base = token;
-	out[0].len = sizeof(token);
-	st = psa_call(TFM_ATTESTATION_SERVICE_HANDLE, TFM_ATTEST_GET_TOKEN, in, 1, out, 1);
-	if (st != PSA_SUCCESS) {
-		return st;
-	}
-	token_len = out[0].len;
-	memcpy(signed_msg, QUOTE_LABEL, sizeof(QUOTE_LABEL)); /* label and its NUL separator */
-	memcpy(signed_msg + sizeof(QUOTE_LABEL), token, token_len);
-	st = signing_rnd(rnd);
-	if (st != PSA_SUCCESS) {
-		return st;
-	}
-	if (aegis_mldsa_signature_internal(sig, signed_msg, sizeof(QUOTE_LABEL) + token_len, pre, sizeof(pre),
-					   rnd, sk, 0) != 0) {
-		wipe(rnd, sizeof(rnd));
+	case AEGIS_ERR_CRED_SIGNATURE:
+	case AEGIS_ERR_CRED_OTHER_EXCHANGE:
+	case AEGIS_ERR_CRED_OTHER_ENDPOINT:
+	case AEGIS_ERR_CRED_OTHER_KEY:
+	case AEGIS_ERR_CRED_OTHER_TRANSCRIPT:
+		return PSA_ERROR_INVALID_SIGNATURE;
+	case AEGIS_ERR_CRED_VALIDITY:
+		return PSA_ERROR_NOT_PERMITTED;
+	case AEGIS_ERR_BUFFER:
+		return PSA_ERROR_BUFFER_TOO_SMALL;
+	default: /* a signature or an ML-KEM operation that failed */
 		return PSA_ERROR_GENERIC_ERROR;
 	}
-	wipe(rnd, sizeof(rnd));
-	quote_keep(token_len);
+}
+
+/* QUOTE and KEM_INIT end in an ML-DSA signature, the deepest use of this partition's stack: the other messages'
+ * buffers are kept out of the frames above it (their functions are not inlined into the service function). */
+static psa_status_t do_quote(const psa_msg_t *msg)
+{
+	const uint8_t *token, *sig;
+	size_t token_len;
+	int rc;
+
+	if (msg->in_size[0] != AEGIS_CHALLENGE_LEN || msg->out_size[0] < TOKEN_MAX || msg->out_size[1] < AEGIS_SIG_LEN) {
+		return PSA_ERROR_INVALID_ARGUMENT;
+	}
+	if (psa_read(msg->handle, 0, msg_nonce, AEGIS_CHALLENGE_LEN) != AEGIS_CHALLENGE_LEN) {
+		return PSA_ERROR_INVALID_ARGUMENT;
+	}
+	rc = aegis_prover_quote(&core, msg_nonce, &token, &token_len, &sig);
+	if (rc != AEGIS_OK) {
+		return status_of(rc);
+	}
 	psa_write(msg->handle, 0, token, token_len);
-	psa_write(msg->handle, 1, sig, sizeof(sig));
+	psa_write(msg->handle, 1, sig, AEGIS_SIG_LEN);
 	return PSA_SUCCESS;
-}
-
-/* The coins of an exchange's ML-KEM key pair (the header of this file gives the construction, which is the RW612's:
- * endpoints/rw612/prover/src/aegis_proto.c).
- *
- * The 32 random bytes are what makes the key new. prov_root is the same at every boot, the counter starts again at
- * every reset and the nonce is the caller's: without the random bytes, whoever recorded an exchange could reset the
- * board, send the recorded KEM_INIT as the same exchange since reset and get the same key pair, and the recorded
- * KEM_FINISH (its credential names that key) then gave the endpoint the old session back, for a whole new lifetime
- * (found by review, 2026-11-20). They come from the STM32H5's RNG peripheral: this build's psa_generate_random reads
- * it directly (MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG; TF-M's RNG_GetBytes, which gives nothing when the peripheral reports
- * a seed or clock error). Any failure refuses the exchange, as do 32 zero bytes: a generator that reports success
- * and writes nothing must not bring the old construction back.
- *
- * The inputs have fixed lengths, so their boundaries cannot move; prov_root is used for nothing else, and the last
- * byte separates the two halves. The message is 101 bytes: no input of the construction before (69 bytes) gives the
- * same hash.
- *
- * Its own frame, not do_kem_init's: the hash state and the random bytes are off the stack again before the key
- * generation and the signature, the deep parts of a KEM_INIT, so the stack's high-water mark does not rise. */
-static __attribute__((noinline)) psa_status_t kem_coins(uint8_t coins[64])
-{
-	uint8_t fresh[32] = {0}, c[4], any = 0;
-	psa_status_t st;
-	struct sha3 h;
-
-	st = psa_generate_random(fresh, sizeof(fresh));
-	for (size_t i = 0; i < sizeof(fresh); i++) {
-		any |= fresh[i];
-	}
-	if (st == PSA_SUCCESS && !any) {
-		st = PSA_ERROR_INSUFFICIENT_ENTROPY;
-	}
-	if (st != PSA_SUCCESS) {
-		wipe(fresh, sizeof(fresh));
-		return st;
-	}
-	kem_counter++;
-	c[0] = (uint8_t)kem_counter; c[1] = (uint8_t)(kem_counter >> 8);
-	c[2] = (uint8_t)(kem_counter >> 16); c[3] = (uint8_t)(kem_counter >> 24);
-	for (uint8_t half = 0; half < 2; half++) {
-		sha3_init(&h);
-		sha3_update(&h, prov_root, 32);
-		sha3_update(&h, fresh, sizeof(fresh));
-		sha3_update(&h, kem_nonce, 32);
-		sha3_update(&h, c, 4);
-		sha3_update(&h, &half, 1);
-		sha3_final(&h, coins + 32 * half);
-	}
-	wipe(fresh, sizeof(fresh));
-	wipe(&h, sizeof(h)); /* the state after the last block holds the second half of the coins */
-	return PSA_SUCCESS;
-}
-
-/* What the device key signs for the exchange's ML-KEM key, into signed_msg; returns its length. Not inlined, so that
- * do_kem_init's frame, which lies under the signature's, stays as it was before the transcript. */
-static __attribute__((noinline)) size_t kem_init_message(void)
-{
-	static const char lbl[] = "aegis-kem-init-v1", lbl2[] = "aegis-kem-init-v2";
-
-	_Static_assert(sizeof(signed_msg) >= sizeof(lbl) + 32 + KEM_EK_LEN, "signed_msg");
-	if (kem_bound) {
-		/* "aegis-kem-init-v2\0" || T2: the quote this exchange continues, and the key made for it */
-		transcript_step(kem_t2, T_KEM_INIT, quote_t1, 32, kem_ek, KEM_EK_LEN, NULL, 0);
-		memcpy(signed_msg, lbl2, sizeof(lbl2));
-		memcpy(signed_msg + sizeof(lbl2), kem_t2, 32);
-		return sizeof(lbl2) + 32;
-	}
-	/* "aegis-kem-init-v1\0" || nonce || ek */
-	memcpy(signed_msg, lbl, sizeof(lbl));
-	memcpy(signed_msg + sizeof(lbl), kem_nonce, 32);
-	memcpy(signed_msg + sizeof(lbl) + 32, kem_ek, KEM_EK_LEN);
-	return sizeof(lbl) + 32 + KEM_EK_LEN;
 }
 
 static psa_status_t do_kem_init(const psa_msg_t *msg)
 {
-	uint8_t coins[64], rnd[32] = {0};
-	const uint8_t pre[2] = {0, 0};
-	psa_status_t st;
+	const uint8_t *ek, *sig;
+	int rc;
 
-	if (msg->in_size[0] != 32 || msg->out_size[0] < KEM_EK_LEN || msg->out_size[1] < sizeof(sig)) {
+	if (msg->in_size[0] != AEGIS_CHALLENGE_LEN || msg->out_size[0] < AEGIS_KEM_EK_LEN ||
+	    msg->out_size[1] < AEGIS_SIG_LEN) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
-	/* A new exchange replaces a pending one whether or not it completes. Without this, a KEM_INIT refused after
-	 * the key was made (no signing randomness, a signing error) left the older exchange pending with this nonce
-	 * and key in it: unusable, its decapsulation key kept in memory (found by fuzzing the RW612 prover's copy of
-	 * this construction, tests/fuzz, 2026-11-18). */
-	kem_pending = 0;
-	wipe(kem_dk, sizeof(kem_dk));
-	if (psa_read(msg->handle, 0, kem_nonce, 32) != 32) {
+	if (psa_read(msg->handle, 0, msg_nonce, AEGIS_CHALLENGE_LEN) != AEGIS_CHALLENGE_LEN) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
-	/* The nonce names the quote this exchange continues: the challenge of the last one signed. That quote is used
-	 * up here, whether or not the exchange completes. Any other nonce: the unbound exchange. (Both values are
-	 * public, so the comparison need not take constant time.) */
-	kem_bound = quote_ready && memcmp(kem_nonce, quote_ch, CHALLENGE_LEN) == 0;
-	if (kem_bound) {
-		quote_ready = 0;
+	/* a KEM_INIT with valid arguments cancels the pending exchange, whether or not it is answered */
+	rc = aegis_prover_kem_init(&core, msg_nonce, &ek, &sig);
+	if (rc != AEGIS_OK) {
+		return status_of(rc);
 	}
-	st = kem_coins(coins);
-	if (st != PSA_SUCCESS) {
-		wipe(coins, sizeof(coins));
-		return st; /* no fresh randomness: no key, rather than one that can be made again */
-	}
-	if (aegis_mlkem_keypair_derand(kem_ek, kem_dk, coins) != 0) {
-		wipe(coins, sizeof(coins));
-		return PSA_ERROR_GENERIC_ERROR;
-	}
-	wipe(coins, sizeof(coins));
-	st = signing_rnd(rnd);
-	if (st != PSA_SUCCESS) {
-		wipe(kem_dk, sizeof(kem_dk));
-		return st;
-	}
-	/* the message is made here, in the call, so that no length has to be kept across the calls before it */
-	if (aegis_mldsa_signature_internal(sig, signed_msg, kem_init_message(), pre, sizeof(pre), rnd, sk, 0) != 0) {
-		wipe(rnd, sizeof(rnd));
-		wipe(kem_dk, sizeof(kem_dk));
-		return PSA_ERROR_GENERIC_ERROR;
-	}
-	wipe(rnd, sizeof(rnd));
-	kem_pending = 1;
-	/* The established session stays valid until a new exchange completes (a stray or hostile
-	 * KEM_INIT must not tear it down; found by review 2026-11-16). */
-	psa_write(msg->handle, 0, kem_ek, KEM_EK_LEN);
-	psa_write(msg->handle, 1, sig, sizeof(sig));
+	psa_write(msg->handle, 0, ek, AEGIS_KEM_EK_LEN);
+	psa_write(msg->handle, 1, sig, AEGIS_SIG_LEN);
 	return PSA_SUCCESS;
 }
 
-/* the body contains "<key>":"<hex of v>" (canonical JSON: no spaces) */
-static int names(const uint8_t *body, size_t n, const char *key, const uint8_t v[32])
+static __attribute__((noinline)) psa_status_t do_kem_finish(const psa_msg_t *msg)
 {
-	static const char hx[] = "0123456789abcdef";
-	char want[96];
-	size_t k = strlen(key), w = k + 69, i;
-
-	if (w > sizeof(want)) {
-		return 0;
-	}
-	want[0] = '"';
-	memcpy(want + 1, key, k);
-	memcpy(want + 1 + k, "\":\"", 3);
-	for (i = 0; i < 32; i++) {
-		want[4 + k + 2 * i] = hx[v[i] >> 4];
-		want[4 + k + 2 * i + 1] = hx[v[i] & 15];
-	}
-	want[w - 1] = '"';
-	for (i = 0; i + w <= n; i++) {
-		if (memcmp(body + i, want, w) == 0) {
-			return 1;
-		}
-	}
-	return 0;
-}
-
-/* The value of "<key>":<1 to 10 decimal digits> in the body, which must hold that key exactly once, the digits
- * followed by ',' or '}' (canonical JSON). Returns 0 if not so. */
-static int number_of(const uint8_t *body, size_t n, const char *key, uint64_t *v)
-{
-	char want[24];
-	size_t k = strlen(key), w = k + 3, at = 0, d, i;
-	int found = 0;
-
-	if (w > sizeof(want)) {
-		return 0;
-	}
-	want[0] = '"';
-	memcpy(want + 1, key, k);
-	want[k + 1] = '"';
-	want[k + 2] = ':';
-	for (i = 0; i + w <= n; i++) {
-		if (memcmp(body + i, want, w) == 0) {
-			if (found) {
-				return 0;
-			}
-			found = 1;
-			at = i + w;
-		}
-	}
-	if (!found) {
-		return 0;
-	}
-	*v = 0;
-	for (d = 0; at + d < n && body[at + d] >= '0' && body[at + d] <= '9'; d++) {
-		if (d == 10) {
-			return 0;
-		}
-		*v = *v * 10u + (uint64_t)(body[at + d] - '0');
-	}
-	return d >= 1 && at + d < n && (body[at + d] == ',' || body[at + d] == '}');
-}
-
-/* The credential's lifetime in seconds, "expires" - "issued", from 1 to CRED_LIFETIME_MAX; 0 if the body carries
- * none. The two times are the gateway's: they are subtracted, never compared with a clock of this side. */
-static uint32_t cred_lifetime(const uint8_t *body, size_t n)
-{
-	uint64_t issued, expires;
-
-	if (!number_of(body, n, "issued", &issued) || !number_of(body, n, "expires", &expires)) {
-		return 0;
-	}
-	if (expires <= issued || expires - issued > CRED_LIFETIME_MAX) {
-		return 0;
-	}
-	return (uint32_t)(expires - issued);
-}
-
-/* Credential = body || '\n' || ML-DSA-65 signature by the pinned gateway key over
- * "aegis-credential-v1\0" || body (pure ML-DSA, empty context). The body must name SHA3-256(ct) in
- * "kem_ct_sha3_256" and SHA3-256(ek) of the pending exchange in "kem_ek_sha3_256": without the second, an old
- * KEM_FINISH replayed after a new KEM_INIT passed the check, decapsulated to an unrelated key and replaced a
- * working session (found on the RW612 by review, 2026-11-18; the gateway names both). For an exchange that continues
- * a quote it must name T2 in "transcript_sha3_256" as well: the gateway signed for that quote and this key.
- * Returns PSA_SUCCESS and the lifetime the body carries, PSA_ERROR_INVALID_SIGNATURE, or PSA_ERROR_NOT_PERMITTED for
- * a signed and bound credential without a lifetime. */
-static psa_status_t check_credential(const uint8_t *c, size_t len, const uint8_t h_ct[32], uint32_t *lifetime)
-{
-	static const char lbl[] = "aegis-credential-v1";
-	const uint8_t pre[2] = {0, 0};
-	uint8_t h_ek[32];
-	size_t body_len = 0;
-
-	while (body_len < len && c[body_len] != '\n') body_len++;
-	if (body_len == len || len - body_len - 1 != MLDSA_BYTES(65) ||
-	    sizeof(lbl) + body_len > sizeof(signed_msg)) {
-		return PSA_ERROR_INVALID_SIGNATURE;
-	}
-	memcpy(signed_msg, lbl, sizeof(lbl));
-	memcpy(signed_msg + sizeof(lbl), c, body_len);
-	if (aegis_mldsa_verify_internal(c + body_len + 1, signed_msg, sizeof(lbl) + body_len, pre, sizeof(pre),
-					gateway_pk, 0) != 0) {
-		return PSA_ERROR_INVALID_SIGNATURE;
-	}
-	sha3_256(kem_ek, KEM_EK_LEN, h_ek);
-	if (!names(c, body_len, "kem_ct_sha3_256", h_ct) || !names(c, body_len, "kem_ek_sha3_256", h_ek)) {
-		return PSA_ERROR_INVALID_SIGNATURE;
-	}
-	if (kem_bound && !names(c, body_len, "transcript_sha3_256", kem_t2)) {
-		return PSA_ERROR_INVALID_SIGNATURE;
-	}
-	*lifetime = cred_lifetime(c, body_len);
-	return *lifetime ? PSA_SUCCESS : PSA_ERROR_NOT_PERMITTED;
-}
-
-static psa_status_t do_kem_finish(const psa_msg_t *msg)
-{
-	static const char l_sess[] = "aegis-session-v1", l_conf[] = "aegis-confirm-v1";
-	static const char l_sess2[] = "aegis-session-v2", l_conf2[] = "aegis-confirm-v2";
-	uint8_t k[32], h_ct[32], tag[32];
+	uint8_t tag[AEGIS_TAG_LEN];
 	size_t cred_len = msg->in_size[1];
-	uint32_t lifetime = 0;
-	psa_status_t st;
-	struct sha3 h;
+	int rc;
 
-	if (!kem_pending) {
-		return PSA_ERROR_BAD_STATE;
+	/* first what the exchange's state answers (no exchange, no clock), then the sizes: the order the partition has
+	 * always answered in. Neither ends a pending exchange. */
+	rc = aegis_prover_kem_pending(&core);
+	if (rc != AEGIS_OK) {
+		return status_of(rc);
 	}
-	if (!clock_ok) {
-		return PSA_ERROR_HARDWARE_FAILURE; /* a session's end could not be measured: none starts */
-	}
-	if (msg->in_size[0] != KEM_CT_LEN || cred_len == 0 || cred_len > CRED_MAX || msg->out_size[0] < 32) {
+	if (msg->in_size[0] != AEGIS_KEM_CT_LEN || cred_len == 0 || cred_len > AEGIS_CRED_MAX ||
+	    msg->out_size[0] < sizeof(tag)) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
-	if (psa_read(msg->handle, 0, kem_ct, KEM_CT_LEN) != KEM_CT_LEN ||
+	if (psa_read(msg->handle, 0, kem_ct, AEGIS_KEM_CT_LEN) != AEGIS_KEM_CT_LEN ||
 	    psa_read(msg->handle, 1, cred, cred_len) != cred_len) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
-	kem_pending = 0;
-	sha3_256(kem_ct, KEM_CT_LEN, h_ct);
-	st = check_credential(cred, cred_len, h_ct, &lifetime);
-	if (st != PSA_SUCCESS) {
-		wipe(kem_dk, sizeof(kem_dk));
-		return st;
+	rc = aegis_prover_kem_finish(&core, kem_ct, cred, cred_len, tag);
+	if (rc != AEGIS_OK) {
+		return status_of(rc);
 	}
-	if (aegis_mlkem_dec(k, kem_ct, kem_dk) != 0) {
-		wipe(kem_dk, sizeof(kem_dk));
-		return PSA_ERROR_GENERIC_ERROR;
-	}
-	wipe(kem_dk, sizeof(kem_dk));
-	sha3_256(cred, cred_len, cred_hash);
-	if (kem_bound) {
-		/* T3 takes h_ct's place: the ciphertext's hash is in it, and is not used again */
-		transcript_step(h_ct, T_KEM_FIN, kem_t2, 32, h_ct, 32, cred_hash, 32);
-		sha3_init(&h);
-		sha3_update(&h, (const uint8_t *)l_sess2, sizeof(l_sess2) - 1);
-		sha3_update(&h, k, 32);
-		sha3_update(&h, h_ct, 32);
-		sha3_final(&h, session_key);
-		sha3_init(&h);
-		sha3_update(&h, (const uint8_t *)l_conf2, sizeof(l_conf2) - 1);
-		sha3_update(&h, k, 32);
-		sha3_update(&h, h_ct, 32);
-		sha3_final(&h, tag);
-	} else {
-		sha3_init(&h);
-		sha3_update(&h, (const uint8_t *)l_sess, sizeof(l_sess) - 1);
-		sha3_update(&h, k, 32);
-		sha3_update(&h, kem_nonce, 32);
-		sha3_update(&h, h_ct, 32);
-		sha3_final(&h, session_key);
-		sha3_init(&h);
-		sha3_update(&h, (const uint8_t *)l_conf, sizeof(l_conf) - 1);
-		sha3_update(&h, k, 32);
-		sha3_update(&h, kem_nonce, 32);
-		sha3_update(&h, h_ct, 32);
-		sha3_update(&h, cred_hash, 32);
-		sha3_final(&h, tag);
-	}
-	wipe(k, sizeof(k));
-	session_ready = 1;
-	session_expired = 0;
-	session_start = now_ticks;
-	session_limit = ((uint64_t)lifetime + lifetime / 16u) * SCLK_HZ;
-	psa_write(msg->handle, 0, tag, 32);
+	psa_write(msg->handle, 0, tag, sizeof(tag));
 	return PSA_SUCCESS;
 }
-
-static uint64_t hb_counter;
 
 static int has_key(const uint8_t *d, size_t n, const char *key)
 {
@@ -965,74 +582,42 @@ static int has_key(const uint8_t *d, size_t n, const char *key)
 	return 0;
 }
 
-/* SESSION and HEARTBEAT without a session: was there never one (since reset), or did the clock end it? */
-static psa_status_t no_session(void)
+
+static __attribute__((noinline)) psa_status_t do_heartbeat(const psa_msg_t *msg)
 {
-	return session_expired ? PSA_ERROR_DOES_NOT_EXIST : PSA_ERROR_BAD_STATE;
-}
+	uint8_t out[AEGIS_HB_LEN];
+	char status[HB_STATUS_MAX];
+	size_t dlen = msg->in_size[1], slen, cap = sizeof(status);
+	int give_status = msg->out_size[1] != 0, rc;
 
-/* ";ttl=<seconds left>", rounded up; at most HB_TTL_MAX bytes */
-static size_t ttl_field(char out[HB_TTL_MAX])
-{
-	uint64_t left = session_limit - (now_ticks - session_start);
-	size_t k = put_text(out, ";ttl=");
-
-	return k + put_uint(out + k, (unsigned)((left + SCLK_HZ - 1u) / SCLK_HZ));
-}
-
-static psa_status_t do_heartbeat(const psa_msg_t *msg)
-{
-#if AEGIS_HB_KMAC
-	static const char lbl[] = "aegis-hb-v2"; /* the KMAC customization string */
-	struct aegis_kmac k;
-#else
-	static const char lbl[] = "aegis-hb-v1";
-	struct sha3 h;
-#endif
-	uint8_t nonce[32], status[HB_STATUS_MAX], out[40], ctr[8];
-	size_t dlen = msg->in_size[1], slen;
-	int give_status = msg->out_size[1] != 0;
-
-	if (!session_ready) {
-		return no_session();
+	rc = aegis_prover_session_state(&core, NULL); /* without a session, whatever the arguments */
+	if (rc != AEGIS_OK) {
+		return status_of(rc);
 	}
-	if (msg->in_size[0] != 32 || dlen > HB_DATA_MAX || msg->out_size[0] < sizeof(out)) {
+	if (msg->in_size[0] != AEGIS_CHALLENGE_LEN || dlen > HB_DATA_MAX || msg->out_size[0] < sizeof(out)) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
-	if (psa_read(msg->handle, 0, nonce, 32) != 32 || (dlen && psa_read(msg->handle, 1, status, dlen) != dlen)) {
+	if (psa_read(msg->handle, 0, msg_nonce, AEGIS_CHALLENGE_LEN) != AEGIS_CHALLENGE_LEN ||
+	    (dlen && psa_read(msg->handle, 1, status, dlen) != dlen)) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
 	/* the non-secure side must not be able to put its own stack figure or lifetime under the MAC, with or without
 	 * out[1] */
-	if (has_key(status, dlen, "sstack=") || has_key(status, dlen, "ttl=")) {
+	if (has_key((const uint8_t *)status, dlen, "sstack=") || has_key((const uint8_t *)status, dlen, "ttl=")) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
 	slen = dlen;
 	if (give_status) {
-		slen += sstack_field((char *)status + slen);
-		slen += ttl_field((char *)status + slen);
-		if (msg->out_size[1] < slen) {
-			return PSA_ERROR_BUFFER_TOO_SMALL;
+		slen += sstack_field(status + slen);
+		if (msg->out_size[1] < cap) {
+			cap = msg->out_size[1]; /* the status with the core's ";ttl=" must fit the caller's buffer */
 		}
 	}
-	hb_counter++;
-	for (int i = 0; i < 8; i++) ctr[i] = (uint8_t)(hb_counter >> (8 * i));
-	memcpy(out, ctr, 8);
-#if AEGIS_HB_KMAC
-	aegis_kmac256_init(&k, session_key, 32, (const uint8_t *)lbl, sizeof(lbl) - 1);
-	aegis_kmac256_update(&k, nonce, 32);
-	aegis_kmac256_update(&k, ctr, 8);
-	aegis_kmac256_update(&k, status, slen);
-	aegis_kmac256_final(&k, out + 8, 32); /* also wipes the KMAC state */
-#else
-	sha3_init(&h);
-	sha3_update(&h, (const uint8_t *)lbl, sizeof(lbl) - 1);
-	sha3_update(&h, session_key, 32);
-	sha3_update(&h, nonce, 32);
-	sha3_update(&h, ctr, 8);
-	sha3_update(&h, status, slen);
-	sha3_final(&h, out + 8);
-#endif
+	/* without out[1] the data alone is MACed: there is no way to return what would be appended */
+	rc = aegis_prover_heartbeat(&core, msg_nonce, status, &slen, cap, give_status ? 0u : AEGIS_HB_RAW, out);
+	if (rc != AEGIS_OK) {
+		return status_of(rc);
+	}
 	psa_write(msg->handle, 0, out, sizeof(out));
 	if (give_status) {
 		psa_write(msg->handle, 1, status, slen);
@@ -1040,39 +625,39 @@ static psa_status_t do_heartbeat(const psa_msg_t *msg)
 	return PSA_SUCCESS;
 }
 
-static psa_status_t do_session(const psa_msg_t *msg)
+static __attribute__((noinline)) psa_status_t do_session(const psa_msg_t *msg)
 {
-	static const char l_id[] = "aegis-session-id-v1";
-	uint8_t out[64];
-	struct sha3 h;
+	uint8_t out[AEGIS_SESSION_LEN];
+	int rc = aegis_prover_session_state(&core, NULL);
 
-	if (!session_ready) {
-		return no_session();
+	if (rc != AEGIS_OK) {
+		return status_of(rc);
 	}
 	if (msg->out_size[0] < sizeof(out)) {
 		return PSA_ERROR_BUFFER_TOO_SMALL;
 	}
-	sha3_init(&h);
-	sha3_update(&h, (const uint8_t *)l_id, sizeof(l_id) - 1);
-	sha3_update(&h, session_key, 32);
-	sha3_final(&h, out);
-	memcpy(out + 32, cred_hash, 32);
+	rc = aegis_prover_session(&core, out);
+	if (rc != AEGIS_OK) {
+		return status_of(rc);
+	}
 	psa_write(msg->handle, 0, out, sizeof(out));
 	return PSA_SUCCESS;
 }
 
 psa_status_t aegis_pq_service_sfn(const psa_msg_t *msg)
 {
-	session_sweep(); /* before anything else, whatever the message */
+	msg_clock_read = 0;
+	rng_status = token_status = PSA_SUCCESS;
+	aegis_prover_poll(&core); /* the clock and the session's end before anything else, whatever the message */
 	if (!key_ready) {
 		return PSA_ERROR_BAD_STATE;
 	}
 	switch (msg->type) {
 	case AEGIS_PQ_GET_PUBKEY:
-		if (msg->out_size[0] < sizeof(pk)) {
+		if (msg->out_size[0] < AEGIS_PK_LEN) {
 			return PSA_ERROR_BUFFER_TOO_SMALL;
 		}
-		psa_write(msg->handle, 0, pk, sizeof(pk));
+		psa_write(msg->handle, 0, aegis_prover_public_key(&core), AEGIS_PK_LEN);
 		return PSA_SUCCESS;
 	case AEGIS_PQ_QUOTE:
 		return do_quote(msg);

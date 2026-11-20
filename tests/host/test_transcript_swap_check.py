@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """tests/board/transcript_swap_check.py, the transcript check for the boards, run on the PC.
 
-Against the RW612 prover's protocol code (endpoints/rw612/prover/src/aegis_proto.c, built by test_rw612_proto.py's
+Against the Prover SDK's core (sdk/src/aegis_proto.c through sdk/ports/host, built by test_rw612_proto.py's
 recipe), where a reset is the program started again with the same device secrets, and a swap is the program started
 again with the same secrets and another image to measure:
   - live passes on the running image;

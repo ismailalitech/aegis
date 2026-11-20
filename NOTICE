@@ -35,8 +35,8 @@ STM32CubeH5 HAL Ethernet driver headers
 
 mldsa-native and mlkem-native configuration headers, adapted from the projects' own configuration templates
   Licence: Apache-2.0 OR ISC OR MIT
-  endpoints/stm32h573/tfm-aegis-partition/mldsa/aegis_mldsa_config.h
-  endpoints/stm32h573/tfm-aegis-partition/mlkem/aegis_mlkem_config.h
+  sdk/crypto/mldsa/aegis_mldsa_config.h
+  sdk/crypto/mlkem/aegis_mlkem_config.h
 
 Device tree for the Zynq UltraScale+ endpoint, written from the board's original device tree; it includes the
 zynqmp.dtsi files of Linux/U-Boot at build time

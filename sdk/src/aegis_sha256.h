@@ -4,5 +4,5 @@
 #include <stddef.h>
 #include <stdint.h>
 
-void sha256(const uint8_t *p, size_t n, uint8_t out[32]);
+void aegis_sha256(const uint8_t *p, size_t n, uint8_t out[32]);
 #endif

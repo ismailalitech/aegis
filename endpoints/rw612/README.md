@@ -18,7 +18,8 @@ boot ROM loads it from the PUF; software can never read it. The intermediate key
 slot and is deleted after the two HMACs. So the same chip gives the same ML-DSA-65 key on every boot, and another
 chip gives another key, with no secret stored in flash.
 
-Then DHCP, and the protocol (`prover/src/aegis_proto.c`, no RTOS code in it, so the PC tests build the same file):
+Then DHCP, and the protocol (the Prover SDK's core, `sdk/src/aegis_proto.c`, no RTOS code in it, so the PC tests build
+the same file; `prover/src/main.c` is the SDK's port to this firmware):
 
 | Request | Reply |
 |---|---|
@@ -29,8 +30,9 @@ Then DHCP, and the protocol (`prover/src/aegis_proto.c`, no RTOS code in it, so 
 | `PQHB <nonce>` | a KMAC256 heartbeat over the session (`"aegis-hb-v2"`) |
 | `PQSESSION` | the session ID and the credential hash |
 
-The constructions are the STM32 partition's (`endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c`); the
-PQ library configurations, KMAC256 and the pinned gateway key are shared with it.
+The constructions are those of every Aegis device (the core's head comment gives them); the PQ library
+configurations and KMAC256 are the SDK's (`sdk/crypto`, `sdk/src`), and the pinned gateway key is the one header all
+device builds include (`endpoints/stm32h573/tfm-aegis-partition/gateway_pk.h`, `tools/gen_gateway_pin.py`).
 
 ## What it proves, and what it does not
 
@@ -55,7 +57,8 @@ ROM would also verify that stage. Neither is done here: no fuse of this board is
 - Tamper test: the same prover rebuilt with one configuration value changed (`CONFIG_NET_HOSTNAME`) gives another
   image. The key still signs validly, but the gateway quarantines the board (`component APP not allowed`) and
   revokes its credential. With the good image flashed back: admitted again, a new session, heartbeats.
-- PC tests: `tests/host/test_rw612_proto.py` builds `aegis_proto.c` for the PC and runs the gateway code against it
+- PC tests: `tests/host/test_rw612_proto.py` builds `sdk/src/aegis_proto.c` for the PC (through the reference port,
+  `sdk/ports/host`) and runs the gateway code against it
   (attestation, key derivation determinism, provisioning, heartbeats, forged and misbound credentials, malformed
   requests): 7 of 7.
 
