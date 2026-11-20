@@ -8,6 +8,7 @@ import os
 import random
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -428,6 +429,29 @@ class Runs(unittest.TestCase):
             with open(os.path.join(d, "samples.csv")) as fh:
                 self.assertEqual(fh.read().count("pc_time"), 1)
 
+    def test_resume_waits_for_a_regression_still_running(self):
+        with tempfile.TemporaryDirectory() as d:
+            clock = soak.FakeClock(T0)
+            cfg = soak.make_cfg(hours=8, absent=["stm32h573-dk"])
+            gw = soak.FakeGateway(clock, cfg["endpoints"])
+            reg = soak.FakeRegression(clock, gw)
+            s = soak.Soak(d, cfg, gw, clock, reg)
+            self.assertIsNone(s.loop(stop=lambda: clock.now() > T0 + 4 * 3600 + 300))
+            run = s.st["running"]
+            self.assertEqual(run["stage"], "middle")
+            s.save()
+            # the runner was killed; its regression (process group) goes on for another 10 min
+            reg2 = soak.FakeRegression(clock, gw)
+            reg2.groups[run["pgid"]] = clock.now() + 600
+            s2 = soak.Soak(d, cfg, gw, clock, reg2)
+            self.assertTrue(s2.st["running"]["orphan"])
+            self.assertIn("still running", read(d, "events.log"))
+            s2.loop(stop=lambda: clock.now() > T0 + 4 * 3600 + 300 + 500)
+            self.assertEqual(reg2.runs, [])                 # not started again while the old one runs
+            self.assertTrue(s2.loop(), s2.st["failures"])
+            self.assertEqual(reg2.runs[0], "middle")        # then it runs again
+            self.assertIn("from before the restart ended", read(d, "events.log"))
+
     def test_garbled_answer_and_short_outage_do_not_fail(self):
         with tempfile.TemporaryDirectory() as d:
             passed, s = soak.simulate(d, hours=8, faults={"garble_at": T0 + 3600,
@@ -453,6 +477,38 @@ class Runs(unittest.TestCase):
             with self.assertRaises(SystemExit) as e, contextlib.redirect_stderr(io.StringIO()):
                 soak.main(["run", "--dry-run", "--gateway", "x", "--stm32", "y:1", "--commands", p])
             self.assertIn("refused", str(e.exception.code))
+
+
+class Runner(unittest.TestCase):
+    """RegressionRunner on real processes: stop() reaches the script behind Popen's shell, its trap runs, and the
+    whole process group is gone afterwards."""
+
+    def test_stop_reaches_the_script_and_its_trap(self):
+        with tempfile.TemporaryDirectory() as d:
+            marker = os.path.join(d, "trapped")
+            script = os.path.join(d, "child.sh")
+            with open(script, "w") as fh:
+                fh.write("trap 'echo trapped > %s; exit 130' TERM\nsleep 60 &\nwait\n" % marker)
+            # "; true" keeps Popen's sh -c in between, as with the real command line
+            reg = soak.RegressionRunner("sh %s; true" % script, "true", {}, d, grace_s=10)
+            pgid = reg.start("start")
+            time.sleep(0.5)
+            self.assertTrue(reg.alive(pgid))
+            t = time.monotonic()
+            reg.stop()
+            self.assertLess(time.monotonic() - t, 9)       # ended on SIGTERM, not on the SIGKILL after the grace
+            self.assertFalse(reg.alive(pgid))
+            self.assertTrue(os.path.exists(marker))
+            self.assertIsNotNone(reg.poll())
+
+    def test_kill_after_grace(self):
+        with tempfile.TemporaryDirectory() as d:
+            reg = soak.RegressionRunner("trap '' TERM; sleep 60; true", "true", {}, d, grace_s=1)
+            pgid = reg.start("start")
+            time.sleep(0.3)
+            self.assertFalse(reg.kill_group(pgid))         # ignored SIGTERM: killed after the grace
+            self.assertFalse(reg.alive(pgid))
+            self.assertFalse(soak.RegressionRunner.alive(0))
 
 
 class BenchWatch(unittest.TestCase):

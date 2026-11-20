@@ -613,30 +613,74 @@ class SSHGateway:
 
 
 class RegressionRunner:
-    """Runs tools/regression.sh in the background (same process group: a Ctrl-C reaches its restart trap)."""
+    """Runs tools/regression.sh in the background, in a process group of its own (start_new_session): the shell that
+    Popen puts in between is not the only process signalled. stop() sends SIGTERM to the whole group, so
+    regression.sh's restart trap runs, waits for the group to end (the trap starts aegis-fleet again) and sends
+    SIGKILL to what is left after the grace time. The group id is the pid returned by start(): a resumed runner uses
+    it to see whether a regression from before its restart is still running (alive)."""
 
-    def __init__(self, cmd, expiry_cmd, env, out):
-        self.cmd, self.expiry_cmd, self.env, self.out = cmd, expiry_cmd, env, out
+    def __init__(self, cmd, expiry_cmd, env, out, grace_s=180):
+        self.cmd, self.expiry_cmd, self.env, self.out, self.grace_s = cmd, expiry_cmd, env, out, grace_s
         self.p = None
 
     def start(self, stage):
         log = open(os.path.join(self.out, "regression-%s.log" % stage), "w")
         cmd = self.expiry_cmd if stage.startswith("expiry") else self.cmd
         self.p = subprocess.Popen(cmd, shell=True, cwd=REPO, env=dict(os.environ, **self.env), stdout=log,
-                                  stderr=subprocess.STDOUT)
+                                  stderr=subprocess.STDOUT, start_new_session=True)
         log.close()
         return self.p.pid
 
     def poll(self):
         return None if self.p is None else self.p.poll()
 
-    def stop(self):
-        if self.p is not None and self.p.poll() is None:
-            self.p.send_signal(signal.SIGTERM)
+    @staticmethod
+    def alive(pgid):
+        """True while any process of the group pgid exists."""
+        if not pgid or pgid <= 1:
+            return False
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def _reap(self, pgid):
+        if self.p is not None and self.p.pid == pgid:
+            self.p.poll()              # our own group leader: a zombie would still count as alive
+
+    def kill_group(self, pgid, grace_s=None):
+        """SIGTERM to the group, wait up to grace_s for all of it to end, then SIGKILL. True if it had ended."""
+        grace_s = self.grace_s if grace_s is None else grace_s
+        self._reap(pgid)
+        if not self.alive(pgid):
+            return True
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            return True
+        deadline = time.monotonic() + grace_s
+        while time.monotonic() < deadline:
+            self._reap(pgid)
+            if not self.alive(pgid):
+                return True
+            time.sleep(0.2)
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if self.p is not None and self.p.pid == pgid:
             try:
-                self.p.wait(180)
+                self.p.wait(10)
             except subprocess.TimeoutExpired:
                 pass
+        return False
+
+    def stop(self):
+        if self.p is not None:
+            self.kill_group(self.p.pid)
 
 
 class Soak:
@@ -650,10 +694,19 @@ class Soak:
             self.cfg = self.st["cfg"]
             self.event(None, "INFO", "runner", "soak runner resumed (%d s after the last sample)" % (
                 clock.now() - (self.st.get("last_pc") or clock.now())))
-            if self.st.get("running"):
-                self.event(None, "WARN", "runner", "regression %s was interrupted by the restart; it runs again"
-                           % self.st["running"]["stage"])
-                self.st["running"] = None
+            run = self.st.get("running")
+            if run:
+                pgid = run.get("pgid", run.get("pid"))
+                if pgid and regression.alive(pgid):
+                    # the runner stopped without stopping it: running the stage again now would overlap two
+                    # regressions (two expiry stages stopping and starting aegis-fleet). Wait for it to end.
+                    run["orphan"] = True
+                    self.event(None, "WARN", "runner", "regression %s from before the restart is still running "
+                               "(process group %d): waiting for it to end, then it runs again" % (run["stage"], pgid))
+                else:
+                    self.event(None, "WARN", "runner", "regression %s was interrupted by the restart; it runs again"
+                               % run["stage"])
+                    self.st["running"] = None
         else:
             self.cfg = cfg
             t0 = clock.now()
@@ -862,6 +915,13 @@ class Soak:
     def regression_step(self):
         t = self.clock.now()
         run = self.st["running"]
+        if run and run.get("orphan"):
+            if self.reg.alive(run["pgid"]):
+                return
+            self.event(t, "INFO", "regression", "%s from before the restart ended; it runs again" % run["stage"])
+            self.st["running"] = None
+            self.save()
+            return
         if run:
             rc = self.reg.poll()
             if rc is None:
@@ -882,7 +942,7 @@ class Soak:
         for stage, when in self.st["schedule"]:
             if stage not in self.st["done"] and t >= when:
                 pid = self.reg.start(stage)
-                self.st["running"] = {"stage": stage, "t": t, "pid": pid}
+                self.st["running"] = {"stage": stage, "t": t, "pid": pid, "pgid": pid}
                 self.st["planned"].append([t, t + 6 * 3600, "*", "regression " + stage])
                 self.event(t, "INFO", "regression", "%s started (pid %s)" % (stage, pid))
                 self.save()
@@ -1148,15 +1208,18 @@ class FakeGateway:
 
 
 class FakeRegression:
-    def __init__(self, clock, gw, fail=()):
-        self.clock, self.gw, self.fail = clock, gw, set(fail)
-        self.until, self.stage, self.runs = None, None, []
+    def __init__(self, clock, gw, fail=(), hang=()):
+        self.clock, self.gw, self.fail, self.hang = clock, gw, set(fail), set(hang)
+        self.until, self.stage, self.runs, self.killed = None, None, [], []
+        self.groups = {}               # pgid -> the time it ends (a group left over from a stopped runner)
 
     def start(self, stage):
         self.stage, self.until = stage, self.clock.now() + (180 if stage.startswith("expiry") else 900)
+        if stage in self.hang:
+            self.until = float("inf")
         self.runs.append(stage)
         self.gw.restart_fleet()
-        return 1
+        return 1000 + len(self.runs)
 
     def poll(self):
         if self.until is None or self.clock.now() < self.until:
@@ -1164,8 +1227,18 @@ class FakeRegression:
         self.until = None
         return 1 if self.stage in self.fail else 0
 
+    def alive(self, pgid):
+        return self.clock.now() < self.groups.get(pgid, 0)
+
+    def kill_group(self, pgid, grace_s=None):
+        self.killed.append(pgid)
+        self.groups.pop(pgid, None)
+        return True
+
     def stop(self):
-        pass
+        if self.until is not None:
+            self.killed.append(1000 + len(self.runs))
+            self.until = None
 
 
 def make_cfg(a=None, **kw):
