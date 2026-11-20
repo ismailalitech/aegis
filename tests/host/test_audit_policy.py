@@ -1099,6 +1099,18 @@ class Policy(unittest.TestCase):
                 json.dump(doc, f)
             with self.assertRaises(signed_policy.Refused, msg=name):
                 signed_policy.load_signers(path)
+        # the verifier's own identity key is not a policy signer: the verifier holds no key that can sign a policy
+        path = signers(("ops", OPK), ("me", VPK))
+        self.assertEqual(len(signed_policy.load_signers(path)["keys"]), 2)
+        with self.assertRaises(signed_policy.Refused) as c:
+            signed_policy.load_signers(path, VPK)
+        self.assertIn("signer me is this verifier's own identity key", str(c.exception))
+        self.assertEqual(len(signed_policy.load_signers(path, XPK)["keys"]), 2)
+        state = make_state()
+        shutil.copy(path, os.path.join(state, "policy-signers.json"))
+        with self.assertRaises(fleet.PolicyRefused) as c:
+            fleet.policy_signers(state)
+        self.assertIn("own identity key", str(c.exception))
         for junk in (b"", b"\xff", b'{"format": "aegis-policy-signers-v1", "signers": [], "signers": []}'):
             path = os.path.join(tempfile.mkdtemp(), "policy-signers.json")
             with open(path, "wb") as f:

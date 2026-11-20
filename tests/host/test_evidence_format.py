@@ -1191,6 +1191,18 @@ class Pack(Bench):
         self.assertEqual((rc, rep["verified"]), (0, True), rep)
         self.assertEqual(rep["evidence"]["measurements"], [{"name": "SPE", "sha256": "99" * 32}])
 
+    def test_a_key_file_that_is_not_the_pinned_key_is_not_exported(self):
+        e = self.add("dev", EatDevice(), pq_pub_sha256=hashlib.sha256(PK).hexdigest())
+        self.assertTrue(self.cycle()[0]["admitted"])
+        out, man, _ = self.export("dev")
+        self.assertEqual(man["key_thumbprints"]["device"], thumb(PK).hex())
+        with open(os.path.join(self.d, e["pq_pub_file"]), "w") as f:     # replaced after the cycle
+            f.write(PK2.hex() + "\n")
+        rc, text = run(fleet.main, ["export-evidence", self.pol, "dev", "--out", os.path.join(tempfile.mkdtemp(), "p"),
+                                    "--state-dir", self.state, "--platform", "linux"])
+        self.assertEqual(rc, 1, text)
+        self.assertIn("is not the key the policy pins (pq_pub_sha256", text)
+
     def test_export_says_why_there_is_nothing_to_export(self):
         self.add("dev", EatDevice())
         for name, text in (("dev", "no attestation of dev is kept"), ("nobody", "no entry named"), ("../x", "no entry")):

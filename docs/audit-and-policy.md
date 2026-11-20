@@ -252,6 +252,7 @@ It is looked for in `STATE_DIR/policy-signers.json`, or where `--policy-signers 
 | a signed policy by a listed key | **refused**: not read unchecked | accepted, if its version is not behind and its audience fits |
 | a signed policy by any other key, altered, of another `typ`, with claims outside the format | refused | refused |
 | a signers file that is there and unusable, or `--policy-signers` naming a missing file | | refused: a verifier told to check does not go on unchecked |
+| a signers file that lists the verifier's own identity key | | refused: the verifier holds no key that can sign a policy, and its own key is on the gateway |
 
 - The policy file is whichever one is named on the command line: `fleet.py watch fleet.cose`. Its first byte says
   what it is (`d2`, tag 18, or `{`). Key files, endorser keys and endorsement records are still looked up beside it.
@@ -294,7 +295,7 @@ covers their names, not their content, unless the policy also carries their hash
 |---|---|
 | an endorser's key | `pk_sha256` in `"endorsers"` (since `docs/enrolment.md`) |
 | an endorsement record | `endorsement_sha256` in the entry |
-| a device key pinned on first use | **`pq_pub_sha256`** in the entry (new): `device_key()` refuses a key file that holds another key |
+| a device key pinned on first use | **`pq_pub_sha256`** in the entry (new): `device_key()` refuses a key file that holds another key, and `export-evidence` does not put such a key into a pack |
 | the ES256 key of a `psa` entry | not pinned (limit 5) |
 
     { "name": "frdm-rw612", "kind": "aegis-device", "pq_pub_file": "keys/frdm-rw612.mldsa65.pub",

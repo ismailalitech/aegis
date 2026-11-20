@@ -1335,7 +1335,13 @@ def export_evidence(policy, policy_bytes, base_dir, state, name, out, with_polic
     kind = ep.get("kind", "psa")
     if kind in PQ_KINDS and ep.get("pq_pub_file"):
         with open(_path(base_dir, ep["pq_pub_file"])) as f:
-            files["keys/device.cosekey"] = cbor_key(bytes.fromhex(f.read().strip()))
+            device_pk = bytes.fromhex(f.read().strip())
+        pin = ep.get("pq_pub_sha256")
+        if pin is not None and hashlib.sha256(device_pk).hexdigest() != pin:
+            raise ValueError("the key in %s (sha256 %s...) is not the key the policy pins (pq_pub_sha256 %s...): "
+                             "it is not put into a pack" % (_path(base_dir, ep["pq_pub_file"]),
+                                                            hashlib.sha256(device_pk).hexdigest()[:16], str(pin)[:16]))
+        files["keys/device.cosekey"] = cbor_key(device_pk)
     if ep.get("iak_pub_pem"):
         with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
             files["keys/device-iak.pem"] = f.read()
@@ -1410,7 +1416,12 @@ def policy_signers(state, path=None):
         return None             # the default: nothing of the signed policy is loaded
     import signed_policy
     try:
-        return dict(signed_policy.load_signers(path), path=path)
+        with open(os.path.join(state, "identity.json")) as f:
+            own = bytes.fromhex(json.load(f)["body"]["pk"])
+    except (OSError, ValueError, KeyError, TypeError):
+        own = None
+    try:
+        return dict(signed_policy.load_signers(path, own), path=path)
     except (OSError, ValueError) as e:
         raise PolicyRefused("the policy signers in %s cannot be used: %s" % (path, e)) from None
 

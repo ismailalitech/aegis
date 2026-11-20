@@ -147,10 +147,11 @@ def signers_file(keys, audience=None):
     return (json.dumps(doc, indent=1) + "\n").encode()
 
 
-def load_signers(path):
+def load_signers(path, own_pk=None):
     """The verifier's policy signers: {"keys": {kid: {"name", "pk"}}, "audience": text or None}. Refused if the file
     is there and is anything but a list of at least one key: a verifier that was told to check signatures must not
-    find itself checking none. OSError if it cannot be read."""
+    find itself checking none. own_pk: the verifier's own identity key, which is refused as a signer (the verifier
+    holds no key that can sign a policy: its key is on the gateway). OSError if it cannot be read."""
     with open(path, "rb") as f:
         data = f.read(1 << 20)
     try:
@@ -177,6 +178,9 @@ def load_signers(path):
         if len(pk) != mldsa.PK_LEN:
             raise Refused("%s: the key of signer %s is not an ML-DSA-65 public key in hex" % (path, e["name"]))
         kid = cose.key_thumbprint(pk)
+        if own_pk is not None and pk == bytes(own_pk):
+            raise Refused("%s: signer %s is this verifier's own identity key: a policy must be signed by a key that is "
+                          "not on the verifier" % (path, e["name"]))
         if kid in keys:
             raise Refused("%s lists one key twice" % path)
         keys[kid] = {"name": e["name"], "pk": pk}
