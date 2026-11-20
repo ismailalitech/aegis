@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Synthesis only of one RTL top on the board's device (MPFS095T-1FCSG325E), for resource and timing estimates.
 # Usage: libero SCRIPT:synth_core.tcl "SCRIPT_ARGS:<project dir> <top> <rtl dir> <clock MHz>"
 set proj [lindex $argv 0]

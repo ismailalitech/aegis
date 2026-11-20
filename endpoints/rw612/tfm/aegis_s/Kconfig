@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # It is optional to provide example specific Kconfig.
 
 mainmenu "Aegis TF-M secure image"

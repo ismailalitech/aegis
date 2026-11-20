@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Aegis: add the aegis_pqc APB slave in FIC3 APB slot 14 (0x40000E00), next to pfdaq (slot 15).
 # Sourced right after PFDAQ.tcl. HDL files are copied to script_support/hdl/aegis/ by build.sh.
 foreach f [glob -nocomplain ./script_support/hdl/aegis/*.v] {

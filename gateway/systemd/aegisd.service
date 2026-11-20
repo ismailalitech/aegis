@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Aegis gateway identity and quote service (TCP 7443).
 # Loads mpfs-generic-service if needed (never unloaded: its driver cannot be removed safely).
 [Unit]

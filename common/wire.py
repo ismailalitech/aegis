@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Aegis wire format v1: canonical JSON bodies, signed with ML-DSA-65.
 
 A message on TCP is a 4-byte big-endian length followed by UTF-8 JSON.

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """ML-DSA-65 (FIPS 204), with two interchangeable backends.
 
   openssl   OpenSSL 3.5 or later through the Python "cryptography" package (version 47 or later). The backend for a

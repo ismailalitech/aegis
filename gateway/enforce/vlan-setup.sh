@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Put the gateway in the endpoints' traffic path with one Ethernet port and a switch that does 802.1Q VLANs.
 # The switch: endpoint ports are untagged members of the endpoint VLAN only; the gateway's port carries the LAN
 # untagged and the endpoint VLAN tagged; the router's port is on the LAN only. The endpoints then reach anything

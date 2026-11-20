@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Notice when the gateway or an endpoint goes quiet. Every interval the PC asks the gateway over SSH (read-only:
 date, systemctl is-active, journalctl) whether it answers, whether aegis-fleet is active, and whether each expected
 endpoint has an ADMITTED line in the last --quiet minutes. The window is computed on the gateway's own clock, so a

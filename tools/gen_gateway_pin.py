@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Write the gateway's ML-DSA-65 public key as a C header for the STM32 secure partition, so the
 partition can verify credentials (mutual authentication). Source: the gateway's identity record.
   gen_gateway_pin.py [GATEWAY_HOST]   ->  endpoints/stm32h573/tfm-aegis-partition/gateway_pk.h

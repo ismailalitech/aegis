@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Keep the systemd journal on the SD card. On this Yocto image /var/log is a link into RAM (/var/volatile/log), so a
 # journal directory there is lost at every reboot (it was, on 17 November 2026, with the record of a deployment).
 # This links /var/volatile/log/journal to /var/lib/journal (ext4 on the SD card) before journald moves its log to

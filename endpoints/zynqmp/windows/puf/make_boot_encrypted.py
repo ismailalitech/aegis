@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Build the encrypted BOOT.BIN (ZynqMP, PUF black key in the boot header) and check the result.
 
 Runs on the Windows PC only: it needs the red key. Everything that holds the red key (the .nky file) lives in a

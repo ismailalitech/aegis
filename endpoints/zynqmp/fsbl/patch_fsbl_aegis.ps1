@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Add the Aegis hand-off hook (docs/zynqmp-key-design.md, phase B) to the Vitis 2025.2 zynqmp_fsbl sources.
 # Run AFTER patch_fsbl_te.ps1, on the same source directory. A second run changes nothing.
 #   -d  the FSBL source directory of the Vitis platform

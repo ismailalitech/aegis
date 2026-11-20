@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
 # Test the zero-trust ruleset (gateway/enforce) without a second network port or a switch.
 # Three network namespaces stand in for the gateway, an endpoint and the rest of the network; the real
 # aegis.nft and aegis-enforce.sh run inside the gateway namespace. Needs root (ip netns); everything it

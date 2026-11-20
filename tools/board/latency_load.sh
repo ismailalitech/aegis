@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 trap "kill \$P1 \$P2 \$P3 2>/dev/null; echo 7 > /proc/irq/80/smp_affinity" EXIT INT TERM
 for c in 0 1 2; do taskset -c $c sh -c "while :; do :; done" & eval P$((c+1))=$!; done
 echo 4 > /proc/irq/80/smp_affinity

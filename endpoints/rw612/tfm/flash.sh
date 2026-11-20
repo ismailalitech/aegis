@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Flash the Aegis TF-M images on the FRDM-RW612 through its MCU-Link (J-Link firmware).
 #   endpoints/rw612/tfm/flash.sh <secure .bin> <non-secure .bin>
 # Halts the chip under reset first (a running TF-M blocks J-Link's flash loader), then writes each partition WHOLE:

@@ -9,6 +9,7 @@
 # (EXPIRY_ENDPOINTS="name ..." to choose), starts the service again however the stage ends (failure, Ctrl-C) and
 # waits until those endpoints are ADMITTED again. About 3 minutes, during which the fleet is not re-attested.
 # Writes logs/regression/<time>/, runs every stage and exits non-zero if any failed.
+# SPDX-License-Identifier: Apache-2.0
 set -u
 usage() { sed -n '2,11p' "$0" | cut -c3-; }
 BOARD=; WITH_EXPIRY=

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Talk to the Aegis prover over the ST-LINK virtual COM port.
 
   stm32_console.py boot  [--wait 20]        reset the board, print the console

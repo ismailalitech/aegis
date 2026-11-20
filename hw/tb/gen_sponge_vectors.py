@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Operation script for tb_aegis_pqc2: APB writes, reads with expected values, DMA waits and memory checks, generated
 from a Python model of aegis_sponge (state, slots, XOR mode, squeeze into memory). Every hash the script computes is
 also checked here against hashlib, so the expected values are not just the model agreeing with itself.

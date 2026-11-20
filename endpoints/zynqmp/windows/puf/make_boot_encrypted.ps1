@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Step C: build the encrypted BOOT.BIN on the Windows PC (the only place the red key is).
 #   powershell -ExecutionPolicy Bypass -File make_boot_encrypted.ps1 -RegDir C:\tz\aegis-keys\reg-<time> [-Auth none|bh]
 # Partition inputs default to C:\tz\stage\linux-side, which must hold the six inputs of the current plain BOOT.BIN

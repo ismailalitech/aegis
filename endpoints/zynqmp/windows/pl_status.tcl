@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 connect
 puts [targets]
 targets -set -nocase -filter {name =~ "*PSU*"}

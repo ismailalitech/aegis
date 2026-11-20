@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Write the Zybo Z7 Aegis endpoint image to a microSD card. Erases the card.
 #   sudo endpoints/zybo/make_sd.sh /dev/sdX <work dir with u-boot/, linux-6.18.64/, rootfs/>
 # Refuses anything that is not a removable USB disk smaller than 64 GB.

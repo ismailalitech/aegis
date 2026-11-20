@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # The operator's steps in the recorded demo (tools/rw612/record_demo.sh): the good image runs, a modified image is
 # flashed (one configuration value changed), then the good image again. Fleet cycle: about 34 s.
 #   demo_steps.sh <good build dir> <modified build dir>

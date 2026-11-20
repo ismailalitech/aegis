@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Build the Aegis trusted application for OP-TEE on the ZynqMP.
 #   endpoints/zynqmp/optee/build_ta.sh <OP-TEE build dir (with export-ta_arm64)> <new out dir> [gateway host]
 # The out dir must not exist yet (nothing is deleted). Stages the shared sources (the RW612 prover's protocol code,

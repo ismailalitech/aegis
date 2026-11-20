@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Turn a window of the aegis_pqc testbench trace (VCD) into a `type: wave` diagram for tools/gen_diagrams.py.
 
   extract_wave.py TRACE.vcd OUT.yaml

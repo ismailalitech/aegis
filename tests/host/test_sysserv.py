@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Host tests for the read-only system-service tool (no board needed)."""
 import os
 import struct

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import vitis
 client = vitis.create_client()
 client.set_workspace(path="C:/tz/aegis/ws")

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Port Trenz TE0807/TEBF0808 FSBL hooks (StarterKit 2022.2 build 6) onto the Vitis 2025.2 zynqmp_fsbl sources.
 param([string]$d = 'C:\tz\aegis\ws\aegis_zu4eg\zynqmp_fsbl')
 $ErrorActionPreference = 'Stop'

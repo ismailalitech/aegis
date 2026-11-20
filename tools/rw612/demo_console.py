@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """The FRDM-RW612 console for the recorded demo (tools/rw612/record_demo.sh): the board's USB serial port, line by
 line, without Zephyr's shell prompt and colour codes, with IPv4 addresses masked (the bench network is not published).
   demo_console.py <serial device>"""

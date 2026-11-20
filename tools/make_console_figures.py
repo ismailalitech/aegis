@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Build docs/diagrams/console.yaml (console figures with numbered callouts) from the records in evidence/ (console/,
 rw612-tfm/, zynqmp/, stm32-tz/).
 

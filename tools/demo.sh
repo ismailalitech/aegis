@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Aegis live demo on the bench, from the PC. About 4 minutes. Every verdict comes from the real
 # boards: the PolarFire gateway (services aegisd + aegis-fleet) and the STM32H573 endpoint.
 #
