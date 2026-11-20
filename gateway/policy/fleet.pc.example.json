@@ -1,0 +1,65 @@
+{
+ "timeout_s": 20,
+ "note": "Policy for the fleet loop on an ordinary Linux host (fleet.py --platform linux; docs/pc-verifier.md). Copy to ~/.config/aegis/fleet.pc.json, put the endpoints' addresses in 'host' (documentation addresses below) and their pinned ML-DSA-65 public keys in keys/ next to it (the gateway's pins, or 'fleet.py enroll-pq'). Attestation only: no entry sets 'provision', because the current endpoint images accept credentials only from the gateway's key. To let this host issue credentials, pin its key in the images (tools/gen_gateway_pin.py --identity) and set 'provision': true and 'verifier_pin_sha256' in the entry. No enforce_cmd: observe-only.",
+ "endpoints": [
+  {
+   "name": "stm32h573-dk",
+   "kind": "aegis-pq",
+   "host": "192.0.2.20",
+   "port": 7444,
+   "pq_pub_file": "keys/stm32h573-dk.mldsa65.pub",
+   "iak_pub_pem": "keys/tfm-dev-iak.pub.pem",
+   "allowed": [
+    {
+     "type": "NSPE",
+     "measurement_value": "1f4110fd8b2a5e93839bccdd37c8ff13d206527bc649fb3e57318117ce6ecb8b"
+    },
+    {
+     "type": "SPE",
+     "measurement_value": "02549860e419cd9486cce08fb09f2b76285b9bd3e0a270cbbd1d922b463ca2f0"
+    }
+   ],
+   "heartbeat_mac": "kmac256",
+   "note": "TF-M + Aegis PQ partition, prover-ns 0.6.0. The ES256 token key is TF-M's published development key; the ML-DSA-65 check is the one that matters."
+  },
+  {
+   "name": "stm32h573-dk-2",
+   "kind": "aegis-pq",
+   "host": "192.0.2.21",
+   "port": 7444,
+   "pq_pub_file": "keys/stm32h573-dk-2.mldsa65.pub",
+   "iak_pub_pem": "keys/tfm-dev-iak.pub.pem",
+   "allowed": [
+    {
+     "type": "NSPE",
+     "measurement_value": "1f4110fd8b2a5e93839bccdd37c8ff13d206527bc649fb3e57318117ce6ecb8b"
+    },
+    {
+     "type": "SPE",
+     "measurement_value": "02549860e419cd9486cce08fb09f2b76285b9bd3e0a270cbbd1d922b463ca2f0"
+    }
+   ],
+   "heartbeat_mac": "kmac256"
+  },
+  {
+   "name": "frdm-rw612",
+   "kind": "aegis-device",
+   "profile": "aegis-rw612-tfm-v1",
+   "host": "192.0.2.22",
+   "port": 7444,
+   "pq_pub_file": "keys/frdm-rw612.mldsa65.pub",
+   "allowed": [
+    {
+     "type": "NSPE",
+     "measurement_value": "24979a1f03fa24d4c038de11f8da9e7dd0e5b656683783b072b140fd8925694c"
+    },
+    {
+     "type": "SPE",
+     "measurement_value": "1b38ab1aa29b11d189202db6238c389789426cf3174bd7f77700331e9a02a7b3"
+    }
+   ],
+   "heartbeat_mac": "kmac256",
+   "note": "NXP FRDM-RW612, TF-M with the Aegis secure partition (rw612-tfm-0.2.2): key derived in ELS, SPE and NSPE measured in the secure side. Profile pinned (the single-image prover has the same key)."
+  }
+ ]
+}
