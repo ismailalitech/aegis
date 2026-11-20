@@ -97,8 +97,10 @@ def exchange(lifetime, lines=None):
     try:
         # with "transcript": "v2" in the entry the exchange continues a quote taken now, and the recorded PQKEMINIT
         # carries that quote's challenge. After the reset the endpoint has no such quote, so it answers the recorded
-        # line with the first version's signature over the same nonce: what B checks stays as it is.
-        return fleet.provision(ep, base, sk, gid, {}, timeout=40, quote=fleet.quote_to_continue(ep, base, timeout=40))
+        # line with the first version's signature over the same nonce: what B checks stays as it is. (A gateway
+        # whose fleet.py is from before the transcript has neither the key nor the function.)
+        quote = {"quote": fleet.quote_to_continue(ep, base, timeout=40)} if hasattr(fleet, "quote_to_continue") else {}
+        return fleet.provision(ep, base, sk, gid, {}, timeout=40, **quote)
     finally:
         fleet._exchange, fleet.CRED_LIFETIME_S = real, life
 
