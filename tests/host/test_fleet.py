@@ -262,6 +262,30 @@ class Fleet(unittest.TestCase):
         self.assertEqual(int(expires[0]) - int(issued[0]), fleet.CRED_LIFETIME_S)
         self.assertTrue(300 < fleet.CRED_LIFETIME_S <= 86400)
 
+    def test_credential_lifetime_option(self):
+        """--credential-lifetime (the soak's setting, docs/soak-and-watchdogs.md): outside 600 s to a day refused before
+        anything runs; inside it the credentials carry it."""
+        import contextlib
+        import io
+        for bad in ("599", "86401", "0", "-5", "x"):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                fleet.main(["check", os.path.join(self.dir, "none.json"), "--credential-lifetime", bad])
+        self.assertEqual(fleet.CRED_LIFETIME_S, 3600)
+        try:
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    fleet.main(["check", os.path.join(self.dir, "none.json"), "--credential-lifetime", "600"])
+                except (OSError, ValueError, SystemExit):
+                    pass            # no policy there: only the setting is looked at
+            self.assertEqual(fleet.CRED_LIFETIME_S, 600)
+            self.assertGreaterEqual(fleet.CRED_LIFETIME_MIN_S, 2 * fleet.RENEWAL_WINDOW_S)
+            _, conf, _, gw_sk = self.provision_ep("kem-short")
+            r = fleet.provision(conf, self.dir, gw_sk, "gid", {"NSPE": GOOD_NS}, timeout=5)
+            body = json.loads(r["credential"].split(b"\n", 1)[0])
+            self.assertEqual(body["expires"] - body["issued"], 600)
+        finally:
+            fleet.CRED_LIFETIME_S = 3600
+
     def test_kem_key_signed_by_other_key_refused(self):
         _, conf, _, gw_sk = self.provision_ep("kem-mitm")
         with self.assertRaises(ValueError):

@@ -120,6 +120,9 @@ ENFORCE_TIMEOUT_S = 30
 KEM_INIT_LABEL = b"aegis-kem-init-v1"
 CRED_LABEL = b"aegis-credential-v1"
 CRED_LIFETIME_S = 3600
+# --credential-lifetime: a shorter lifetime makes a short soak renew as often as a long one (docs/soak-and-watchdogs.md).
+# At least twice the renewal window, so a session is used for at least that window; at most the endpoints' one day.
+CRED_LIFETIME_MIN_S, CRED_LIFETIME_MAX_S = 600, 86400
 TRANSCRIPTS = ("v2",)               # policy key "transcript": the bound exchange is required
 UNBOUND_NOTE = ('unbound: the session is not tied to the attestation (no "transcript": "v2" in the policy entry); '
                 "weaker")
@@ -1873,6 +1876,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
 
 
 def main(argv=None):
+    global CRED_LIFETIME_S
     ap = argparse.ArgumentParser(description="Aegis fleet verifier")
     ap.add_argument("cmd", choices=["once", "watch", "enroll-pq", "enroll-endorsed", "session", "check",
                                     "export-evidence", "audit"])
@@ -1885,6 +1889,10 @@ def main(argv=None):
     ap.add_argument("--with-policy", action="store_true",
                     help="export-evidence: put the policy file itself into the pack, not only its hash")
     ap.add_argument("--interval", type=float, default=30)
+    ap.add_argument("--credential-lifetime", type=int, default=None, metavar="S",
+                    help="watch, once: seconds a credential lasts (default %d; %d to %d). A soak setting: the session "
+                         "is renewed %d s before its end (docs/soak-and-watchdogs.md)" % (
+                             CRED_LIFETIME_S, CRED_LIFETIME_MIN_S, CRED_LIFETIME_MAX_S, RENEWAL_WINDOW_S))
     ap.add_argument("--platform", choices=["auto", "polarfire", "linux"], default="auto",
                     help="polarfire: the gateway; linux: an ordinary Linux host (observe-only, credentials only where "
                          "verifier_pin_sha256 names this verifier). auto: polarfire on the board, linux elsewhere")
@@ -1907,6 +1915,10 @@ def main(argv=None):
     ap.add_argument("--allow-pruned", action="store_true",
                     help="audit: accept a log whose older segments were archived away")
     a = ap.parse_args(argv)
+    if a.credential_lifetime is not None:
+        if not CRED_LIFETIME_MIN_S <= a.credential_lifetime <= CRED_LIFETIME_MAX_S:
+            ap.error("--credential-lifetime must be %d to %d s" % (CRED_LIFETIME_MIN_S, CRED_LIFETIME_MAX_S))
+        CRED_LIFETIME_S = a.credential_lifetime
     platform = detect_platform() if a.platform == "auto" else a.platform
     state_dir = a.state_dir or default_state_dir(platform)
     try:
@@ -2104,6 +2116,8 @@ def main(argv=None):
         print(json.dumps(res, indent=1))
         return 0
     os.makedirs(os.path.dirname(os.path.abspath(state_file)), mode=0o700, exist_ok=True)
+    if a.credential_lifetime is not None and not a.no_credentials:
+        log("aegis-fleet: credential lifetime %d s (set by --credential-lifetime)" % CRED_LIFETIME_S, LOG_WARNING)
     log("aegis-fleet: platform %s, %s, credentials %s, state %s" % (
         platform, "enforcing" if enforce_hooks and policy.get("enforce_cmd") else "observe-only",
         "off" if a.no_credentials else ("only where verifier_pin_sha256 names this verifier" if on_host else "on"),
