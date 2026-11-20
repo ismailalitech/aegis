@@ -11,3 +11,8 @@
 # record restored
 12:27:17 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 96 (...)] [endorsed by bench-pc]
 # full board regression afterwards: passed 14, failed 0 (logs/regression/20261120-132726)
+# 14:05 review fixes deployed (fleet.py, endorsement.py); policy pins endorsement_sha256 for the three entries:
+#   stm32h573-dk 21c3ff19a38a..., stm32h573-dk-2 52acc320ce6a..., frdm-rw612 530596f0ac67...
+# fleet.py check: "pinned by endorsement_sha256" x3, rc 0; sessions kept, [endorsed by bench-pc]
+# endorsement_check.py (stm32h573-dk / -dk-2): ok true, E11 another record pinned -> refused, endpoint not asked
+# full board regression: passed 14, failed 0 (logs/regression/20261120-140652)
