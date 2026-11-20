@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The evaluation container with docker compose, from the repository root:
+#   docker compose -f container/compose.yaml run --rm eval            every stage (container/evaluate.sh all)
+#   docker compose -f container/compose.yaml run --rm eval quick      without the host tests and the red team
+#   docker compose -f container/compose.yaml run --rm eval host-tests one stage (evaluate.sh --list)
+# The logs are kept in container/out/ on the host (made writable for the container's user, uid 10001).
+services:
+  eval:
+    image: aegis-eval:latest
+    build:
+      context: ..
+      dockerfile: container/Dockerfile
+    network_mode: none          # nothing is fetched at run time; the verifier and the device talk on 127.0.0.1
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      AEGIS_EVAL_OUT: /out
+    volumes:
+      - ./out:/out
+    tmpfs:
+      - /tmp:exec,size=1g       # the tests build and run C programs in temporary directories

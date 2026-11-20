@@ -21,3 +21,4 @@ build-dv101.out
 gateway/policy/fleet.json
 sdk/build-eat/
 .venv
+container/out/

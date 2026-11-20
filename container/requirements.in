@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# What the evaluation container needs directly; requirements.txt pins these and everything they pull in, with hashes.
+cryptography==50.0.2
+cbor2==5.9.0
+pycose==1.1.0
+PyYAML==6.0.3
+pycryptodome==3.24.1

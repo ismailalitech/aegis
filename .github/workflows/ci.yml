@@ -69,6 +69,16 @@ jobs:
           mkdir -p build/acvp
           .venv/bin/python tools/acvp_commands.py "$PWD/build/acvp/commands.jsonl"
 
+      - name: Release hygiene (SPDX lines, no secrets) and the Prover SDK's API reference against its header
+        run: |
+          .venv/bin/python tools/check_release.py
+          .venv/bin/python tools/gen_sdk_api_ref.py --check
+
+      - name: The Prover SDK as a device maker builds it, and the simulated device attested end to end (sdk/examples/simulated-device)
+        run: |
+          KEEP=1 sdk/examples/simulated-device/run.sh $RUNNER_TEMP/sim-eat
+          AEGIS_EAT_COSE=0 sdk/examples/simulated-device/run.sh
+
       - name: Host regression (unit tests, red team, RTL simulation, ACVP)
         run: tools/regression.sh
 
@@ -95,3 +105,19 @@ jobs:
 
       - name: Diagrams are up to date
         run: .venv/bin/python tools/gen_diagrams.py --check
+
+  container:
+    # the evaluation container (container/README.md): built from its pinned inputs, then every stage without network
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the evaluation image
+        run: docker build -f container/Dockerfile --build-arg REVISION=$GITHUB_SHA -t aegis-eval .
+
+      - name: Every stage, with no network
+        run: |
+          mkdir -p container/out && chmod 777 container/out
+          docker run --rm --network none -v "$PWD/container/out:/out" -e AEGIS_EVAL_OUT=/out aegis-eval all \
+            || { tail -n 40 container/out/*.log; exit 1; }

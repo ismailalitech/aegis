@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# The build context of container/Dockerfile: the repository without history, local state, builds and secrets.
+.git
+.venv
+**/__pycache__
+**/*.pyc
+logs
+build
+build-*
+sdk/build
+sdk/build-eat
+backups
+bench.env
+host/enrolled
+gateway/policy/fleet.json
+endpoints/stm32h573/artifacts/*.hex
+endpoints/stm32h573/artifacts/*.bin
+**/identity.json
+**/identity.tpm.json
+**/*.session
+container/REVISION
