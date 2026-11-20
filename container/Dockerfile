@@ -21,10 +21,15 @@ ARG MLKEM_NATIVE_COMMIT=d1b2fe782888bdb761a50336012923180be7f502
 ARG LIBOQS_COMMIT=5a1a854b0dc9f2141bdc771c555ee60c37950183
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/sh", "-eux", "-c"]
-# The package versions are pinned by the archive snapshot, not one by one (DL3008)
+# The package versions are pinned by the archive snapshot, not one by one (DL3008). snapshot.ubuntu.com is HTTPS only
+# and the base image has no CA bundle, so ca-certificates comes first from the live archive; then the snapshot is
+# enabled, and an index that fails to download fails the build (APT::Update::Error-Mode=any) instead of a warning.
 # hadolint ignore=DL3008
-RUN if [ -n "$UBUNTU_SNAPSHOT" ]; then echo "APT::Snapshot \"$UBUNTU_SNAPSHOT\";" > /etc/apt/apt.conf.d/50snapshot; fi; \
-    apt-get update; \
+RUN apt-get update -o APT::Update::Error-Mode=any; \
+    apt-get install -y --no-install-recommends ca-certificates; \
+    if [ -n "$UBUNTU_SNAPSHOT" ]; then echo "APT::Snapshot \"$UBUNTU_SNAPSHOT\";" > /etc/apt/apt.conf.d/50snapshot; fi; \
+    rm -rf /var/lib/apt/lists/*; \
+    apt-get update -o APT::Update::Error-Mode=any; \
     apt-get install -y --no-install-recommends ca-certificates git build-essential cmake ninja-build; \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/aegis-tools
@@ -57,14 +62,20 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 SHELL ["/bin/sh", "-eux", "-c"]
-# gcc, make and cmake stay: the tests and the example build the SDK's C code at run time. aegisd's Linux identity is
-# bound to the machine id (hashed, never published), and an image has none of its own: one is made here.
+# gcc, make and cmake stay: the tests and the example build the SDK's C code at run time. The apt sequence is stage
+# 1's (ca-certificates from the live archive, then the snapshot). aegisd's Linux identity is bound to the machine id
+# (hashed, never published); an image must not carry one, or every container would share it: /etc/machine-id is a
+# link to /tmp/machine-id, which container/evaluate.sh fills with a new random id when each container starts.
 # hadolint ignore=DL3008
-RUN if [ -n "$UBUNTU_SNAPSHOT" ]; then echo "APT::Snapshot \"$UBUNTU_SNAPSHOT\";" > /etc/apt/apt.conf.d/50snapshot; fi; \
-    apt-get update; \
+RUN apt-get update -o APT::Update::Error-Mode=any; \
+    apt-get install -y --no-install-recommends ca-certificates; \
+    if [ -n "$UBUNTU_SNAPSHOT" ]; then echo "APT::Snapshot \"$UBUNTU_SNAPSHOT\";" > /etc/apt/apt.conf.d/50snapshot; fi; \
+    rm -rf /var/lib/apt/lists/*; \
+    apt-get update -o APT::Update::Error-Mode=any; \
     apt-get install -y --no-install-recommends build-essential cmake python3 python3-venv openssl ca-certificates; \
     rm -rf /var/lib/apt/lists/*; \
-    [ -s /etc/machine-id ] || python3 -c 'import uuid; print(uuid.uuid4().hex)' > /etc/machine-id
+    rm -f /etc/machine-id; \
+    ln -s /tmp/machine-id /etc/machine-id
 COPY container/requirements.txt /opt/aegis-requirements.txt
 RUN python3 -m venv /opt/venv; \
     /opt/venv/bin/pip install --require-hashes --no-deps --only-binary=:all: -r /opt/aegis-requirements.txt; \
