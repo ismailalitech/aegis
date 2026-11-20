@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Generate the animated SVG diagrams of the documentation from docs/diagrams/diagrams.yaml.
 
 Every diagram is boxes and arrows (or lanes on a time axis) drawn on a small dark card. While it plays, the

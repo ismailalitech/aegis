@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Reference measurements for the RW612 TF-M prover (endpoints/rw612/tfm): what the Aegis secure partition reports
 as SPE and NSPE after endpoints/rw612/tfm/flash.sh has written these two images.
 

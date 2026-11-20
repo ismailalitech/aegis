@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # JTAG RAM boot (no flash, no eFUSE, no card writes). argv: fsbl pmufw uboot bl31
 lassign $argv FSBL PMUFW UBOOT BL31 BIT
 proc step {msg body} { puts "STEP: $msg"; if {[catch {uplevel 1 $body} e]} { puts "STEP_ERR: $msg :: $e" } }

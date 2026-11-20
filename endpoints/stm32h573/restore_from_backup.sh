@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Put the STM32H573I-DK's secure and non-secure image slots back exactly as they were in a
 # backup taken by CubeProgrammer under reset (backups/stm32h573/<date>-cubeprog-UR/flash_merged.bin).
 # Writes only the two primary slots: S 0x0C038000 (0x50000) and NS 0x08088000 (0x90000).

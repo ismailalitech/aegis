@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Static check of the built PUF registration ELF (AArch64, Vitis 2025.2 standalone) before it goes to the board.
 
 No toolchain needed: the script reads the ELF itself and decodes the AArch64 direct branches.

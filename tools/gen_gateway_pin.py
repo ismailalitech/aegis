@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Write a verifier's ML-DSA-65 public key as the C header every endpoint image pins (the STM32 partition, the RW612
 TF-M partition and prover, the ZynqMP TA all include endpoints/stm32h573/tfm-aegis-partition/gateway_pk.h), so the
 endpoint verifies credentials from that verifier (mutual authentication). An image pins exactly one key: the

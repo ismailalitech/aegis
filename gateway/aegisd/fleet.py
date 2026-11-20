@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Aegis fleet verifier (gateway side, Phase 3/4): attest endpoints, decide admission.
 
   fleet.py once  POLICY.json             attest every endpoint once, print verdicts

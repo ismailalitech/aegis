@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Step B1: build AMD's xilskey PUF registration example for the A53, in boot-header mode, with the red key.
 #   powershell -ExecutionPolicy Bypass -File build_puf_app.ps1 [-Xsa C:\tz\aegis\aegis_zu4eg_pqc.xsa] [-ExampleDir <dir>]
 # Everything goes to C:\tz\aegis-keys\build (owner-only ACL inherited from C:\tz\aegis-keys). Nothing touches the board.

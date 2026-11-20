@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Step A: generate the red key (AES-256) and the black-key IV on the Windows PC.
 #   powershell -ExecutionPolicy Bypass -File gen_keys.ps1
 # Writes C:\tz\aegis-keys\red_key.hex (32 bytes) and black_key_iv.hex (12 bytes) from .NET's CSPRNG

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Ask the STM32 for two quotes on the same challenge and check both with the pinned ML-DSA-65 key, as the gateway does.
 
 What this can and cannot show: the PSA token inside each quote carries TF-M's own ECDSA signature, which is randomized,

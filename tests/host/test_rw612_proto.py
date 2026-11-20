@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The RW612 prover's protocol code (endpoints/rw612/prover/src/aegis_proto.c, the same C file as in the firmware),
 built for the PC and run against the gateway's own code (fleet.py): attestation with device-key trust, ML-KEM
 provisioning with the credential checks, KMAC256 heartbeats, the session query, and the refusals (a changed

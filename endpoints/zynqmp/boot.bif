@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // bootgen -arch zynqmp -image boot.bif -o BOOT.BIN -w
 // FSBL and PMU firmware from Vitis 2025.2 (XSA: te0807_4eg_1e_tebf0808, PS only); bitstream from Vivado 2025.2;
 // OP-TEE goes in as tee-raw.bin, not tee.elf: the raw image carries init data that the ELF lacks (the ELF fails at

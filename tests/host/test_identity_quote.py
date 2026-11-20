@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end host tests of the gateway identity, quote service and verifier.
 
 The gateway runs in a thread on localhost with a fake system controller, so

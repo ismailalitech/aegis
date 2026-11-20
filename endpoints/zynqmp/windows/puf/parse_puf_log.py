@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Turn the COM11 log of the xilskey PUF registration example into the files bootgen reads.
 
 Input: the console log of one run of the (Aegis-patched) xilskey_puf_registration_example, Vitis 2025.2.

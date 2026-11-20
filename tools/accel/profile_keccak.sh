@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Count the Keccak-f[1600] permutations of each ML-KEM-768 and ML-DSA-65 operation in liboqs 0.16.0, by sponge phase
 # (absorb or squeeze), rate (168 = SHAKE128, 136 = SHAKE256/SHA3-256, 72 = SHA3-512) and API (one-way or four-way).
 # Builds a portable x86 copy of liboqs with the same permutation hook as the fabric build (tools/build_liboqs_fabric.sh),

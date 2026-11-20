@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Rebuild docs/diagrams/wave-keccak.yaml from a real simulation run (needs Icarus Verilog).
 set -euo pipefail
 TB=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$TB/../.." && pwd)

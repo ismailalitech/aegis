@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Rebuild docs/diagrams/wave-sponge-dma.yaml from a real simulation run of tb_aegis_pqc2 (needs Icarus Verilog).
 set -euo pipefail
 TB=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$TB/../.." && pwd)

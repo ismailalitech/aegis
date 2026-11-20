@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 #ifndef AEGIS_PQ_SID_H
 #define AEGIS_PQ_SID_H
 /* Shared by the secure partition and the non-secure client.

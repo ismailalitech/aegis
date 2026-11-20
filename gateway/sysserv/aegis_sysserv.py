@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Read-only access to the PolarFire SoC system controller from Linux.
 
 Talks to /dev/mpfs_generic_service (kernel module mpfs-generic-service).

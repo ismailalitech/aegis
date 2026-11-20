@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Minimal CBOR (RFC 8949) decoder and encoder, standard library only.
 
 Enough for PSA attestation tokens and COSE_Sign1: integers, byte and text

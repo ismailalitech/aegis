@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # The Aegis TA: its entry points, and the protocol and PQ code shared with the RW612 and STM32 endpoints, staged
 # next to this file by ../build_ta.sh (the OP-TEE TA build compiles sources from its own directory tree).
 global-incdirs-y += . shared shared/mldsa shared/mlkem shared/mldsa-native shared/mlkem-native

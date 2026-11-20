@@ -1,4 +1,5 @@
 #!/usr/sbin/nft -f
+# SPDX-License-Identifier: Apache-2.0
 # Aegis zero-trust enforcement on the gateway (needs a kernel with nf_tables: aegis-netfilter.cfg).
 # The gateway must sit in the traffic path: endpoints behind a second port or on a quarantine VLAN,
 # the gateway routing between that segment ($ENDPOINT_IF) and the rest of the network.

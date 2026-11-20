@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Phase 1 checks against the real gateway (needs aegisd serving on BOARD:7443
 and an enrolment in host/enrolled/).
 

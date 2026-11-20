@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Build liboqs 0.16.0 with the aegis_pqc2 SHA-3 provider (gateway/pqc/aegis_sponge_drv.c) and its PC model linked in.
 # The provider installs itself only when AEGIS_PQC_SPONGE is set (model | hw); otherwise the library is plain liboqs.
 # Works on a copy of the liboqs source; the pristine tree and the other builds are not changed.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Turn the NIST ACVP vectors into the exact command lines liboqs' own ACVP test runs.
 
 liboqs (tests/test_acvp_vectors.py) checks each ACVP test case by running its

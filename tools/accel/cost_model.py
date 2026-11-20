@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Predict ML-KEM-768 / ML-DSA-65 times on the gateway (one U54 core, liboqs 0.16.0) for several ways of attaching a
 Keccak core to the fabric, from measured costs and the permutation profile of tools/accel/profile_keccak.sh.
 

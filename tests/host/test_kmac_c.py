@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The partition's C KMAC256 (endpoints/stm32h573/tfm-aegis-partition/aegis_kmac.c), built for the PC, against
 NIST's KMAC256 samples and against common/kmac.py on random inputs. Skipped without gcc."""
 import os, random, shutil, subprocess, sys, tempfile, unittest

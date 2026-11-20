@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
 # Build the Aegis fabric = pfdaq v0.5.x fabric (unchanged, from the pfdaq repository) + aegis_pqc in
 # FIC3 APB slot 14 (0x40000E00).
 #   hw/libero/build.sh <design_version> [rtl_dir]   (rtl_dir default: hw/rtl; hw/libero/stub for the stub)

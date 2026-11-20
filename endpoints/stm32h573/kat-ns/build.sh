@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Clean build of the prover NS image. Always clean: the api_ns signing step does not
 # rerun on incremental builds (seen 2026-11-16: tfm_ns_signed.bin stayed stale).
 set -eu

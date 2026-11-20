@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Fetch NIST ACVP JSON vectors for ML-KEM (FIPS 203) and ML-DSA (FIPS 204)
 # from usnistgov/ACVP-Server tag v1.1.0.41, then check them against SHA256SUMS.
 set -eu

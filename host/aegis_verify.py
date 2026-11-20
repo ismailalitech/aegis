@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """PC-side verifier for the Aegis gateway (Phase 1).
 
   aegis_verify.py enroll HOST [--port 7443]   trust-on-first-use enrolment

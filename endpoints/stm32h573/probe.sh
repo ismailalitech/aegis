@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Negative test of the STM32H573's TrustZone configuration (TF-M v2.3.0 with the Aegis partition): build the
 # non-secure prover with a probe that reads one word from the non-secure side right after start-up, write it to the
 # non-secure slot, and record the console. Secure memory and secure-only peripherals must not give their contents:

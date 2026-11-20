@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # Build OP-TEE 4.7.0 for the Aegis ZynqMP endpoint with the hand-off patches (os-patches/) and the Aegis TA built in.
 #   endpoints/zynqmp/optee/build_optee.sh <OP-TEE source tree> <new out dir> [gateway host]
 # The source tree is a git checkout of tag 4.7.0 used for nothing else (a copy, not the reference checkout): the

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Aegis accelerator v2: aegis_pqc2 (through the aegis_pqc2_fic0 port wrapper) in FIC3 APB slot 14 (0x40000E00), as
 # aegis_pqc was, plus its AXI4 write master on a second master port of the FIC0 interconnect DMA_INITIATOR, whose
 # slave port goes to the MSS (FIC_0_AXI4_TARGET), i.e. into DDR. The core runs on the FIC3 clock (50 MHz); the

@@ -1,4 +1,4 @@
-# Aegis architecture (as built, 2026-11-18)
+# Aegis architecture (as built, 2026-11-18; updated 2026-11-20)
 
 Aegis is a bench prototype of a post-quantum attestation gateway. A PolarFire SoC:
 - decides which endpoints may be trusted, from evidence the endpoints' secure hardware produces;
@@ -57,7 +57,7 @@ flowchart LR
 
 | Component | Where | What it does |
 |---|---|---|
-| `gateway/aegisd/aegisd.py` | PolarFire Linux, systemd `aegisd` | gateway identity (ML-DSA-65, software key) bound to the chip's serial number, Microchip device certificate and design info; answers quotes with live platform measurements |
+| `gateway/aegisd/aegisd.py` | PolarFire Linux, systemd `aegisd`; or any Linux host with `--platform linux` | gateway identity (ML-DSA-65, software key) bound to the chip's serial number, Microchip device certificate and design info; answers quotes with live platform measurements. With `--platform linux` (the default off the board) it needs no system controller: the host is named by a hash of `/etc/machine-id`, the quote carries what the running system reports, and identity and quote say `linux-host` (`tests/host/test_linux_host_verifier.py`) |
 | `gateway/sysserv/aegis_sysserv.py` | PolarFire Linux | read-only whitelist over the system-controller mailbox |
 | `gateway/aegisd/fleet.py` | PolarFire Linux, systemd `aegis-fleet` | every 30 s: attest each endpoint, decide, issue or revoke credentials, check heartbeats; reloads the policy each cycle |
 | `gateway/policy/fleet.json` | PolarFire | endpoints, enrolled keys, allowed measurements, pinned claims profiles |
@@ -68,9 +68,10 @@ flowchart LR
 | `endpoints/rw612/tfm` | RW612: TF-M partition `aegis_pq` and the non-secure `prover_ns` | the partition runs the protocol code (`endpoints/rw612/prover/src/aegis_proto.c`) on every line; the non-secure side only carries the network |
 | `endpoints/rw612/prover` | RW612, Zephyr (the first, single-image prover) | same protocol code; it measures itself, labelled device-key trust; superseded on the bench by the TF-M version |
 | `endpoints/arduino-uno` | Arduino Uno, through `host/serial_bridge.py` | a node with no keys and no measured boot: always quarantined |
-| `endpoints/zybo` | a Linux endpoint (written for a Zybo Z7-10); tested on the PC, not on the bench | the same protocol in Python; key in a file, measurements by the running Linux, labelled software trust |
+| `endpoints/zybo` | the Linux prover, first written for a Zybo Z7-10; that board is retired and the Zynq UltraScale+ endpoint replaces it | the same protocol in Python; key in a file, measurements by the running Linux, labelled software trust; it ran on the ZynqMP for the software-trust step (`evidence/zynqmp/software-trust.txt`) |
 | `endpoints/zynqmp` | Trenz TE0807 (XCZU4EG), Debian 12 on the A53s, boot chain built here (Vitis 2025.2 FSBL, TF-A, U-Boot) | first the Linux prover (software trust); since 18 November 2026 the Aegis TA in OP-TEE on the A53s, Linux only carrying the lines; admitted as `zynqmp-te0808`; since 19 November with the key bound to the chip's PUF (encrypted, boot-header-authenticated boot, no eFUSE) and trustzone trust (`docs/zynqmp-key-design.md`) |
-| `host/` | PC | gateway verifier, console tools, the Arduino relay |
+| `host/` | PC or any Linux host | gateway verifier, console tools, the Arduino relay |
+| `common/` | gateway and host | wire formats (a CBOR decoder that refuses maps with non-scalar or repeated keys, `tests/host/test_cbor_keys.py`), KMAC, and ML-DSA/ML-KEM through OpenSSL 3.5+ or liboqs (`AEGIS_PQ_BACKEND`) |
 | `tests/fuzz` | PC and CI | libFuzzer harnesses for both endpoint partitions, with a model of the protocol |
 
 ## Trust anchors
@@ -102,7 +103,11 @@ ML-DSA signing is hedged on both: fresh randomness in every signature.
 
 **Provisioning** (only after ADMITTED):
 1. `PQKEMINIT <nonce>` -> a fresh ML-KEM-768 encapsulation key `ek`, signed by the device key with the nonce. A new
-   `PQKEMINIT` cancels any pending exchange.
+   `PQKEMINIT` cancels any pending exchange. The key pair's coins are SHA3-256(root || fresh || nonce || counter ||
+   0 or 1) for the two halves: a device secret, 32 bytes from the chip's random number generator, the gateway's
+   nonce and the count of exchanges since reset. The random bytes keep a recorded exchange from being replayed
+   after a reset (the other inputs repeat); without them the exchange is refused. In the STM32 partition's source
+   from 20 November 2026 (image `...-freshkem`, SPE 67a452b1, on both boards since 20 November 2026: `evidence/stm32-freshkem/`); the RW612 had them from the start.
 2. The gateway encapsulates and sends `PQKEMFIN <ct> <credential>`. The credential is signed by the gateway key and
    names SHA3-256(ct), SHA3-256(ek), the endpoint's key and its validity (`issued`, `expires`).
 3. The endpoint verifies against the pinned gateway key, decapsulates and answers a key-confirmation tag.
@@ -110,8 +115,8 @@ ML-DSA signing is hedged on both: fresh randomness in every signature.
 Both sides keep session = SHA3-256("aegis-session-v1" || K || nonce || SHA3(ct)); the key never leaves either side.
 A credential lasts an hour and is renewed five minutes before it expires.
 
-**The session's end** (source and tests of 19 November 2026; not yet on the boards, `endpoint-expiry.md`): both
-sides end it.
+**The session's end** (`endpoint-expiry.md`; checked on the STM32s and the RW612 by the regression's `endpoint-expiry`
+stage, `evidence/console/regression-14of14-20261119.txt`): both sides end it.
 - **The gateway** by its own clock: it stops using a session five minutes before the credential's `expires` and
   provisions again.
 - **The endpoint** on a clock of its secure side: the credential's lifetime (`expires - issued`, from the signed
@@ -150,12 +155,16 @@ The verdict names the trust behind it:
 - `software` for a Linux prover whose key is a file.
 
 Enforcement (the hook and nftables ruleset in `gateway/enforce/`) needs the gateway in the traffic path and the
-rebuilt kernel (`docs/phase4-notes.md`). Today the gateway decides and records.
+rebuilt kernel (`docs/phase4-notes.md`). Today the gateway decides and records. The ruleset, and the one-port VLAN
+design, are tested in network namespaces only (`tests/host/test_enforcement.sh`, `tests/host/test_enforcement_vlan.sh`;
+`evidence/console/enforcement.txt`, `evidence/console/enforcement-vlan.txt`), not on a VLAN switch.
 
 ## Where things run and how to check them
 
-- `tools/regression.sh --board`: host tests, red-team, RTL simulation, ACVP on PC, gateway checks, fabric self-test,
-  ACVP with the fabric, fleet admission, session, heartbeat, device red-team. With `--with-expiry` (or
+- `tools/regression.sh --board`: host tests (87 in `tests/host/`), red-team, RTL simulation, ACVP on PC, the ACVP
+  vector checksums, gateway checks, fabric self-test, ACVP with the fabric (per permutation and with the sponge),
+  fleet admission, session, heartbeat, device red-team: 13 stages, 14 with `--with-expiry`
+  (`evidence/console/regression-14of14-20261119.txt`). With `--with-expiry` (or
   `AEGIS_REGRESSION_EXPIRY=1`) also `endpoint-expiry`: the session's end on every endpoint that holds a session
   (`docs/endpoint-expiry.md`), with the fleet service stopped for it and started again afterwards.
 - `tests/fuzz/run.sh` and `STM32=1 tests/fuzz/run.sh`: the endpoint partitions under libFuzzer, ASan and UBSan

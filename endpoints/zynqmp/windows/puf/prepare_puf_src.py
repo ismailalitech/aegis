@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Prepare AMD's xilskey PUF registration example for a boot-header-mode run (Aegis, ZynqMP phase B).
 
 Copies xilskey_puf_registration_example.c and xilskey_puf_registration.h (Vitis 2025.2 / embeddedsw

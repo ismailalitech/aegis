@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Step B2: run the PUF registration app over JTAG and turn its COM11 output into the bootgen files.
 #   powershell -ExecutionPolicy Bypass -File run_puf_registration.ps1
 #   powershell -ExecutionPolicy Bypass -File run_puf_registration.ps1 -PostCheck C:\tz\aegis-keys\reg-<time>

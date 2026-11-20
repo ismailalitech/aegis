@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Aegis gateway identity and quote service (Phase 1).
 
   aegisd.py init   [--state DIR]          create the gateway identity (once)

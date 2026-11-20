@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # xsdb: JTAG run of the PUF registration app (boot-header mode). argv: fsbl pmufw app_elf
 # Called by run_puf_registration.ps1, which has already checked the app ELF. Nothing is written to the card, the
 # flash, the eFUSEs or the BBRAM: the only writes are the same volatile registers as ../jtag_boot.tcl

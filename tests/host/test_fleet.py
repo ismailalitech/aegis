@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Host tests of the fleet verifier with simulated endpoints (no hardware).
 
 Each fake endpoint signs PSA-style tokens with its own P-256 key, so every

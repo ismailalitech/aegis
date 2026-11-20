@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """PC-side checks of the STM32's post-quantum quote over the console.
 
   stm32_pq.py key   [--out FILE]      print/save the chip's ML-DSA-65 public key

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Red-team checks on the PC (no hardware). Each check states the property it tries to break.
 
   1. token parser: mutated / truncated / random PSA tokens are never accepted and raise nothing but

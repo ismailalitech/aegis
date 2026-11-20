@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """KMAC (common/kmac.py) against NIST's KMAC samples 1-6 (SP 800-185 example values, as reproduced in
 pycryptodome's test suite), and against pycryptodome itself on random inputs when it is installed."""
 import os, random, sys, unittest

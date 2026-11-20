@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Shared paths and helpers for the PUF scripts (dot-sourced: . "$PSScriptRoot\puf_common.ps1").
 # Windows PowerShell 5.1. Nothing here touches the board.
 $ErrorActionPreference = 'Stop'

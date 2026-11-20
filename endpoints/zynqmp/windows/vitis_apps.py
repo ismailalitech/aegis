@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 import vitis
 
 # Vitis 2025.2 builds only the FSBL boot domain for ZynqMP: add the PMU domain and the PMU firmware app.

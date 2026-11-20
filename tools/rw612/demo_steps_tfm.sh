@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
 # The operator's steps in the recorded TrustZone demo (tools/rw612/record_demo.sh with STEPS=tfm): the good images
 # run, a non-secure image changed by one byte is flashed, then the good one again. Fleet cycle: about 34 s.
 #   demo_steps_tfm.sh <build dir with aegis_s/ and prover_ns/>
