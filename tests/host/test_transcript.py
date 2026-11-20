@@ -66,7 +66,7 @@ class Device:
         self.pk, self.sk = mldsa.keypair()
         self.gw_pk = gw_pk
         self.lines, self.replies = [], []
-        self.after_quote = None      # called once after the next PQCHAL was answered (what happens "in between")
+        self.after_quote = None      # called once when the next PQCHAL has been answered (what happens "in between")
         self.rewrite = None          # someone on the path: (request, reply) -> reply
         self.lie = None              # (challenge, token hash) a lying firmware signs a transcript for
         self.boot(FW_A)
@@ -95,12 +95,14 @@ class Device:
                     reply = self.rewrite(line, reply)
                 self.lines.append(line.split()[0])
                 self.replies.append((line, reply))
+                # what happens "in between" happens once the answer is made and before it is sent, so that it is
+                # over when the gateway reads the answer (run after sending, it raced with the test's next step)
+                if line.startswith("PQCHAL") and self.after_quote:
+                    hook, self.after_quote = self.after_quote, None
+                    hook()
                 c.sendall(reply.encode() + b"\r\n")
             finally:
                 c.close()
-            if line.startswith("PQCHAL") and self.after_quote:
-                hook, self.after_quote = self.after_quote, None
-                hook()
 
     def ask(self, line):
         """A request from someone else on the network."""
