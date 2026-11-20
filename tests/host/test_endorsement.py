@@ -144,6 +144,21 @@ class Bench(unittest.TestCase):
     def ep(self, name="dev-a"):
         return next(e for e in self.policy["endpoints"] if e["name"] == name)
 
+    def reference(self, *names, addresses=True, **edit):
+        """The endorser's own reference file, apart from the verifier's policy, for these entries."""
+        ref = prov.draft_reference(self.policy, names, self.d)
+        for dev in ref["devices"]:
+            if addresses:
+                dev.update(host="127.0.0.1", port=self.ep(dev["name"])["port"])
+            dev.update(edit)
+        path = os.path.join(tempfile.mkdtemp(), "reference.json")
+        with open(path, "w") as f:
+            json.dump(ref, f)
+        return path
+
+    def tool(self, *args):
+        return run(prov.main, ["endorse", *args, "--state", self.estate, "--out", self.out])
+
     def endorse(self, name="dev-a", endorser=None, **kw):
         res = prov.endorse(endorser or self.endorser, self.ep(name), self.d, self.out, ecdsa_verify=VERIFY, **kw)
         return res
@@ -777,8 +792,9 @@ class Enrolment(Bench):
             res = prov.endorse(self.endorser, dict(self.ep(), **edit), self.d, self.out, ecdsa_verify=VERIFY)
             self.assertFalse(res["endorsed"])
             self.assertTrue(any(why in r for r in res["reasons"]), res)
-        rc, out = run(prov.main, ["endorse", self.pol, "no-such-device", "--state", self.estate, "--out", self.out])
+        rc, out = self.tool("no-such-device", "--reference", self.reference("dev-a"), "--yes")
         self.assertEqual(rc, 1)
+        self.assertIn("has no device 'no-such-device'", out)
         self.assertEqual(os.listdir(self.out), [])
 
     def test_a_record_that_cannot_be_written_is_not_there(self):
@@ -943,8 +959,8 @@ class Enrolment(Bench):
         rc, out = run(prov.main, ["show", "--state", self.estate])
         self.assertEqual((rc, json.loads(out)["policy_entry"]), (0, self.endorser.policy_entry()))
         self.dev_b.mode = "pq-tampered"
-        rc, out = run(prov.main, ["endorse", self.pol, "dev-a", "dev-b", "--state", self.estate, "--out", self.out,
-                                  "--notes", "bench"])
+        rc, out = self.tool("dev-a", "dev-b", "--reference", self.reference("dev-a", "dev-b"), "--notes", "bench",
+                            "--yes")
         self.assertEqual(rc, 1)                         # one of the two failed, and only its record is missing
         self.assertEqual(os.listdir(self.out), ["dev-a.json"])
         with self.assertRaises(SystemExit):
@@ -954,11 +970,114 @@ class Enrolment(Bench):
         os.rename(os.path.join(self.estate, keystore.SK_FILE), os.path.join(self.estate, "away"))
         try:                                            # no key: said before any device is asked
             with self.assertRaises(SystemExit) as c:
-                prov.main(["endorse", self.pol, "dev-a", "--state", self.estate, "--out", self.out])
+                prov.main(["endorse", "dev-a", "--reference", self.reference("dev-a"), "--state", self.estate,
+                           "--out", self.out])
             self.assertIn("cannot be used", str(c.exception))
             self.assertEqual(run(prov.main, ["show", "--state", self.estate])[0], 0)
         finally:
             os.rename(os.path.join(self.estate, "away"), os.path.join(self.estate, keystore.SK_FILE))
+
+
+class TerminalIn(io.StringIO):
+    def isatty(self):
+        return True
+
+
+class Reference(Bench):
+    """The endorser takes the device's address and reference values from its own reference file, not from a verifier's
+    policy, and the operator confirms the address, the key and the components before anything is signed."""
+
+    def test_a_policy_that_points_one_device_s_name_at_another_board_does_not_reach_the_endorser(self):
+        """The review's probe: dev-a's port changed to dev-b's in the policy endorsed dev-b's key as dev-a."""
+        self.ep("dev-a")["port"] = self.dev_b.port
+        self.save()
+        with self.assertRaises(SystemExit) as c:          # a policy is not a reference
+            self.tool("dev-a", "--reference", self.pol, "--yes")
+        self.assertIn("looks like a verifier's policy", str(c.exception))
+        ref = os.path.join(tempfile.mkdtemp(), "reference.json")
+        rc, out = run(prov.main, ["reference", self.pol, "dev-a", "dev-b", "--reference", ref, "--state", self.estate])
+        self.assertEqual(rc, 0, out)
+        with open(ref) as f:
+            draft = json.load(f)
+        self.assertEqual(draft["format"], prov.REFERENCE_FORMAT)
+        self.assertFalse(any("host" in d or "port" in d for d in draft["devices"]))       # no address copied
+        self.assertEqual(draft["devices"][0]["allowed"], ALLOWED)
+        rc, out = self.tool("dev-a", "--reference", ref, "--yes")
+        self.assertEqual(rc, 1)
+        self.assertIn("has no address for dev-a: give --host", out)
+        self.assertEqual(os.listdir(self.out), [])
+        rc, out = self.tool("dev-a", "--reference", ref, "--yes", "--host", "127.0.0.1:%d" % self.dev_a.port)
+        self.assertEqual(rc, 0, out)
+        res = json.loads(out)
+        self.assertEqual(res["device_pk_sha256"], endorsement.pk_sha256(tf.PQ_KEYS[0][0]))       # dev-a's own key
+        self.assertEqual(res["address"], "127.0.0.1:%d" % self.dev_a.port)
+        with self.assertRaises(SystemExit):              # the draft is not overwritten without --force
+            run(prov.main, ["reference", self.pol, "dev-a", "--reference", ref, "--state", self.estate])
+
+    def test_the_operator_confirms_address_key_and_components(self):
+        ref = self.reference("dev-a")
+        want = endorsement.pk_sha256(tf.PQ_KEYS[0][0])
+        for answer, signed in (("no\n", False), ("\n", False), ("yes\n", True)):
+            err = io.StringIO()
+            with mock.patch.object(sys, "stdin", TerminalIn(answer)), contextlib.redirect_stderr(err):
+                rc, out = self.tool("dev-a", "--reference", ref)
+            text = err.getvalue()
+            self.assertIn("127.0.0.1:%d (from the reference)" % self.dev_a.port, text)
+            self.assertIn("device key sha256 %s" % want, text)
+            self.assertIn("component         SPE %s" % tf.GOOD_S, text)
+            self.assertEqual((rc, os.path.exists(os.path.join(self.out, "dev-a.json"))), (0 if signed else 1, signed))
+            if not signed:
+                self.assertIn("not confirmed by the operator", out)
+        # no terminal and no --yes: nothing signed
+        os.unlink(os.path.join(self.out, "dev-a.json"))
+        with mock.patch.object(sys, "stdin", io.StringIO("yes\n")), contextlib.redirect_stderr(io.StringIO()):
+            rc, out = self.tool("dev-a", "--reference", ref)
+        self.assertEqual((rc, os.listdir(self.out)), (1, []))
+
+    def test_expect_key_sha256_refuses_another_key(self):
+        ref = self.reference("dev-a")
+        other = endorsement.pk_sha256(tf.PQ_KEYS[1][0])
+        rc, out = self.tool("dev-a", "--reference", ref, "--yes", "--expect-key-sha256", other)
+        self.assertEqual(rc, 1)
+        self.assertIn("not the expected %s" % other, out)
+        self.assertEqual(os.listdir(self.out), [])
+        # --host overrides the reference's address: here it points at the other board, whose key is not expected
+        rc, out = self.tool("dev-a", "--reference", ref, "--yes", "--host", "127.0.0.1:%d" % self.dev_b.port,
+                            "--expect-key-sha256", endorsement.pk_sha256(tf.PQ_KEYS[0][0]))
+        self.assertEqual(rc, 1)
+        self.assertIn("not the expected %s" % endorsement.pk_sha256(tf.PQ_KEYS[0][0]), out)
+        rc, out = self.tool("dev-a", "--reference", ref, "--yes",
+                            "--expect-key-sha256", endorsement.pk_sha256(tf.PQ_KEYS[0][0]).upper())
+        self.assertEqual(rc, 0, out)
+        for bad in (["--host", "127.0.0.1:1", "dev-b"], ["--expect-key-sha256", "00" * 32, "dev-b"],
+                    ["--expect-key-sha256", "xyz"]):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                self.tool("dev-a", "--reference", ref, "--yes", *bad)
+        for bad in ("host", "127.0.0.1:0", "127.0.0.1:x", ":7"):
+            with self.assertRaises(ValueError):
+                prov.parse_address(bad)
+
+    def test_the_reference_file_is_strict(self):
+        for edit, why in (({"name": "../escaped"}, "is not a device name"), ({"name": ".hidden"}, "is not a device name"),
+                          ({"endorsement": "required"}, "keys a reference does not know"),
+                          ({"port": None, "host": "127.0.0.1"}, None)):
+            path = self.reference("dev-a", addresses=False, **edit)
+            if why is None:                 # a port of null is a port: refused when used, not taken as absent
+                with open(path) as f:
+                    ref = json.load(f)
+                del ref["devices"][0]["port"]
+                with open(path, "w") as f:
+                    json.dump(ref, f)
+                why = "host without a port"
+            with self.assertRaises(SystemExit) as c:
+                self.tool("dev-a", "--reference", path, "--yes")
+            self.assertIn(why, str(c.exception))
+        self.assertEqual(os.listdir(self.out), [])
+        # the library refuses a name that is not a file name too, before asking anything
+        res = prov.endorse(self.endorser, dict(self.ep(), name="../escaped"), self.d, self.out, ecdsa_verify=VERIFY)
+        self.assertFalse(res["endorsed"])
+        self.assertIn("is not a device name", res["reasons"][0])
+        self.assertEqual(os.listdir(self.out), [])
 
 
 class BoardCheck(Bench):
