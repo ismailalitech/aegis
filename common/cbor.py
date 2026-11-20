@@ -94,7 +94,10 @@ def _enc_head(mt, v):
     raise CBORError("integer too large")
 
 
-def dumps(x):
+def dumps(x, sort=False):
+    """Encode x. With sort, map keys are written in the bytewise order of their encodings (RFC 8949 section 4.2.1,
+    deterministic encoding): one value, one byte string, whatever order the map was built in. Integers and lengths
+    are always written in their shortest form."""
     if isinstance(x, bool):
         return bytes([0xF5 if x else 0xF4])
     if x is None:
@@ -107,9 +110,12 @@ def dumps(x):
         b = x.encode()
         return _enc_head(3, len(b)) + b
     if isinstance(x, (list, tuple)):
-        return _enc_head(4, len(x)) + b"".join(dumps(e) for e in x)
+        return _enc_head(4, len(x)) + b"".join(dumps(e, sort) for e in x)
     if isinstance(x, dict):
-        return _enc_head(5, len(x)) + b"".join(dumps(k) + dumps(v) for k, v in x.items())
+        items = [(dumps(k, sort), dumps(v, sort)) for k, v in x.items()]
+        if sort:
+            items.sort(key=lambda kv: kv[0])
+        return _enc_head(5, len(x)) + b"".join(k + v for k, v in items)
     if isinstance(x, Tag):
-        return _enc_head(6, x.tag) + dumps(x.value)
+        return _enc_head(6, x.tag) + dumps(x.value, sort)
     raise CBORError("cannot encode %r" % type(x))

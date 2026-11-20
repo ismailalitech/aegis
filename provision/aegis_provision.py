@@ -284,7 +284,8 @@ def summary(ep, pk, v):
 
 
 def endorse(endorser, ep, base_dir, out_dir, serial=None, notes=None, valid_days=None, device_state="development",
-            timeout=20.0, ecdsa_verify=psa_token.verify_with_openssl_cli, expect_pk_sha256=None, approve=None):
+            timeout=20.0, ecdsa_verify=psa_token.verify_with_openssl_cli, expect_pk_sha256=None, approve=None,
+            record_format="json"):
     """Endorse one device (the module text has the steps). Returns a result dict; "endorsed" is True only when the
     record is in out_dir. Never leaves a partial record.
 
@@ -330,8 +331,13 @@ def endorse(endorser, ep, base_dir, out_dir, serial=None, notes=None, valid_days
             body["notes"] = notes
         if valid_days:
             body["expires"] = now + int(valid_days * 86400)
-        rec = endorsement.sign(body, endorser.sk, pk)
-        data = endorsement.dumps(rec)
+        if record_format == "cose":
+            # the standard form: an EAT in a COSE_Sign1 (docs/evidence-format.md), <device>.cbor
+            data = endorsement.sign_cose(body, endorser.sk, endorser.pk, pk)
+            rec = endorsement.loads(data)
+        else:
+            rec = endorsement.sign(body, endorser.sk, pk)
+            data = endorsement.dumps(rec)
         # verify before commit: the bytes that will be written, read as a verifier reads them
         endorsement.check(endorsement.loads(data), endorser.trust(), name, kind, profile, pk, now)
     except (ValueError, TypeError, KeyError, RuntimeError) as e:
@@ -342,7 +348,7 @@ def endorse(endorser, ep, base_dir, out_dir, serial=None, notes=None, valid_days
         res["reasons"] = ["no record made: a verifier with this record would not admit the device: %s"
                           % "; ".join(refused)]
         return res
-    path = os.path.join(out_dir, "%s.json" % name)
+    path = os.path.join(out_dir, "%s.%s" % (name, "cbor" if record_format == "cose" else "json"))
     res.update({"device_pk_sha256": body["device_pk_sha256"], "record_sha256": endorsement.record_sha256(rec),
                 "family": endorsement.family(kind, profile), "measurements": body["measurements"],
                 "device_state": device_state})
@@ -407,6 +413,9 @@ def main(argv=None):
     ap.add_argument("--device-state", choices=endorsement.DEVICE_STATES, default="development",
                     help="endorse: the device's lifecycle as the operator knows it (default: development, which is "
                          "every board on this bench)")
+    ap.add_argument("--record-format", choices=["json", "cose"], default="json",
+                    help="endorse: json (aegis-endorsement-v1) or cose (the same claims as an EAT in a COSE_Sign1 with "
+                         "ML-DSA-65, docs/evidence-format.md)")
     ap.add_argument("--timeout", type=float, default=20.0)
     a = ap.parse_args(argv)
     if a.cmd == "init":
@@ -478,7 +487,8 @@ def main(argv=None):
             res = {"device": name, "endorsed": False, "reasons": [str(e)]}
         else:
             res = endorse(endorser, ep, base, out, a.serial, a.notes, a.valid_days, a.device_state, a.timeout,
-                          expect_pk_sha256=a.expect_key_sha256, approve=None if a.yes else ask)
+                          expect_pk_sha256=a.expect_key_sha256, approve=None if a.yes else ask,
+                          record_format=a.record_format)
         failed += not res["endorsed"]
         print(json.dumps(res, indent=1), flush=True)
     return 1 if failed else 0

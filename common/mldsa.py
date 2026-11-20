@@ -133,7 +133,13 @@ def _framed(label, msg):
 
 
 def sign(sk, label, msg):
-    m = _framed(label, msg)
+    return sign_raw(sk, _framed(label, msg))
+
+
+def sign_raw(sk, m):
+    """Pure ML-DSA-65 over m itself, empty context, hedged: FIPS 204 ML-DSA.Sign as RFC 9964 uses it for COSE
+    (common/cose.py signs a COSE Sig_structure this way). Everything else in Aegis signs through sign(), under a
+    label."""
     if len(sk) == SEED_LEN:
         sig = _openssl()[0].MLDSA65PrivateKey.from_seed_bytes(sk).sign(m)
         if len(sig) != SIG_LEN:
@@ -150,9 +156,13 @@ def sign(sk, label, msg):
 
 def verify(pk, label, msg, sig, use=None):
     """True only for a valid signature. use = "openssl" or "liboqs" forces a backend (the cross-check test)."""
+    return verify_raw(pk, _framed(label, msg), sig, use)
+
+
+def verify_raw(pk, m, sig, use=None):
+    """True only for a valid pure ML-DSA-65 signature over m itself (empty context): the counterpart of sign_raw."""
     if len(pk) != PK_LEN or not sig or len(sig) > SIG_LEN:
         return False
-    m = _framed(label, msg)
     if (use or backend()) == "openssl":
         if len(sig) != SIG_LEN:
             return False
