@@ -299,9 +299,41 @@ int aegis_prover_heartbeat(struct aegis_prover *p, const uint8_t nonce[AEGIS_CHA
  *   PQKEMFIN <ct> <cred>     -> PQKEMOK <tag> END
  *   PQHB <nonce>             -> PQHB <status> <counter> <tag> END
  *   PQSESSION                -> PQSESSION <session id> <credential hash> END
+ *   PQEAT <challenge>        -> PQEAT <len> <COSE_Sign1> END          (only with -DAEGIS_EAT_COSE=1, below)
  * and "ERR <reason>" (enum aegis_result; also "ERR empty", "ERR unknown"). Binary fields are in hex. A transport
  * that reads a line longer than AEGIS_LINE_MAX answers "ERR too-long" itself. */
 int aegis_prover_handle_line(struct aegis_prover *p, char *line, char *out, size_t cap);
+
+/* ---- standard evidence (an option) ----------------------------------------------------------------------------
+ * Built only with -DAEGIS_EAT_COSE=1, for the core and for whoever includes this file; off by default, and a build
+ * without it is unchanged. docs/evidence-format.md is the specification.
+ *
+ * The same quote as an EAT (RFC 9711) in a COSE_Sign1 (RFC 9052) signed with ML-DSA-65 (RFC 9964, algorithm -49) by
+ * the identity key: a verifier, or anyone with a COSE library and the device's public key, reads it without Aegis
+ * code. The claims are the challenge (eat_nonce), the UEID (0x01 || SHA-256 of the identity key), the profile, and
+ * either the platform's measurements as measured components (RFC 10013: label, the platform's version text and the
+ * SHA-256 digest; the description is not carried) with the platform's profile name, or the platform's own token
+ * (struct aegis_platform.evidence) nested as the submodule "platform". At most 16 measurements; a label is 1 to 64
+ * bytes of text, the version at most 64.
+ *
+ * It is a quote like the other: it becomes the one quote an exchange can continue, in place of any earlier one of
+ * either kind. The transcript then hashes the COSE Sig_structure, the bytes this signature covers.
+ *
+ * Memory: the work buffer must hold AEGIS_EAT_WORK_MIN bytes (AEGIS_WORK_LEN() always gives more) and
+ * AEGIS_EAT_PAYLOAD_AT more than the claims; a platform token may be as long as the work buffer less 230 bytes. The
+ * whole object is AEGIS_EAT_LEN(claims) bytes at most: about 3.6 kB with two measurements. */
+#if defined(AEGIS_EAT_COSE) && AEGIS_EAT_COSE
+#define AEGIS_EAT_WORK_MIN   (10u + AEGIS_PK_LEN) /* the identity key as a COSE_Key, hashed for the key identifier */
+#define AEGIS_EAT_PAYLOAD_AT 78u                  /* the COSE Sig_structure's bytes before the claims, at their most */
+#define AEGIS_EAT_LEN(claims) ((claims) + AEGIS_EAT_PAYLOAD_AT + 6u + AEGIS_SIG_LEN - 13u)
+
+/* The EAT for this challenge into out (cap bytes), its length in *len. AEGIS_ERR_BUFFER if cap is less than
+ * AEGIS_EAT_LEN(0); AEGIS_ERR_EVIDENCE if the platform gives no evidence, or the claims do not fit cap or the work
+ * buffer (a platform's token gets exactly the room that is left, as for aegis_prover_quote); the errors of
+ * aegis_prover_quote otherwise. The line transport: PQEAT <challenge> -> PQEAT <len> <hex> END. */
+int aegis_prover_quote_eat(struct aegis_prover *p, const uint8_t challenge[AEGIS_CHALLENGE_LEN], uint8_t *out,
+			   size_t cap, size_t *len);
+#endif
 
 /* Overwrite n bytes with zeros in a way the compiler does not remove: for a port's copies of seeds and keys. */
 void aegis_wipe(void *p, size_t n);
