@@ -426,7 +426,8 @@ class Bench(unittest.TestCase):
                                                        serialization.PublicFormat.SubjectPublicKeyInfo))
         os.mkdir(os.path.join(self.d, "keys"))
         run(prov.main, ["export", os.path.join(self.d, "endorsers"), "--state", self.estate])
-        self.policy = {"timeout_s": 5, "endorsers": [self.endorser.policy_entry()], "endpoints": []}
+        self.policy = {"timeout_s": 5, "endorsers": [self.endorser.policy_entry()], "endpoints": [],
+                       "attestation_results": True}
 
     def add(self, name, dev, pin=True, **kw):
         e = {"name": name, "kind": "aegis-device", "host": "127.0.0.1", "port": dev.port,
@@ -749,6 +750,45 @@ class Results(Bench):
         self.assertNotIn("attestation_result", v)
         v, = fleet.run_once(self.policy, self.d, VERIFY, credentials=False, state=self.state)
         self.assertNotIn("attestation_result", v)
+
+
+    def test_results_are_off_unless_the_policy_asks(self):
+        """Without "attestation_results": true only an entry with standard evidence gets a result; a policy of the
+        older formats alone runs as before: no key loaded, no file written, no "attestation_result" in a verdict."""
+        del self.policy["attestation_results"]
+        self.add("legacy", EatDevice(), evidence_format=None)
+        loads = []
+        real = fleet.verifier_keys
+        self.addCleanup(setattr, fleet, "verifier_keys", real)
+        fleet.verifier_keys = lambda state: loads.append(state) or real(state)
+        v, = self.cycle()
+        self.assertTrue(v["admitted"], v["reasons"])
+        self.assertNotIn("attestation_result", v)
+        self.assertEqual(loads, [])
+        self.assertFalse(os.path.exists(os.path.join(self.state, "attestation")))
+        rc, out = run(fleet.main, ["once", self.pol, "--state-dir", self.state, "--platform", "linux",
+                                   "--no-credentials", "--verifier", "cryptography"])
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("attestation_result", out)
+        self.assertNotIn("no verifier identity", out)
+        self.assertEqual(loads, [])
+        # an entry with standard evidence asks for its own result, and only for its own
+        self.add("eat", EatDevice())
+        vs = {v["endpoint"]: v for v in self.cycle()}
+        self.assertNotIn("attestation_result", vs["legacy"])
+        self.assertEqual(vs["eat"]["attestation_result"]["status"], "warning")
+        self.assertEqual(os.listdir(os.path.join(self.state, "attestation")), ["eat"])
+        # and the policy's switch asks for every entry's
+        self.policy["attestation_results"] = True
+        self.save()
+        vs = {v["endpoint"]: v for v in self.cycle()}
+        self.assertEqual(vs["legacy"]["attestation_result"]["status"], "warning")
+        for off in (False, "yes", 1):
+            self.policy["attestation_results"] = off
+            self.policy["endpoints"] = self.policy["endpoints"][:1]
+            self.save()
+            v, = self.cycle()
+            self.assertNotIn("attestation_result", v, off)
 
 
 class EndorsementCose(Bench):

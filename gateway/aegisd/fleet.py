@@ -62,8 +62,9 @@ warning priority when the loop starts.
 
 Standard evidence (docs/evidence-format.md): an entry with "evidence_format": "eat-cose-v1" is asked for an EAT in a
 COSE_Sign1 signed with ML-DSA-65 (request PQEAT) instead of the older claims and detached signature (PQCHAL), which
-stay the default: firmware in the field keeps working. The same policy rules apply to both. For every verdict the
-loop signs an attestation result (an EAR in a COSE_Sign1, by this verifier's identity key) and keeps it, with the
+stay the default: firmware in the field keeps working. The same policy rules apply to both. For the verdict of such
+an entry, or of every entry if the policy says "attestation_results": true (off by default), the loop signs an
+attestation result (an EAR in a COSE_Sign1, by this verifier's identity key) and keeps it, with the
 evidence it appraised, under STATE_DIR/attestation/<name>/; `fleet.py export-evidence POLICY NAME` copies them, the
 endorsement record and the public keys into one directory that tools/verify_evidence.py checks with third-party
 libraries only.
@@ -1357,15 +1358,27 @@ def cbor_key(pk):
     return cbor.dumps(cose.cose_key(pk), sort=True)
 
 
+def wants_results(policy, ep):
+    """Whether the verdicts of ep get a signed attestation result: only on request, so that a policy that asks for
+    none runs as before (no signature, no key unsealed, no files written, no "attestation_result" in a verdict). The
+    policy asks with "attestation_results": true at its top level (every entry), or an entry with "evidence_format":
+    "eat-cose-v1" (that entry)."""
+    return policy.get("attestation_results") is True or (isinstance(ep, dict) and ep.get("evidence_format") == EAT_COSE)
+
+
 def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, state=GATEWAY_STATE, require_pin=False,
              enforce_hooks=True, policy_bytes=None):
     """One cycle over every endpoint. enforce_hooks=False is observe-only: the policy's enforce_cmd is not run.
-    With policy_bytes (the policy file as read) and a verifier identity in state, every verdict gets a signed
-    attestation result, kept with its evidence under STATE/attestation/ (issue_result)."""
+    With policy_bytes (the policy file as read) and a verifier identity in state, the verdict of every entry that
+    asks for it (wants_results()) gets a signed attestation result, kept with its evidence under STATE/attestation/
+    (issue_result). Without such an entry the identity key is not loaded and nothing is written."""
     out = []
     ttl = admit_ttl(policy, interval)
-    signer = verifier_keys(state) if policy_bytes is not None else None
+    signer = None
+    if policy_bytes is not None and any(wants_results(policy, ep) for ep in policy["endpoints"]):
+        signer = verifier_keys(state)       # unsealed only when some entry asks for results
     for ep in policy["endpoints"]:
+        signs = signer is not None and wants_results(policy, ep)
         ep = effective_entry(policy, ep)
         facts, second = {}, {}
         try:
@@ -1418,7 +1431,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
             if again is not None and ((admitted and not v["admitted"]) or
                                       (again.get("quote") is not None and v.get("quote") == again.get("quote"))):
                 facts = second["facts"]     # the cycle's verdict rests on the second quote: that is its evidence
-        if signer is not None:
+        if signs:
             issue_result(v, facts, signer, policy_bytes, state, ttl)
         out.append(v)
     return out
@@ -1556,7 +1569,7 @@ def main(argv=None):
         return 1 if bad else 0
     run = dict(credentials=not a.no_credentials, interval=a.interval, state=state_dir, require_pin=on_host,
                enforce_hooks=enforce_hooks)
-    if verifier_keys(state_dir) is None:
+    if any(wants_results(policy, ep) for ep in policy.get("endpoints", [])) and verifier_keys(state_dir) is None:
         log("aegis-fleet: no verifier identity in %s: verdicts are not signed (no attestation results)" % state_dir,
             file=sys.stderr)
     if policy.get("enforce_cmd") and not enforce_hooks:

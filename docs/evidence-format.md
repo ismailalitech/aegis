@@ -176,8 +176,16 @@ A policy entry asks for it:
 
 ## The attestation result
 
-For every verdict of a cycle the verifier signs an EAR with its identity key (`fleet.py`: `attestation_result`), if
-it has one (`aegisd.py init`); without an identity the loop runs as before and says so once.
+**Off by default.** The verifier signs an EAR with its identity key (`fleet.py`: `attestation_result`) for the
+verdict of an entry with `"evidence_format": "eat-cose-v1"`, or for every verdict of a cycle if the policy says so at
+its top level:
+
+    { "attestation_results": true, "endpoints": [ ... ] }
+
+Only the JSON value `true` turns it on (`fleet.py`: `wants_results`). A policy with neither runs exactly as before:
+the identity key is not loaded, nothing is written under `STATE_DIR/attestation/`, and a verdict (the `once` output,
+the state file) has no `attestation_result`. With an entry that asks but no identity (`aegisd.py init`) the loop runs
+as before and says so once.
 
     { 265: "tag:ietf.org,2026:rats/ear#05",
       6: iat,  4: exp,                                   ; exp = iat + the admission's own lifetime
@@ -228,8 +236,9 @@ The verifier keeps each cycle's evidence as received and its result under `STATE
 (`evidence.cbor`, or `evidence.token` and `evidence.sig` for the older quote; `result.cbor`; `meta.json`), replaced
 every cycle. The verdict names the result's status, its SHA-256 and the file. That is about 8 kB written per
 endpoint and cycle, and one more signature per verdict, by a loop that until now wrote one small state file; and a
-verifier that only observed now loads its identity key every cycle. Both are to be looked at on the gateway before
-this runs there (flash wear, a TPM-sealed key on the PC verifier).
+verifier that only observed (`--no-credentials`) loads its identity key every cycle. That is why it is asked for, not
+on by default; both are to be looked at on the gateway before it is turned on there (flash wear, a TPM-sealed key on
+the PC verifier).
 
 ## The endorsement
 
