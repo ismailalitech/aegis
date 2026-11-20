@@ -1,0 +1,12 @@
+{
+ "endpoint": "stm32h573-dk-2",
+ "phase": "quote",
+ "session_for_the_reset_check": "bound, 28c6e1f8df54fc36",
+ "quote": "admitted by the policy, token 71de85bb839ff5e3",
+ "measurements": {
+  "SPE": "3183f74a02e5f7bedb20fa38d22a556a2ce6c57afa928c1d4f4c3bebe5c5ece4",
+  "NSPE": "1f4110fd8b2a5e93839bccdd37c8ff13d206527bc649fb3e57318117ce6ecb8b"
+ },
+ "file": "/tmp/aegis-transcript-swap-stm32h573-dk-2.json",
+ "next": "reset the endpoint (or flash another image with the same key and reset), then: swap"
+}

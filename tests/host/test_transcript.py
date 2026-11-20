@@ -348,6 +348,127 @@ class Transcript(unittest.TestCase):
             self.assertIsNone(self.dev.session)
             self.assertEqual(self.stored(), [])
 
+    def other_verifier_every_quote(self):
+        """Another verifier's PQCHAL after each of this gateway's quotes, so the first exchange and its retry fail."""
+        def hook():
+            self.dev.handle("PQCHAL " + os.urandom(32).hex())
+            self.dev.after_quote = hook
+        self.dev.after_quote = hook
+        self.addCleanup(setattr, self.dev, "after_quote", None)
+        self.addCleanup(setattr, fleet, "BUSY_BACKOFF_S", fleet.BUSY_BACKOFF_S)
+        fleet.BUSY_BACKOFF_S = (0, 0)
+
+    def into_renewal_window(self):
+        path = os.path.join(self.state, "credentials", "dev.json")
+        with open(path) as f:
+            m = json.load(f)
+        m["body"]["expires"] = int(__import__("time").time()) + 200     # renewed five minutes before the end
+        with open(path, "w") as f:
+            json.dump(m, f)
+
+    def test_refused_renewal_keeps_a_working_session(self):
+        """A renewal displaced twice by another verifier's quotes: the session made from an earlier admitted quote still
+        works and is kept until it expires (pc-verifier.md: an established session is not touched)."""
+        _, cs = self.cycle()
+        self.assertTrue(cs.startswith("issued session "), cs)
+        session = self.dev.session
+        self.into_renewal_window()
+        self.other_verifier_every_quote()
+        v = fleet.run_once({"endpoints": [self.conf]}, self.d, None, state=self.state)[0]
+        self.assertTrue(v["admitted"])
+        self.assertTrue(v["credential"].startswith("provisioning REFUSED: "), v["credential"])
+        self.assertIn("stored session kept until it expires", v["credential"])
+        self.assertEqual(self.dev.lines[-4:], ["PQCHAL", "PQKEMINIT", "PQCHAL", "PQKEMINIT"])
+        self.assertEqual(self.stored(), ["dev.json", "dev.session"])
+        self.assertEqual(self.dev.session, session)
+        with open(os.path.join(self.state, "credentials", "dev.session"), "rb") as f:
+            self.assertEqual(fleet.heartbeat(self.conf, f.read())[1], 1)     # and it still works
+        # the next cycle renews it once nobody is in between
+        self.dev.after_quote = None
+        _, cs = self.cycle()
+        self.assertTrue(cs.startswith("issued session "), cs)
+
+    def test_refused_renewal_deletes_an_unusable_session(self):
+        _, cs = self.cycle()
+        self.assertTrue(cs.startswith("issued session "), cs)
+        self.dev.boot(FW_A)                                 # the session was in RAM: the heartbeat fails
+        self.other_verifier_every_quote()
+        v = fleet.run_once({"endpoints": [self.conf]}, self.d, None, state=self.state)[0]
+        self.assertTrue(v["credential"].startswith("provisioning REFUSED: "), v["credential"])
+        self.assertIn("no-session", v["credential"])
+        self.assertEqual(self.stored(), [])
+
+    def test_malformed_kem_key_reply_refused_in_bound_mode(self):
+        """Any answer to PQKEMINIT that is not the signed continuation of the quote is refused the same way, and
+        follows the same rule for the stored session."""
+        ek_hex = "00" * 1184
+        for bad in ("ERR sign", "PQKEMEK 1184 %s 3309 zz END" % ek_hex, "PQKEMEK 1183 %s 3309 %s END" % (
+                ek_hex[2:], "00" * 3309), "PQKEMEK 1184 %s END" % ek_hex):
+            with self.subTest(bad=bad[:20]):
+                self.dev.rewrite = lambda line, reply, bad=bad: bad if line.startswith("PQKEMINIT") else reply
+                v = self.attest()
+                self.dev.lines.clear()
+                self.assert_refused(self.step(v), "")
+        # with a working session in its renewal window: kept
+        self.dev.rewrite = None
+        _, cs = self.cycle()
+        self.assertTrue(cs.startswith("issued session "), cs)
+        self.into_renewal_window()
+        self.dev.rewrite = lambda line, reply: "PQKEMEK 1184 zz 1 00 END" if line.startswith("PQKEMINIT") else reply
+        _, cs = self.cycle()
+        self.assertEqual(cs, "provisioning REFUSED: KEM key or signature is not hex (stored session kept until it "
+                             "expires)")
+        self.assertEqual(self.stored(), ["dev.json", "dev.session"])
+        # without the policy key a malformed reply is an ordinary failure, as before
+        del self.conf["transcript"]
+        os.remove(os.path.join(self.state, "credentials", "dev.json"))
+        _, cs = self.cycle()
+        self.assertEqual(cs, "provisioning failed: KEM key or signature is not hex")
+
+    def test_second_quote_not_admitted_quarantines_the_cycle(self):
+        """The endpoint restarts into code the policy does not admit between the two quotes of a cycle: the cycle's
+        verdict is the later one, enforced again, with its reasons in the journal line, and no session is kept."""
+        _, cs = self.cycle()
+        self.assertTrue(cs.startswith("issued session "), cs)
+        self.into_renewal_window()
+        log = os.path.join(self.d, "enforced")
+        pol = {"endpoints": [self.conf], "enforce_cmd": [
+            sys.executable, "-c", "import sys; open(%r, 'a').write(' '.join(sys.argv[1:]) + '\\n')" % log]}
+        self.dev.after_quote = lambda: self.dev.boot(FW_B)     # BAD_NS is not allowed
+        self.addCleanup(setattr, fleet, "BUSY_BACKOFF_S", fleet.BUSY_BACKOFF_S)
+        fleet.BUSY_BACKOFF_S = (0, 0)
+        v = fleet.run_once(pol, self.d, None, state=self.state)[0]
+        self.assertFalse(v["admitted"])
+        self.assertTrue(any(r.startswith("second quote of the cycle not admitted: ") and "NSPE" in r
+                            for r in v["reasons"]), v["reasons"])
+        self.assertTrue(v["credential"].startswith("revoked: provisioning REFUSED"), v["credential"])
+        self.assertEqual(self.stored(), [])
+        self.assertNotIn("PQKEMFIN", self.dev.lines[-3:])
+        with open(log) as f:
+            self.assertEqual(f.read().split("\n"), ["dev admit", "dev quarantine", ""])
+        self.assertEqual(v["enforcement"], "ok")
+        line, _ = fleet.journal_line(v)
+        self.assertIn(" QUARANTINED ", line)
+        self.assertIn("second quote of the cycle not admitted", line)
+
+    def test_second_quote_not_admitted_is_never_continued(self):
+        """credential_step on its own: a second verdict that is not admitted, though it carries a valid quote with the
+        same measurements (here: refused for a reason outside the measurements), gets no exchange."""
+        v = self.attest()
+        self.dev.ask("PQCHAL " + os.urandom(32).hex())      # the first exchange will fail
+
+        def requote():
+            again = self.attest()
+            again["admitted"], again["reasons"] = False, ["profile is not what the policy pins"]
+            return again
+        self.dev.lines.clear()
+        cs = fleet.credential_step(self.conf, v, self.d, state=self.state, requote=requote)
+        self.assertTrue(cs.startswith("revoked: "), cs)
+        self.assertEqual(self.dev.lines, ["PQKEMINIT", "PQCHAL"])
+        self.assertIsNone(self.dev.session)
+        self.assertFalse(v["admitted"])
+        self.assertIn("second quote of the cycle not admitted: profile is not what the policy pins", v["reasons"])
+
     def test_exchange_before_the_quote_refused(self):
         """The pieces in the wrong order: someone gets the KEM key signed for the gateway's challenge before the quote
         exists, and plays it to the gateway afterwards."""
@@ -515,8 +636,12 @@ class Transcript(unittest.TestCase):
                 self.dev.boot(FW_A)
                 self.dev.after_quote = lambda: self.dev.boot(FW_B_OLD)
                 v = self.run_main(platform)
-                self.assertTrue(v["admitted"], v)           # the quote was firmware A's, and good
-                self.assertTrue(v["credential"].startswith("provisioning REFUSED: transcript v2 required"), v["credential"])
+                # the first quote was firmware A's, and good; the second quote of the cycle, taken when the exchange
+                # was refused, is firmware B's, which the policy does not admit: that is the cycle's verdict
+                self.assertFalse(v["admitted"], v)
+                self.assertIn("second quote of the cycle not admitted", v["reasons"][-1])
+                self.assertTrue(v["credential"].startswith("revoked: provisioning REFUSED (transcript v2 required"),
+                                v["credential"])
                 self.assertNotIn("session_binding", v)
                 self.assertEqual(self.stored(), [])
                 self.assertIsNone(self.dev.session)

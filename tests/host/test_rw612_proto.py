@@ -72,6 +72,7 @@ class Rw612Proto(unittest.TestCase):
         cls.seed, cls.root = os.urandom(32).hex(), os.urandom(32).hex()
         cls.procs = []
         cls.clock = os.path.join(cls.d, "clock")       # seconds added to the endpoint's session clock, or "fail"
+        cls.rng = os.path.join(cls.d, "rng")           # "fail": the endpoint's random generator fails (host_main.c)
         cls.port, cls.fp = cls.start(cls.seed)
         with socket.create_connection(("127.0.0.1", cls.port), timeout=5) as s:
             s.sendall(b"PQKEY\n")
@@ -87,7 +88,8 @@ class Rw612Proto(unittest.TestCase):
     def start(cls, seed):
         port = free_port()
         pr = subprocess.Popen([cls.exe, str(port), seed, cls.root, os.path.join(cls.d, "gw.pub"), cls.image],
-                              stdout=subprocess.PIPE, text=True, env=dict(os.environ, AEGIS_TEST_CLOCK=cls.clock))
+                              stdout=subprocess.PIPE, text=True,
+                              env=dict(os.environ, AEGIS_TEST_CLOCK=cls.clock, AEGIS_TEST_RNG=cls.rng))
         cls.procs.append(pr)
         line = pr.stdout.readline().split()
         assert line[0] == "READY", line
@@ -279,6 +281,29 @@ class Rw612Proto(unittest.TestCase):
             fleet.provision(dict(ep, port=port), self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
         self.assertIn("answered the unbound exchange", str(e.exception))
         self.assertEqual(fleet._exchange("127.0.0.1", port, "PQSESSION", 10).strip(), "ERR pq no-session")
+
+    def test_d_quote_whose_signing_fails_ends_the_previous_quote(self):
+        """A PQCHAL ends the quote kept for the next PQKEMINIT before it signs (aegis_proto.c: quote_ready = 0 at its
+        start). If signing the new quote fails (here: no random bytes for the hedged signature), the previous quote
+        must not be continued either: the gateway that asked for it may since have seen the endpoint fail to quote."""
+        self.set_clock(0)
+        ep = self.ep(transcript="v2")
+        v = fleet.attest(ep, None, self.d, timeout=10)
+        self.assertTrue(v["admitted"], v["reasons"])
+        with open(self.rng, "w") as f:
+            f.write("fail")
+        try:
+            self.assertEqual(self.ask("PQCHAL " + os.urandom(32).hex()), "ERR sign")
+        finally:
+            os.remove(self.rng)
+        with self.assertRaises(fleet.TranscriptRefused) as e:
+            fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        self.assertIn("answered the unbound exchange", str(e.exception))
+        # a malformed PQCHAL is refused before it touches the quote: that one is still continued
+        v = fleet.attest(ep, None, self.d, timeout=10)
+        self.assertEqual(self.ask("PQCHAL 00"), "ERR bad-request")
+        r = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        self.assertEqual(r["transcript"], "v2")
 
     def test_8_session_ends_on_the_endpoints_clock(self):
         """The credential lasts an hour (fleet.CRED_LIFETIME_S); the endpoint ends the session 3825 s (an hour and a

@@ -1,0 +1,6 @@
+{
+ "endpoint": "frdm-rw612",
+ "phase": "live",
+ "L1_bound_exchange": "REFUSED by the gateway: transcript v2 required, but the endpoint answered the unbound exchange: its ML-KEM key is not tied to the quote just appraised (firmware without transcript v2, a restart or another quote in between)",
+ "image_knows_the_transcript": false
+}

@@ -354,6 +354,14 @@ class AdmissionTtl(unittest.TestCase):
         self.assertGreater(ttl, worst_gap)
         self.assertEqual(ttl, 2 * 30 + worst_gap - 30)
 
+    def test_ttl_covers_the_transcript_retry(self):
+        """An entry with "transcript" may take a second quote and a second provisioning in one cycle
+        (credential_step): the pause before it, timeout_s and another 40 s."""
+        pol = {"timeout_s": 20, "endpoints": [{"provision": True, "transcript": "v2"}, {}]}
+        worst_gap = 30 + (20 + 40) + (fleet.BUSY_BACKOFF_S[1] + 20 + 40) + 20
+        self.assertGreater(fleet.admit_ttl(pol, 30), worst_gap)
+        self.assertEqual(fleet.admit_ttl(pol, 30), int(2 * 30 + worst_gap - 30 + 0.999))
+
     def test_ttl_floor_and_override(self):
         self.assertEqual(fleet.admit_ttl({"endpoints": []}, 1), 60)
         self.assertEqual(fleet.admit_ttl({"admit_ttl_s": 45, "endpoints": [{}]}, 30), 45)
