@@ -1043,6 +1043,21 @@ def _unbound_tail(tr):
     return "" if tr else " [%s]" % UNBOUND_NOTE
 
 
+# what attest() puts into a verdict from the quote it asked for: the parts a later quote of the same cycle replaces
+QUOTE_FIELDS = ("time", "elapsed_s", "evidence_format", "enrolment", "endorsement", "pq_signature", "device_pk_sha256",
+                "quote", "trust", "warning", "measurements", "instance_id")
+
+
+def _adopt_quote(verdict, again):
+    """Make verdict speak of the quote of the verdict again (a second quote of the cycle): every QUOTE_FIELDS value
+    is again's, or absent if again has none."""
+    for k in QUOTE_FIELDS:
+        if k in again:
+            verdict[k] = again[k]
+        elif k != "time":                   # a verdict always has a time
+            verdict.pop(k, None)
+
+
 def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=False, requote=None, endorsers=None):
     """Zero trust: admitted aegis-pq endpoints with "provision": true get (or keep) a fresh
     credential; quarantined ones lose it. Endpoints that would not accept this verifier's credential
@@ -1125,7 +1140,10 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
             again = requote() if requote else None
             if again is not None and not again.get("admitted"):
                 # the endpoint was admitted at the start of this cycle and is not now: this cycle's verdict is the
-                # later one (run_once enforces it again), and a quarantined endpoint keeps no session
+                # later one (run_once enforces it again), and a quarantined endpoint keeps no session. What the
+                # verdict says of the evidence is the second quote's too, so that the verdict, the signed result and
+                # the evidence kept with it are all of one quote (run_once takes the second quote's facts)
+                _adopt_quote(verdict, again)
                 verdict["admitted"] = False
                 verdict["reasons"] = list(verdict.get("reasons", [])) + [
                     "second quote of the cycle not admitted: %s" % "; ".join(again.get("reasons", []))]
@@ -1140,7 +1158,8 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
                         "; ".join(again.get("reasons", [])) or "no quote")) from None
                 raise
             r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}), quote=again["quote"], **key)
-            verdict["quote"], second = again["quote"], True
+            _adopt_quote(verdict, again)
+            second = True
     except TranscriptRefused as e:
         # The endpoint did not show that the code appraised in this cycle holds the new session. A stored session that
         # still works (the binding the policy asks for, made from an earlier admitted quote, not expired, no failed

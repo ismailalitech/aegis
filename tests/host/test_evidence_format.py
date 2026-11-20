@@ -1056,6 +1056,42 @@ class Pack(Bench):
         self.assertEqual((rc, rep["verified"]), (0, True), rep)
         self.assertEqual(rep["attestation_result"]["verifier_claims"]["aegis.evidence-format"], "psa-token")
 
+    def test_a_second_quote_not_admitted_makes_one_consistent_pack(self):
+        """The bound exchange is refused and the second quote of the cycle is not admitted: the verdict, the signed
+        result and the evidence kept with it are all the second quote's, and the pack verifies."""
+        n = []
+
+        def second_bad(c):
+            n.append(1)
+            if len(n) > 1:
+                c[273] = [component("SPE", "99" * 32)]
+        dev = EatDevice(edit=second_bad)
+        self.add("dev", dev, provision=True, transcript="v2")
+        self.addCleanup(setattr, fleet, "BUSY_BACKOFF_S", fleet.BUSY_BACKOFF_S)
+        self.addCleanup(setattr, fleet, "provision", fleet.provision)
+        fleet.BUSY_BACKOFF_S = (0, 0)
+
+        def refused(*a, **kw):
+            raise fleet.TranscriptRefused("another verifier's quote in between")
+        fleet.provision = refused
+        v, = fleet.run_once(self.policy, self.d, VERIFY, credentials=True, state=self.state,
+                            policy_bytes=self.policy_bytes, enforce_hooks=False)
+        self.assertEqual(len(n), 2)
+        self.assertFalse(v["admitted"])
+        self.assertIn("second quote of the cycle not admitted", v["reasons"][-1])
+        parts = cbor.loads(dev.last).value
+        self.assertEqual(v["quote"]["token_sha3_256"],
+                         hashlib.sha3_256(cbor.dumps(["Signature1", parts[0], b"", parts[2]])).hexdigest())
+        self.assertEqual(v["measurements"], {"SPE": "99" * 32})
+        r = eat.read_ear(self.result("dev"), self.vpk)
+        self.assertEqual((r["status"], r["admitted"]), ("contraindicated", False))
+        self.assertEqual(r["verifier_claims"]["aegis.evidence-sha256"], hashlib.sha256(dev.last).digest())
+        self.assertEqual(r["verifier_claims"]["aegis.quote-sha3-256"].hex(), v["quote"]["token_sha3_256"])
+        out, man, _ = self.export("dev")
+        rc, rep = checker("pack", out, *self.trust(endorser=False))
+        self.assertEqual((rc, rep["verified"]), (0, True), rep)
+        self.assertEqual(rep["evidence"]["measurements"], [{"name": "SPE", "sha256": "99" * 32}])
+
     def test_export_says_why_there_is_nothing_to_export(self):
         self.add("dev", EatDevice())
         for name, text in (("dev", "no attestation of dev is kept"), ("nobody", "no entry named"), ("../x", "no entry")):
