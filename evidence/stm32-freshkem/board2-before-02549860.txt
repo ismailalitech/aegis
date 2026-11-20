@@ -1,0 +1,34 @@
+Hard reset is performed
+[39;49m[0m[39;49m[0m{
+ "endpoint": "stm32h573-dk-2",
+ "R_session": "662305ba4d1cc49f",
+ "R_heartbeat": "uptime_s=11;link=1;fw=0.6.0;sstack=19088/26624;ttl=63",
+ "R_first_exchange_since_reset": true,
+ "R_session_before": "ERR pq -137",
+ "file": "/tmp/aegis-reset-replay-stm32h573-dk-2.json",
+ "next": "reset the endpoint, then: replay"
+}
+record rc=0
+Hard reset is performed
+[39;49m[0m[39;49m[0m{
+ "endpoint": "stm32h573-dk-2",
+ "recorded_s_ago": 2,
+ "A_session_after_reset": "ERR pq -137",
+ "B_keys_signed_by_the_endpoint": true,
+ "B_recorded_key_issued_again": true,
+ "B_keys_all_different": true,
+ "C_recorded_finish": [
+  "PQKEMOK 80688039713fc93c2fd479726a998716",
+  "ERR pq -149",
+  "ERR pq -149",
+  "ERR pq -149"
+ ],
+ "C_refused_every_time": false,
+ "D_session": "PQSESSION 662305ba4d1cc49feb487a8dd3001d",
+ "D_heartbeat": "PQHB 757074696d655f733d31323b6c696e6b3d3",
+ "E_new_session": "e10c866d73616547",
+ "E_heartbeat": "uptime_s=12;link=1;fw=0.6.0;sstack=19088/26624;ttl=63",
+ "E_recorded_finish_again": "ERR pq -137",
+ "E_new_session_kept": true
+}
+replay rc=1

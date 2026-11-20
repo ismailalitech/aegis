@@ -20,8 +20,15 @@
  *                                every signature; empty context. AEGIS_DETERMINISTIC_SIGNING=1 builds
  *                                the deterministic variant, rnd = 0)
  *   type 3 KEM_INIT:   in[0] = 32-byte gateway nonce
- *                      a fresh ML-KEM-768 key pair is derived from prov_root (a second
- *                      DHUK-derived secret), the nonce and a counter;
+ *                      a fresh ML-KEM-768 key pair for this exchange:
+ *                        fresh = 32 bytes from the chip's true random number generator (TF-M's crypto service)
+ *                        coins = SHA3-256(prov_root || fresh || nonce || counter || 0)
+ *                                || SHA3-256(prov_root || fresh || nonce || counter || 1)
+ *                        (ek, dk) = ML-KEM-768.KeyGen_internal(coins)   (FIPS 203; d = the first half, z the second)
+ *                      prov_root is a second DHUK-derived secret, the counter (4 bytes LE) counts the key pairs
+ *                      made since reset. Without the random bytes the key of an exchange could be made again after
+ *                      a reset (kem_coins below); if the generator fails, the message is refused
+ *                      (PSA_ERROR_INSUFFICIENT_ENTROPY or the crypto service's code) and no exchange is pending.
  *                      out[0] <- encapsulation key ek (1184 bytes)
  *                      out[1] <- ML-DSA-65 signature over "aegis-kem-init-v1\0" || nonce || ek
  *   type 4 KEM_FINISH: in[0] = ML-KEM ciphertext (1088), in[1] = credential issued by the gateway
@@ -573,14 +580,64 @@ static psa_status_t do_quote(const psa_msg_t *msg)
 	return PSA_SUCCESS;
 }
 
+/* The coins of an exchange's ML-KEM key pair (the header of this file gives the construction, which is the RW612's:
+ * endpoints/rw612/prover/src/aegis_proto.c).
+ *
+ * The 32 random bytes are what makes the key new. prov_root is the same at every boot, the counter starts again at
+ * every reset and the nonce is the caller's: without the random bytes, whoever recorded an exchange could reset the
+ * board, send the recorded KEM_INIT as the same exchange since reset and get the same key pair, and the recorded
+ * KEM_FINISH (its credential names that key) then gave the endpoint the old session back, for a whole new lifetime
+ * (found by review, 2026-11-20). They come from the STM32H5's RNG peripheral: this build's psa_generate_random reads
+ * it directly (MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG; TF-M's RNG_GetBytes, which gives nothing when the peripheral reports
+ * a seed or clock error). Any failure refuses the exchange, as do 32 zero bytes: a generator that reports success
+ * and writes nothing must not bring the old construction back.
+ *
+ * The inputs have fixed lengths, so their boundaries cannot move; prov_root is used for nothing else, and the last
+ * byte separates the two halves. The message is 101 bytes: no input of the construction before (69 bytes) gives the
+ * same hash.
+ *
+ * Its own frame, not do_kem_init's: the hash state and the random bytes are off the stack again before the key
+ * generation and the signature, the deep parts of a KEM_INIT, so the stack's high-water mark does not rise. */
+static __attribute__((noinline)) psa_status_t kem_coins(uint8_t coins[64])
+{
+	uint8_t fresh[32] = {0}, c[4], any = 0;
+	psa_status_t st;
+	struct sha3 h;
+
+	st = psa_generate_random(fresh, sizeof(fresh));
+	for (size_t i = 0; i < sizeof(fresh); i++) {
+		any |= fresh[i];
+	}
+	if (st == PSA_SUCCESS && !any) {
+		st = PSA_ERROR_INSUFFICIENT_ENTROPY;
+	}
+	if (st != PSA_SUCCESS) {
+		wipe(fresh, sizeof(fresh));
+		return st;
+	}
+	kem_counter++;
+	c[0] = (uint8_t)kem_counter; c[1] = (uint8_t)(kem_counter >> 8);
+	c[2] = (uint8_t)(kem_counter >> 16); c[3] = (uint8_t)(kem_counter >> 24);
+	for (uint8_t half = 0; half < 2; half++) {
+		sha3_init(&h);
+		sha3_update(&h, prov_root, 32);
+		sha3_update(&h, fresh, sizeof(fresh));
+		sha3_update(&h, kem_nonce, 32);
+		sha3_update(&h, c, 4);
+		sha3_update(&h, &half, 1);
+		sha3_final(&h, coins + 32 * half);
+	}
+	wipe(fresh, sizeof(fresh));
+	wipe(&h, sizeof(h)); /* the state after the last block holds the second half of the coins */
+	return PSA_SUCCESS;
+}
+
 static psa_status_t do_kem_init(const psa_msg_t *msg)
 {
 	static const char lbl[] = "aegis-kem-init-v1";
 	uint8_t coins[64], rnd[32] = {0};
 	const uint8_t pre[2] = {0, 0};
 	psa_status_t st;
-	struct sha3 h;
-	uint8_t c[4];
 
 	if (msg->in_size[0] != 32 || msg->out_size[0] < KEM_EK_LEN || msg->out_size[1] < sizeof(sig)) {
 		return PSA_ERROR_INVALID_ARGUMENT;
@@ -594,16 +651,10 @@ static psa_status_t do_kem_init(const psa_msg_t *msg)
 	if (psa_read(msg->handle, 0, kem_nonce, 32) != 32) {
 		return PSA_ERROR_INVALID_ARGUMENT;
 	}
-	kem_counter++;
-	c[0] = (uint8_t)kem_counter; c[1] = (uint8_t)(kem_counter >> 8);
-	c[2] = (uint8_t)(kem_counter >> 16); c[3] = (uint8_t)(kem_counter >> 24);
-	for (uint8_t half = 0; half < 2; half++) {
-		sha3_init(&h);
-		sha3_update(&h, prov_root, 32);
-		sha3_update(&h, kem_nonce, 32);
-		sha3_update(&h, c, 4);
-		sha3_update(&h, &half, 1);
-		sha3_final(&h, coins + 32 * half);
+	st = kem_coins(coins);
+	if (st != PSA_SUCCESS) {
+		wipe(coins, sizeof(coins));
+		return st; /* no fresh randomness: no key, rather than one that can be made again */
 	}
 	if (aegis_mlkem_keypair_derand(kem_ek, kem_dk, coins) != 0) {
 		wipe(coins, sizeof(coins));

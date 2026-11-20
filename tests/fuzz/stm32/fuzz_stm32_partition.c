@@ -17,8 +17,10 @@
  *   3  HEARTBEAT with a nonce and status data from the payload; the op byte's upper bits pick out[1]: 0 the prover's
  *      buffer (HB_STATUS_MAX), 1 none (provers up to 0.5.0), 2 exactly the length the status needs, else 5 * bits
  *   4  QUOTE with a challenge from the payload
- *   5  SESSION
- *   6  after K good random draws, the next N fail; with 4 or more payload bytes also a new stack scenario: the stack is
+ *   5  SESSION; with upper bits in the op byte, the last accepted KEM_FINISH sent again byte for byte, as someone
+ *      who recorded it would (the harness keeps it across a reset of the partition)
+ *   6  after K good random draws, the next N fail (payload byte 1, bit 2: they report success and write zero bytes
+ *      instead); with 4 or more payload bytes also a new stack scenario: the stack is
  *      filled again from a stand-in stack pointer at the offset in bytes 2-3 (out of range: not filled, "sstack=na"),
  *      and with 6 or more the top <bytes 4-5> bytes are marked used.
  *      With upper bits in the op byte, the session clock's hardware instead (the RTC's registers are memory here and
@@ -41,6 +43,14 @@
  *     start or it wrapped, SESSION and HEARTBEAT answer PSA_ERROR_DOES_NOT_EXIST (before any session:
  *     PSA_ERROR_BAD_STATE), whatever messages came in between;
  *   - a KEM_INIT with valid arguments that is refused leaves no exchange pending;
+ *   - a KEM_INIT is refused (PSA_ERROR_INSUFFICIENT_ENTROPY) if and only if the random draw for its key fails or
+ *     gives zero bytes, or the draw for its signature fails;
+ *   - no KEM key is issued twice, whatever the nonces, the resets in between and the count of exchanges since each
+ *     reset (the stand-in generator, like the chip's, does not start again at a reset), and a recorded KEM_FINISH is
+ *     never accepted again: PSA_ERROR_INVALID_SIGNATURE with an exchange pending, PSA_ERROR_BAD_STATE without, the
+ *     session as it was. This is the replay after a reset that the random bytes in the key are there for;
+ *     -DFZ_STALE_RNG builds a generator that does start again at a reset, to show that these checks then fire
+ *     (tests/host/test_stm32_partition.py, which also runs the seeds without libFuzzer: -DFZ_STANDALONE);
  *   - confirmation tag, session id, credential hash and every heartbeat tag are what the gateway computes; the
  *     heartbeat counter counts up by one (from boot, across sessions); a refused exchange leaves the session as it
  *     was;
@@ -81,6 +91,8 @@ static struct {
 } cur;
 static uint64_t rng_state;
 static unsigned rng_skip, rng_fail;
+static int rng_zero; /* the failing draws report success and write zero bytes */
+#define RNG_SEED 0x9e3779b97f4a7c15ull
 
 size_t psa_read(psa_handle_t h, uint32_t i, void *buf, size_t n)
 {
@@ -112,13 +124,22 @@ psa_status_t psa_generate_random(uint8_t *out, size_t n)
 		rng_skip--;
 	} else if (rng_fail) {
 		rng_fail--;
-		return PSA_ERROR_INSUFFICIENT_ENTROPY;
+		if (!rng_zero) return PSA_ERROR_INSUFFICIENT_ENTROPY;
+		memset(out, 0, n);
+		return PSA_SUCCESS;
 	}
 	for (size_t i = 0; i < n; i++) {
 		rng_state ^= rng_state << 13; rng_state ^= rng_state >> 7; rng_state ^= rng_state << 17;
 		out[i] = (uint8_t)(rng_state >> 24);
 	}
 	return PSA_SUCCESS;
+}
+
+/* what the k-th draw from now will give: 0 random bytes, 1 an error, 2 success and zero bytes */
+static int rng_next(unsigned k)
+{
+	if (k < rng_skip || k - rng_skip >= rng_fail) return 0;
+	return rng_zero ? 2 : 1;
 }
 
 /* the attestation service: a stand-in token that carries the challenge */
@@ -201,6 +222,26 @@ static struct {
 	int stack_ok;
 	unsigned stack_used;
 } M;
+
+/* What someone on the network keeps: the last accepted KEM_FINISH, and (as hashes) every KEM key issued. Per input,
+ * not per reset of the partition. */
+static struct {
+	int have;
+	uint8_t ct[KEM_CT_LEN], cred[CRED_MAX];
+	size_t cred_len;
+	uint8_t ek_hash[32][32];
+	unsigned eks;
+} seen;
+
+static void issued(const uint8_t *ek)
+{
+	uint8_t h[32];
+
+	sha3_256(ek, KEM_EK_LEN, h);
+	for (unsigned i = 0; i < seen.eks; i++)
+		if (!memcmp(seen.ek_hash[i], h, 32)) DIE("the KEM key of exchange %u was issued again", i + 1);
+	if (seen.eks < 32) memcpy(seen.ek_hash[seen.eks++], h, 32);
+}
 
 /* the settings the clock needs, read from the registers (an independent check, with the reference manual's values) */
 static int model_clock_settings(void)
@@ -370,6 +411,7 @@ static void op_raw(const uint8_t *p, size_t n)
 		M.pending = 0;
 		if (st == PSA_SUCCESS) {
 			if (w0 != KEM_EK_LEN) DIE("KEM_INIT output");
+			issued(r0);
 			memcpy(M.ek, r0, KEM_EK_LEN);
 			memcpy(M.nonce, d, 32);
 			M.pending = 1;
@@ -397,6 +439,8 @@ static void op_raw(const uint8_t *p, size_t n)
 static void op_kem_init(const uint8_t *p, size_t n)
 {
 	uint8_t nonce[32] = {0}, msg[32 + KEM_EK_LEN], *r0, *r1;
+	/* two draws: the key's random bytes, which must be there and not zero, then the signature's */
+	const int key_draw = rng_next(0), sig_draw = rng_next(1), no_rng = key_draw != 0 || sig_draw == 1;
 	size_t w0, w1;
 	psa_status_t st;
 
@@ -404,11 +448,14 @@ static void op_kem_init(const uint8_t *p, size_t n)
 	model_sweep();
 	st = send(AEGIS_PQ_KEM_INIT, nonce, 32, NULL, 0, KEM_EK_LEN, SIG_LEN, &r0, &r1, &w0, &w1);
 	M.pending = 0;
+	if (no_rng != (st == PSA_ERROR_INSUFFICIENT_ENTROPY))
+		DIE("KEM_INIT with random draws %d (key), %d (signature): %d", key_draw, sig_draw, (int)st);
 	if (st == PSA_SUCCESS) {
 		if (w0 != KEM_EK_LEN || w1 != SIG_LEN) DIE("KEM_INIT output sizes");
 		memcpy(msg, nonce, 32);
 		memcpy(msg + 32, r0, KEM_EK_LEN);
 		if (dev_verify("aegis-kem-init-v1", msg, sizeof(msg), r1) != 0) DIE("KEM key not signed by the device key");
+		issued(r0);
 		memcpy(M.ek, r0, KEM_EK_LEN);
 		memcpy(M.nonce, nonce, 32);
 		M.pending = 1;
@@ -524,6 +571,10 @@ static void op_kem_fin(uint8_t sel, const uint8_t *p, size_t n)
 		sha3v(M.session_key, 4, "aegis-session-v1", (size_t)16, k, (size_t)32, M.nonce, (size_t)32, h_ct,
 		      (size_t)32);
 		memcpy(M.cred_hash, h_cred, 32);
+		memcpy(seen.ct, ct, KEM_CT_LEN);
+		memcpy(seen.cred, cred, cl);
+		seen.cred_len = cl;
+		seen.have = 1;
 		M.session = 1;
 		M.expired = 0;
 		M.start = M.now;
@@ -531,6 +582,31 @@ static void op_kem_fin(uint8_t sel, const uint8_t *p, size_t n)
 		/* M.hb is not reset: this partition's heartbeat counter runs from boot across sessions (the RW612's restarts
 		 * at 1 with each session); the gateway only needs it to rise within a session, and the nonce makes each
 		 * heartbeat fresh */
+	}
+	free(r0);
+	free(r1);
+}
+
+/* The recorded KEM_FINISH again. Its credential is the gateway's and names the key of the exchange it was made for;
+ * no later exchange has that key (issued() above), so it is never accepted, and the session stays as it is. */
+static void op_replay_fin(void)
+{
+	int pending = M.pending;
+	uint8_t *r0, *r1;
+	size_t w0, w1;
+	psa_status_t st;
+
+	if (!seen.have) return;
+	model_sweep();
+	st = send(AEGIS_PQ_KEM_FINISH, seen.ct, KEM_CT_LEN, seen.cred, seen.cred_len, 32, 0, &r0, &r1, &w0, &w1);
+	if (st == PSA_SUCCESS) DIE("a recorded KEM_FINISH was accepted again: the old session is back");
+	if (!pending) {
+		if (st != PSA_ERROR_BAD_STATE) DIE("recorded KEM_FINISH without an exchange: %d", (int)st);
+	} else if (!M.clk) {
+		if (st != PSA_ERROR_HARDWARE_FAILURE) DIE("recorded KEM_FINISH without a clock: %d", (int)st);
+	} else {
+		M.pending = 0;
+		if (st != PSA_ERROR_INVALID_SIGNATURE) DIE("recorded KEM_FINISH: %d", (int)st);
 	}
 	free(r0);
 	free(r1);
@@ -669,6 +745,9 @@ static void reset(unsigned hw_flags, unsigned rtcsel, uint32_t count)
 	memset(&M, 0, sizeof(M));
 	stack_scenario(AEGIS_PQ_STACK_SIZE - 1024, 0);
 	clock_boot(hw_flags, rtcsel, count);
+#if defined(FZ_STALE_RNG)
+	rng_state = RNG_SEED; /* not the chip's generator: the same bytes after every reset */
+#endif
 }
 
 /* one thing goes wrong with the clock's hardware */
@@ -708,8 +787,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	int ops = 0;
 
 	reset(0, 2, 0xFFFF0000u);
-	rng_state = 0x9e3779b97f4a7c15ull;
+	rng_state = RNG_SEED;
 	rng_skip = rng_fail = 0;
+	rng_zero = 0;
+	seen.have = 0;
+	seen.eks = 0;
 	while (i + 3 <= size && ops++ < 24) {
 		uint8_t op = data[i] & 7, sel = data[i] >> 3;
 		size_t n = (size_t)data[i + 1] | (size_t)data[i + 2] << 8;
@@ -723,7 +805,10 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 		case 2: op_kem_fin(sel, p, n); break;
 		case 3: op_hb(sel, p, n); break;
 		case 4: op_quote(p, n); break;
-		case 5: op_session(); break;
+		case 5:
+			if (sel) op_replay_fin();
+			else op_session();
+			break;
 		case 6: {
 			uint32_t v = (uint32_t)(u16(p, n, 0) | u16(p, n, 2) << 16);
 
@@ -735,6 +820,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 			else {
 				rng_skip = n ? p[0] & 3 : 0;
 				rng_fail = n > 1 ? p[1] & 3 : 1;
+				rng_zero = n > 1 && (p[1] & 4);
 				if (n >= 4) stack_scenario(u16(p, n, 2), n >= 6 ? u16(p, n, 4) : 0);
 			}
 			break;
@@ -744,3 +830,24 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 	}
 	return 0;
 }
+
+#if defined(FZ_STANDALONE)
+/* without libFuzzer: the inputs named on the command line, one after the other */
+int main(int argc, char **argv)
+{
+	static uint8_t buf[16384];
+
+	LLVMFuzzerInitialize(&argc, &argv);
+	for (int i = 1; i < argc; i++) {
+		FILE *f = fopen(argv[i], "rb");
+		size_t n;
+
+		if (!f) { perror(argv[i]); return 2; }
+		n = fread(buf, 1, sizeof(buf), f);
+		fclose(f);
+		LLVMFuzzerTestOneInput(buf, n);
+	}
+	printf("%d inputs, no finding\n", argc - 1);
+	return 0;
+}
+#endif

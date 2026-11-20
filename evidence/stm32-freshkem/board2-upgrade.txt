@@ -1,0 +1,14 @@
+== 1. checks
+new image: SPE 67a452b1adaa5038632b0aece77c88a83ecc1aa73f42f0c1684e33d2c8268136
+== 2. backup to ~/aegis/backups/stm32h573/20261120-081913-stm32h573-dk-2-before-upgrade
+running image: SPE 02549860e419cd9486cce08fb09f2b76285b9bd3e0a270cbbd1d922b463ca2f0 (same version and signer as the new one)
+== 3. policy: allow the new SPE (root@192.168.1.63:/root/aegis/gateway/policy/fleet.json.bak-20261120-081913)
+allowed for stm32h573-dk-2: [('NSPE', '1f4110fd8b2a'), ('SPE', '02549860e419'), ('SPE', '67a452b1adaa')]
+== 4. write the secure slot
+written and verified, reset at 2026-11-20 07:19:32 (gateway time)
+== 5. the gateway must admit stm32h573-dk-2 again
+  07:19:47 stm32h573-dk-2 ADMITTED  [credential: issued session 876e7535eee6... (heartbeat failed: no heartbeat: 'ERR pq -137')]
+allowed for stm32h573-dk-2: [('NSPE', '1f4110fd8b2a'), ('SPE', '67a452b1adaa')]
+  07:20:21 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1 (uptime_s=45;link=1;fw=0.6.0;sstack=18888/26624;ttl=3792)]
+  07:20:55 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 2 (uptime_s=79;link=1;fw=0.6.0;sstack=18888/26624;ttl=3758)]
+done: stm32h573-dk-2 runs SPE 67a452b1adaa5038632b0aece77c88a83ecc1aa73f42f0c1684e33d2c8268136; backup ~/aegis/backups/stm32h573/20261120-081913-stm32h573-dk-2-before-upgrade

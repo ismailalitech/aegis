@@ -103,7 +103,11 @@ ML-DSA signing is hedged on both: fresh randomness in every signature.
 
 **Provisioning** (only after ADMITTED):
 1. `PQKEMINIT <nonce>` -> a fresh ML-KEM-768 encapsulation key `ek`, signed by the device key with the nonce. A new
-   `PQKEMINIT` cancels any pending exchange.
+   `PQKEMINIT` cancels any pending exchange. The key pair's coins are SHA3-256(root || fresh || nonce || counter ||
+   0 or 1) for the two halves: a device secret, 32 bytes from the chip's random number generator, the gateway's
+   nonce and the count of exchanges since reset. The random bytes keep a recorded exchange from being replayed
+   after a reset (the other inputs repeat); without them the exchange is refused. In the STM32 partition's source
+   from 20 November 2026 (image `...-freshkem`, SPE 67a452b1, on both boards since 20 November 2026: `evidence/stm32-freshkem/`); the RW612 had them from the start.
 2. The gateway encapsulates and sends `PQKEMFIN <ct> <credential>`. The credential is signed by the gateway key and
    names SHA3-256(ct), SHA3-256(ek), the endpoint's key and its validity (`issued`, `expires`).
 3. The endpoint verifies against the pinned gateway key, decapsulates and answers a key-confirmation tag.
