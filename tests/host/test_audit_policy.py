@@ -1359,6 +1359,28 @@ class Verifier(Fleet):
         rc, out, seen = self.loop(self.pol, [lambda: None])
         self.assertEqual((rc, seen), (1, []))
 
+    def test_a_signers_file_that_goes_away_while_the_loop_runs_does_not_turn_the_check_off(self):
+        """policy-version.json is there, the loop runs from a signed policy, and the signers file disappears: the last
+        verified policy stays in use and an unsigned file put in its place is refused, not run."""
+        self.require()
+        path = self.sign()
+        one = dict(self.policy, endpoints=self.policy["endpoints"][:1])
+
+        def gone():
+            os.unlink(os.path.join(self.state, "policy-signers.json"))
+            with open(path, "w") as f:
+                json.dump(one, f)
+        rc, out, seen = self.loop(path, [gone, lambda: None, lambda: None])
+        self.assertIsNone(rc, out)
+        self.assertEqual(seen, [[("good", True), ("legacy", False)]] * 4)
+        self.assertTrue(os.path.exists(os.path.join(self.state, "policy-version.json")))
+        self.assertEqual(out.count("policy REFUSED, keeping the previous one"), 1)
+        self.assertIn("is gone while this verifier runs from a signed policy", out)
+        # a restart is the deliberate act that runs unsigned again, and says so
+        policy, _, info = self.load(path)
+        self.assertEqual(policy, one)
+        self.assertIn("accepted signed policies before", info["warning"])
+
     def test_an_unsigned_loop_reloads_as_before(self):
         def broken():
             with open(self.pol, "w") as f:

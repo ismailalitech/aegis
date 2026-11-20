@@ -271,6 +271,12 @@ It is looked for in `STATE_DIR/policy-signers.json`, or where `--policy-signers 
 (a restore, a mistake) then refuses to start instead of running unsigned. A verifier that finds
 `policy-version.json` and no signers file says so at warning priority on every start and in `check`.
 
+**The signers file disappearing while the loop runs fails closed.** If the loop runs from a signed policy,
+`policy-version.json` is there and `STATE_DIR/policy-signers.json` is gone, the policy file is refused (an unsigned
+JSON file is not read unchecked), the last verified policy stays in use, and the refusal is said at error priority
+and in the audit log (`policy-refused`). Putting the file back resumes the check; running unsigned again takes a
+restart, which says so at warning priority.
+
 ### The version
 
 A verifier keeps the last version it accepted in `STATE_DIR/policy-version.json` (`signed_policy.check_version`):
@@ -414,7 +420,8 @@ libraries.
    signature and, where pinned, by the policy.
 6. **The counter and the signers file are files in the verifier's state.** Whoever can write there can go back to
    an older signed policy by deleting the counter, or turn the check off by removing the signers file (unless the
-   unit names it with `--policy-signers`). That is the same access that can replace the verifier's identity.
+   unit names it with `--policy-signers`) and restarting the verifier: a running loop refuses to go on unsigned.
+   That is the same access that can replace the verifier's identity.
 7. **One signer is enough.** Any key of the signers file can sign any version; there is no threshold, no expiry of
    a policy and no signed revocation of a signer: a signer is removed by replacing the signers file on each
    verifier.

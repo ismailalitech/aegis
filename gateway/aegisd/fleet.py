@@ -1438,7 +1438,9 @@ def load_policy(path, state, signers_path=None, remember=False, known=None):
     (STATE/policy-version.json; remember=True records a higher version as accepted: the loop and `once` do, `check`
     does not). policy_bytes is the JSON inside, so an attestation result names the same policy either way. info:
     {"signed": True, "sha256", "version", "signer", "signer_key_sha256", "audience", "issued", "file_sha256"}.
-    known: what this function returned last time; the same file under the same signers is not verified again.
+    known: what this function returned last time; the same file under the same signers is not verified again. If it
+    was a signed policy, policy-version.json is there and the signers file is gone now, the file is refused rather
+    than read unchecked (the loop keeps the last verified policy).
 
     PolicyRefused for a policy that may not be used; OSError and ValueError as before for a file that cannot be
     read or is not JSON."""
@@ -1450,6 +1452,12 @@ def load_policy(path, state, signers_path=None, remember=False, known=None):
             raise PolicyRefused("%s is a signed policy, and this verifier has no policy-signing key to check it with "
                                 "(%s, or --policy-signers): it is not read unchecked" % (
                                     path, os.path.join(state, "policy-signers.json")))
+        if known is not None and known[2].get("signed") and os.path.exists(os.path.join(state, "policy-version.json")):
+            # the signers file went away while the loop ran from a signed policy: not a reason to run unchecked. The
+            # last verified policy stays in use; a restart (said at warning priority) is what runs unsigned again
+            raise PolicyRefused("the policy signers file (%s) is gone while this verifier runs from a signed policy: "
+                                "%s is not read unchecked; put the file back, or restart the verifier to run unsigned"
+                                % (os.path.join(state, "policy-signers.json"), path))
         info = {"signed": False, "sha256": hashlib.sha256(data).hexdigest()}
         if os.path.exists(os.path.join(state, "policy-version.json")):
             info["warning"] = ("this verifier accepted signed policies before (%s) and has no policy-signing key now: "
