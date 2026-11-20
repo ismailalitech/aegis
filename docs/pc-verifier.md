@@ -171,7 +171,10 @@ checkout.
     .venv/bin/python gateway/aegisd/fleet.py check ~/.config/aegis/fleet.pc.json --platform linux
 
 The endpoint keys are the gateway's pins (public keys), so the host trusts the same keys the gateway enrolled; do not
-re-enrol them from the network (`enroll-pq` is trust on first use). If the measurements in the example are stale
+re-enrol them from the network (`enroll-pq` is trust on first use). With endorsed enrolment
+([enrolment.md](enrolment.md)) no key file is copied at all: list the endorser in the policy's `"endorsers"`, run
+`fleet.py enroll-endorsed` on the devices' records, and set `"endorsement": "required"`; the rules are the same on
+both platforms. If the measurements in the example are stale
 (new firmware), copy the `allowed` lists from the gateway's policy. `check` must print `ok` for all three and
 `observe-only`.
 

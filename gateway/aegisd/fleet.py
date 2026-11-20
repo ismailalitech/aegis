@@ -48,6 +48,16 @@ journal and the state file, with a line at warning priority when it is issued an
 transcript says is that one boot of the code holding the endpoint's key signed the appraised quote and then made the
 session's key; it does not stop code that holds the key and lies, which on this bench anyone who can flash the
 endpoint can build (docs/architecture.md says what would).
+
+Endorsed enrolment (common/endorsement.py, docs/enrolment.md): an entry with "endorsement": "required" is admitted
+only if a record signed by one of the policy's trusted endorsers ("endorsers": [{"name", "pk_file", "pk_sha256"}])
+names this entry's device, family and exactly the pinned key, and the quote's components are the endorsed ones.
+Without such a record, with a record for another key (a substituted key file), from an endorser the policy does not
+list, altered, or expired, the endpoint is refused without being contacted. `fleet.py enroll-endorsed POLICY RECORD...`
+puts a record and its key into the policy's directory, checked first and in an order that leaves nothing trusted if
+it stops half way. Without the key in the entry the pinned key is whatever was first put there (`enroll-pq`, trust on
+first use); every such endpoint is marked "trust-on-first-use" in its verdict and its journal line, with a line at
+warning priority when the loop starts.
 """
 import argparse
 import json
@@ -87,6 +97,10 @@ CRED_LIFETIME_S = 3600
 TRANSCRIPTS = ("v2",)               # policy key "transcript": the bound exchange is required
 UNBOUND_NOTE = ('unbound: the session is not tied to the attestation (no "transcript": "v2" in the policy entry); '
                 "weaker")
+ENDORSEMENTS = ("required",)        # policy key "endorsement": the pinned key must be endorsed (common/endorsement.py)
+ENDORSED, TOFU, NOT_ENDORSED = "endorsed", "trust-on-first-use", "refused"     # verdict["enrolment"]
+TOFU_NOTE = ('trust on first use: nothing shows that the pinned key belongs to a genuine device (no "endorsement": '
+             '"required" in the policy entry); weaker')
 
 
 class TranscriptRefused(ValueError):
@@ -190,7 +204,8 @@ def _sha3(*parts):
     return h.digest()
 
 
-def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.0, quote=None):
+def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.0, quote=None, endorsers=None,
+              expect_pk_sha256=None):
     """ML-KEM-768 provisioning of an admitted aegis-pq endpoint.
 
     Without "transcript" in the entry (the first version; nothing ties it to the attestation):
@@ -210,6 +225,10 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
     2. the credential names T2 ("transcript_sha3_256") next to the ciphertext and the key;
     3. the tag must equal SHA3-256("aegis-confirm-v2" || K || T3), T3 = H(kem-fin || T2 || SHA3(ct) || SHA3(cred)).
     Both sides then hold session = SHA3-256("aegis-session-v2" || K || T3).
+
+    The endpoint's key is the pinned one, and for an entry with "endorsement": "required" only if it is endorsed
+    (device_key(); endorsers is the policy's "endorsers"). expect_pk_sha256, if given, is the key this cycle's quote
+    was verified with: a key file that changed since is refused before anything is sent.
     Returns a dict; raises ValueError on any failure."""
     import hmac
     import mldsa
@@ -220,8 +239,9 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
     bound = ep.get("transcript") is not None
     if bound and ep["transcript"] not in TRANSCRIPTS:
         raise ValueError("unknown transcript %r" % (ep["transcript"],))
-    with open(_path(base_dir, ep["pq_pub_file"])) as f:
-        pk = bytes.fromhex(f.read().strip())
+    pk, _ = device_key(ep, base_dir, endorsers)
+    if expect_pk_sha256 is not None and __import__("hashlib").sha256(pk).hexdigest() != expect_pk_sha256:
+        raise ValueError("the pinned key changed since this cycle's quote was verified")
     if bound:
         try:
             challenge, tok_hash = bytes.fromhex(quote["challenge"]), bytes.fromhex(quote["token_sha3_256"])
@@ -285,13 +305,13 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
             "quote": {"challenge": challenge.hex(), "token_sha3_256": tok_hash.hex()} if bound else None}
 
 
-def quote_to_continue(ep, base_dir, ecdsa_verify=None, timeout=10.0):
+def quote_to_continue(ep, base_dir, ecdsa_verify=None, timeout=10.0, endorsers=None):
     """For tools that run provision() outside the loop (tests/board): the quote a session of this entry must
     continue, from an attestation made now, or None where the entry does not ask for the transcript. As in the loop,
     only an admitted endpoint gets a session: ValueError with the reasons otherwise."""
     if ep.get("transcript") is None:
         return None
-    v = attest(ep, ecdsa_verify or psa_token.verify_with_openssl_cli, base_dir, timeout)
+    v = attest(ep, ecdsa_verify or psa_token.verify_with_openssl_cli, base_dir, timeout, endorsers)
     if not v["admitted"]:
         raise ValueError("not admitted, so no session: %s" % "; ".join(v["reasons"]))
     return v["quote"]
@@ -362,8 +382,152 @@ def check_components(claims, allowed):
     return reasons
 
 
+def endorsed_components(claims, endorsed):
+    """Reasons a quote's components are not exactly the ones its endorsement names (common/endorsement.py)."""
+    import endorsement
+
+    def text(v):
+        return v.hex() if isinstance(v, bytes) else v
+    comps = claims.get("sw_components", [])
+    if not isinstance(comps, list):
+        return ["endorsement: sw_components is not a list"]
+    reported = [(c.get("measurement_type"), text(c.get("measurement_value")),
+                 text(c["signer_id"]) if "signer_id" in c else None) for c in comps if isinstance(c, dict)]
+    return ["endorsement: %s" % r for r in endorsement.measurement_reasons(reported, endorsed)]
+
+
 def _path(base_dir, p):
     return p if os.path.isabs(p) else os.path.join(base_dir, p)
+
+
+def endorsement_file(ep, base_dir):
+    """Where an entry's endorsement record lives: "endorsement_file", else endorsements/<name>.json beside the
+    policy."""
+    return _path(base_dir, ep.get("endorsement_file") or os.path.join("endorsements", "%s.json" % ep["name"]))
+
+
+def _endorsed_family(ep):
+    kind = ep.get("kind", "psa")
+    return kind, (ep.get("profile") if kind in PLAIN_KINDS else None)
+
+
+def device_key(ep, base_dir, endorsers=None, now=None):
+    """The ML-DSA-65 key this verifier trusts for an entry, and how it came to be trusted: (public key, None) for a
+    key pinned by trust on first use, (public key, endorsement) for an entry with "endorsement": "required", where
+    endorsement is the record's body with "endorser_name" (the policy's name for the signing key) and "record_sha256".
+    Everything that verifies something with the pinned key takes it from here.
+
+    Raises endorsement.Refused (a ValueError) if the entry requires an endorsement and there is no record, or the
+    record is not signed by a trusted endorser of the policy (endorsers: the policy's "endorsers"), or it names
+    another device, family or key than the entry and the pinned key file, or it has expired. OSError or ValueError if
+    the key file itself is missing or not hex."""
+    mode = ep.get("endorsement")
+    try:
+        with open(_path(base_dir, ep["pq_pub_file"])) as f:
+            pk = bytes.fromhex(f.read().strip())
+    except FileNotFoundError:
+        if mode is None:
+            raise
+        import endorsement
+        raise endorsement.Refused("no key is pinned for %s (%s): enrol the device with `fleet.py enroll-endorsed`"
+                                  % (ep["name"], _path(base_dir, ep["pq_pub_file"]))) from None
+    if mode is None:
+        return pk, None
+    import endorsement
+    if mode not in ENDORSEMENTS:
+        raise endorsement.Refused("unknown endorsement %r" % (mode,))
+    trust = endorsement.trusted(endorsers, base_dir)
+    if not trust:
+        raise endorsement.Refused('the policy lists no trusted endorsers ("endorsers")')
+    rec = endorsement.load(endorsement_file(ep, base_dir))
+    kind, profile = _endorsed_family(ep)
+    body = endorsement.check(rec, trust, ep["name"], kind, profile, pk, time.time() if now is None else now)
+    return pk, dict(body, record_sha256=endorsement.record_sha256(rec))
+
+
+def enrolment_note(ep, base_dir, endorsers=None):
+    """For `check` and the start of `watch`: (how an entry's key is trusted, whether that is a refusal)."""
+    if ep.get("endorsement") is None:
+        return "enrolment: %s" % TOFU_NOTE, False
+    try:
+        _, e = device_key(ep, base_dir, endorsers)
+    except (OSError, ValueError) as err:
+        return "enrolment: endorsement REFUSED: %s" % err, True
+    return "enrolment: endorsed by %s (record %s..., device key %s..., device state %s%s)" % (
+        e["endorser_name"], e["record_sha256"][:12], e["device_pk_sha256"][:16], e["device_state"],
+        ", expires %s" % time.strftime("%Y-%m-%d", time.gmtime(e["expires"])) if "expires" in e else ""), False
+
+
+def install_endorsement(policy, base_dir, record_path, force=False):
+    """Enrol one device from its endorsement record (the file provision/aegis_provision.py wrote): put the record and
+    the device key it carries where the policy's entry for that device looks for them. Returns (name, body).
+
+    Checked before anything is written: the record is signed by a trusted endorser of this policy and names an entry
+    of it, that entry's family, and the key it carries. A different key already pinned for the entry is kept unless
+    force (as enroll-pq does). Then both files are written under temporary names, read back and checked once more as
+    the loop will check them, and renamed into place: the record first, the key last. If anything fails, what was
+    there before is put back; if the process dies between the two renames, the entry has a record without its key
+    (or with the old key, which the record does not name), and nothing is trusted that was not before. Raises
+    endorsement.Refused or OSError; nothing is trusted then."""
+    import endorsement
+    rec = endorsement.load(record_path)
+    if "device_pk" not in rec:
+        raise endorsement.Refused("the record does not carry the device key (device_pk)")
+    pk = bytes.fromhex(rec["device_pk"])
+    name = rec["body"]["device"]
+    eps = [e for e in policy.get("endpoints", []) if isinstance(e, dict) and e.get("name") == name]
+    if len(eps) != 1:
+        raise endorsement.Refused("the policy has %s entry named %r" % ("no" if not eps else "more than one", name[:40]))
+    ep = eps[0]
+    errors = policy_errors(ep)
+    if errors:
+        raise endorsement.Refused("; ".join(errors))
+    if ep.get("kind") not in PQ_KINDS:
+        raise endorsement.Refused("entry %s is kind %s, which has no post-quantum key to endorse" % (name, ep.get("kind", "psa")))
+    trust = endorsement.trusted(policy.get("endorsers"), base_dir)
+    if not trust:
+        raise endorsement.Refused('the policy lists no trusted endorsers ("endorsers")')
+    kind, profile = _endorsed_family(ep)
+    endorsement.check(rec, trust, name, kind, profile, pk, time.time())
+    key_path, rec_path = _path(base_dir, ep["pq_pub_file"]), endorsement_file(ep, base_dir)
+
+    def previous(path):
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except FileNotFoundError:
+            return None
+    old_key, old_rec = previous(key_path), previous(rec_path)
+    if old_key is not None and old_key.strip().lower() != rec["device_pk"].encode() and not force:
+        raise endorsement.Refused("another key is already pinned for %s in %s (--force replaces it)" % (name, key_path))
+    tmp_rec = tmp_key = None
+    done = []
+    try:
+        tmp_rec = endorsement.stage(rec_path, endorsement.dumps(rec))
+        tmp_key = endorsement.stage(key_path, rec["device_pk"].encode() + b"\n")
+        # what is on the disk now is what the loop will read: check that, not the copy in memory
+        with open(tmp_key) as f:
+            staged_pk = bytes.fromhex(f.read().strip())
+        body = endorsement.check(endorsement.load(tmp_rec), trust, name, kind, profile, staged_pk, time.time())
+        endorsement.commit(tmp_rec, rec_path)
+        done.append((rec_path, old_rec))
+        endorsement.commit(tmp_key, key_path)
+        done.append((key_path, old_key))
+    except BaseException:
+        for tmp in (tmp_rec, tmp_key):
+            if tmp:
+                endorsement.discard(tmp)
+        if len(done) == 1:          # the record went in and the key did not: put back what was there
+            path, old = done[0]
+            try:
+                if old is None:
+                    os.unlink(path)
+                else:
+                    endorsement.write_atomic(path, old)
+            except OSError:
+                pass                # the record stays without its key: still nothing trusted
+        raise
+    return name, body
 
 
 def policy_errors(ep):
@@ -398,6 +562,15 @@ def policy_errors(ep):
         errors.append("policy: unknown transcript %r (known: %s)" % (tr, ", ".join(TRANSCRIPTS)))
     elif tr is not None and kind not in PQ_KINDS:
         errors.append("policy: transcript %s needs a post-quantum kind (%s)" % (tr, ", ".join(PQ_KINDS)))
+    en = ep.get("endorsement")
+    if en is not None and en not in ENDORSEMENTS:
+        # a value this verifier does not know must not fall back to trust on first use
+        errors.append("policy: unknown endorsement %r (known: %s)" % (en, ", ".join(ENDORSEMENTS)))
+    elif en is not None and kind not in PQ_KINDS:
+        errors.append("policy: endorsement %s needs a post-quantum kind (%s)" % (en, ", ".join(PQ_KINDS)))
+    elif en is not None and ep.get("profile") in DEV_PROFILES:
+        errors.append("policy: profile %s has one key for every chip, so no endorsement can tie it to one device"
+                      % ep["profile"])
     return errors
 
 
@@ -417,7 +590,7 @@ def binding_note(ep):
     return "session %s" % UNBOUND_NOTE
 
 
-def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
+def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None):
     """kind "psa": PSA token signed by the endpoint's IAK (ES256).
     kind "aegis-pq": the same token plus an ML-DSA-65 signature by the endpoint's enrolled
     post-quantum key; the ML-DSA check is mandatory, the ES256 check runs only if an
@@ -430,13 +603,31 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
     "device-key" (the key proves the chip, not the firmware). Profile aegis-rw612-tfm-v1: the key and the measurements
     (SPE, NSPE) are in a TF-M secure partition that the non-secure image cannot reach, "trust": "trustzone".
     Plain-claims kinds must pin the profile ("profile": ...); see policy_errors() for what is refused up front.
-    Never raises for anything the endpoint sends."""
+    An entry with "endorsement": "required" is refused, without being contacted, unless device_key() finds its pinned
+    key endorsed by one of endorsers (the policy's "endorsers"); its quote must then report exactly the endorsed
+    components, besides passing the policy's "allowed". verdict["enrolment"] says which way the key is trusted.
+    Never raises for anything the endpoint sends, nor for anything an endorsement record contains."""
     kind = ep.get("kind", "psa")
     verdict = {"endpoint": ep["name"], "kind": kind, "time": int(time.time()), "admitted": False, "reasons": []}
     errors = policy_errors(ep)
     if errors:
         verdict["reasons"] += errors
         return verdict
+    pk = endorsed = None
+    if kind in PQ_KINDS and ep.get("endorsement") is not None:
+        try:
+            pk, endorsed = device_key(ep, base_dir, endorsers)
+        except Exception as e:  # noqa: BLE001 - Refused, a missing key file, or whatever a hostile record provokes
+            verdict["enrolment"] = NOT_ENDORSED
+            verdict["reasons"].append("endorsement required: %s" % (e if isinstance(e, (ValueError, OSError)) else
+                                                                    "%s: %s" % (type(e).__name__, e)))
+            return verdict
+        verdict["enrolment"] = ENDORSED
+        verdict["endorsement"] = {k: endorsed[k] for k in ("endorser_name", "endorser_pk_sha256", "record_sha256",
+                                                           "device_pk_sha256", "device_state", "issued", "expires",
+                                                           "serial") if k in endorsed}
+    elif kind in PQ_KINDS:
+        verdict["enrolment"] = TOFU
     challenge = secrets.token_bytes(32)
     t0 = time.monotonic()
     sig = None
@@ -453,12 +644,14 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
     try:
         if kind in PQ_KINDS:
             import mldsa
-            with open(_path(base_dir, ep["pq_pub_file"])) as f:
-                pk = bytes.fromhex(f.read().strip())
+            if pk is None:
+                pk, _ = device_key(ep, base_dir)
             if not mldsa.verify(pk, PQ_LABEL, tok, sig):
-                verdict["reasons"].append("ML-DSA-65 quote signature invalid")
+                verdict["reasons"].append("ML-DSA-65 quote signature invalid" + (
+                    " (the device that answered does not hold the endorsed key)" if endorsed else ""))
                 return verdict
             verdict["pq_signature"] = "ML-DSA-65 valid"
+            verdict["device_pk_sha256"] = __import__("hashlib").sha256(pk).hexdigest()
             # the quote as signed, for the transcript a session of this cycle must continue (provision()); both
             # values went over the network in the clear
             verdict["quote"] = {"challenge": challenge.hex(), "token_sha3_256": _sha3(tok).hex()}
@@ -494,6 +687,8 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
         if claims.get("challenge") != challenge:
             verdict["reasons"].append("challenge mismatch (replayed or stale token)")
         verdict["reasons"] += check_components(claims, ep.get("allowed", []))
+        if endorsed:
+            verdict["reasons"] += endorsed_components(claims, endorsed["measurements"])
         s = psa_token.summary(claims)
         verdict["measurements"] = {c.get("measurement_type"): c.get("measurement_value") for c in s["sw_components"]}
         verdict["instance_id"] = s.get("instance_id")
@@ -580,6 +775,11 @@ def journal_line(v):
                               (" (%s trust)" % v["trust"] if v.get("trust") else "") + v.get("enforce_note", ""),
                               "; ".join(v["reasons"]),
                               (" [credential: %s]" % v["credential"]) if v.get("credential") else "")
+    if v["admitted"] and v.get("enrolment") == ENDORSED:
+        line += " [endorsed by %s]" % v.get("endorsement", {}).get("endorser_name", "?")
+    elif v["admitted"] and v.get("enrolment") == TOFU:
+        # every cycle's line says so in three words; the sentence is in the line the loop prints when it starts
+        line += " [trust on first use]"
     if v.get("enforcement") == "FAILED":
         return line, LOG_ERR
     if v["admitted"] and v.get("warning"):
@@ -662,7 +862,7 @@ def _unbound_tail(tr):
     return "" if tr else " [%s]" % UNBOUND_NOTE
 
 
-def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=False, requote=None):
+def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=False, requote=None, endorsers=None):
     """Zero trust: admitted aegis-pq endpoints with "provision": true get (or keep) a fresh
     credential; quarantined ones lose it. Endpoints that would not accept this verifier's credential
     (issuer_refusal) are left alone: no KEM exchange, no heartbeat.
@@ -723,9 +923,11 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
             stored_usable = m["body"]["expires"] > time.time()
     sk, gid = load_gateway_identity(state)
     second = False
+    # the session goes to the key this cycle's quote was verified with, endorsed if the entry asks for that
+    key = {"endorsers": endorsers, "expect_pk_sha256": verdict.get("device_pk_sha256")}
     try:
         try:
-            r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}), quote=verdict.get("quote"))
+            r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}), quote=verdict.get("quote"), **key)
         except TranscriptRefused as first:
             again = requote() if requote else None
             if again is not None and not again.get("admitted"):
@@ -744,7 +946,7 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
                         first, "other measurements" if again.get("quote") else
                         "; ".join(again.get("reasons", [])) or "no quote")) from None
                 raise
-            r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}), quote=again["quote"])
+            r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}), quote=again["quote"], **key)
             verdict["quote"], second = again["quote"], True
     except TranscriptRefused as e:
         # The endpoint did not show that the code appraised in this cycle holds the new session. A stored session that
@@ -784,7 +986,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
     ttl = admit_ttl(policy, interval)
     for ep in policy["endpoints"]:
         try:
-            v = attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)))
+            v = attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)), policy.get("endorsers"))
         except Exception as e:  # noqa: BLE001 - one endpoint must never stop the loop for the others
             v = {"endpoint": ep.get("name", "?"), "kind": ep.get("kind", "psa"), "time": int(time.time()),
                  "admitted": False, "reasons": ["attestation error: %s: %s" % (type(e).__name__, e)]}
@@ -800,12 +1002,14 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
                 import random
                 time.sleep(random.uniform(*BUSY_BACKOFF_S))   # as for a busy endpoint: do not collide again
                 try:
-                    return attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)))
+                    return attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)),
+                                  policy.get("endorsers"))
                 except Exception as e:  # noqa: BLE001 - as for the first quote of the cycle
                     return {"admitted": False, "reasons": ["attestation error: %s: %s" % (type(e).__name__, e)]}
             admitted = v["admitted"]
             try:
-                cs = credential_step(ep, v, base_dir, state=state, require_pin=require_pin, requote=requote)
+                cs = credential_step(ep, v, base_dir, state=state, require_pin=require_pin, requote=requote,
+                                     endorsers=policy.get("endorsers"))
             except Exception as e:  # noqa: BLE001
                 cs = "credential step failed: %s: %s" % (type(e).__name__, e)
             if cs:
@@ -827,9 +1031,11 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Aegis fleet verifier")
-    ap.add_argument("cmd", choices=["once", "watch", "enroll-pq", "session", "check"])
-    ap.add_argument("--force", action="store_true", help="enroll-pq: replace keys that are already pinned")
+    ap.add_argument("cmd", choices=["once", "watch", "enroll-pq", "enroll-endorsed", "session", "check"])
+    ap.add_argument("--force", action="store_true",
+                    help="enroll-pq, enroll-endorsed: replace keys that are already pinned")
     ap.add_argument("policy")
+    ap.add_argument("records", nargs="*", help="enroll-endorsed: endorsement records (provision/aegis_provision.py)")
     ap.add_argument("--interval", type=float, default=30)
     ap.add_argument("--platform", choices=["auto", "polarfire", "linux"], default="auto",
                     help="polarfire: the gateway; linux: an ordinary Linux host (observe-only, credentials only where "
@@ -852,11 +1058,37 @@ def main(argv=None):
     on_host = platform == "linux"
     enforce_hooks = not on_host or a.enforce
     ev = psa_token.verify_with_openssl_cli if a.verifier == "openssl" else psa_token.verify_with_cryptography
+    if a.records and a.cmd != "enroll-endorsed":
+        ap.error("only enroll-endorsed takes record files")
+    if a.cmd == "enroll-endorsed":
+        # Endorsed enrolment (docs/enrolment.md): each record is checked against this policy's trusted endorsers and
+        # the entry it names, then its record and key are committed so that a failure leaves nothing trusted.
+        if not a.records:
+            ap.error("enroll-endorsed needs at least one endorsement record")
+        bad = 0
+        for path in a.records:
+            try:
+                name, body = install_endorsement(policy, base, path, a.force)
+            except (OSError, ValueError) as e:
+                bad += 1
+                print("REFUSED %s: %s (nothing was enrolled from it)" % (path, e))
+                continue
+            ep = next(e for e in policy["endpoints"] if e.get("name") == name)
+            print("enrolled %s: ML-DSA-65 key sha256 %s, endorsed by %s -> %s, %s%s" % (
+                name, body["device_pk_sha256"], body["endorser_name"], _path(base, ep["pq_pub_file"]),
+                endorsement_file(ep, base),
+                "" if ep.get("endorsement") in ENDORSEMENTS else
+                ' (the entry does not say "endorsement": "required" yet: the record is not checked by the loop)'))
+        return 1 if bad else 0
     if a.cmd == "enroll-pq":
         # Trust on first use: fetch the ML-DSA-65 key of each PQ endpoint that has none pinned yet. An existing pin is
         # never replaced from the network (the reply comes through the endpoint's untrusted side); --force re-enrols.
         for ep in policy["endpoints"]:
             if ep.get("kind") not in PQ_KINDS:
+                continue
+            if ep.get("endorsement") is not None:
+                print("skipped %s: its entry requires an endorsement, so its key is not taken from the network "
+                      "(provision/aegis_provision.py endorse, then fleet.py enroll-endorsed)" % ep["name"])
                 continue
             path = _path(base, ep["pq_pub_file"])
             if os.path.exists(path) and not a.force:
@@ -865,7 +1097,8 @@ def main(argv=None):
             pk = request_pq_key(ep["host"], int(ep["port"]))
             with open(path, "w") as f:
                 f.write(pk.hex() + "\n")
-            print("enrolled %s: ML-DSA-65 key sha256 %s -> %s" % (ep["name"], __import__("hashlib").sha256(pk).hexdigest(), path))
+            print("enrolled %s by trust on first use: ML-DSA-65 key sha256 %s -> %s"
+                  % (ep["name"], __import__("hashlib").sha256(pk).hexdigest(), path))
         return 0
     if a.cmd == "session":
         # compare this verifier's stored credential/session with what the endpoint's secure side reports
@@ -890,6 +1123,10 @@ def main(argv=None):
             bad += bool(errs)
             print("%s %s%s" % (ep.get("name"), "REFUSED: " + "; ".join(errs) if errs else "ok",
                                "".join(" " + w for w in warns)))
+            if not errs and ep.get("kind") in PQ_KINDS:
+                note, refused = enrolment_note(ep, base, policy.get("endorsers"))
+                bad += refused
+                print("  %s" % note)
             if not errs and ep.get("provision") and not a.no_credentials:
                 refusal = issuer_refusal(ep, state_dir, on_host)
                 print("  credentials: %s" % (refusal or "issued by this verifier"))
@@ -921,6 +1158,9 @@ def main(argv=None):
             if ep.get("provision") and ep.get("transcript") not in TRANSCRIPTS and not policy_errors(ep) \
                     and not issuer_refusal(ep, state_dir, on_host):
                 log("aegis-fleet: %s: %s" % (ep.get("name"), binding_note(ep)), LOG_WARNING)
+    for ep in policy.get("endpoints", []):
+        if ep.get("kind") in PQ_KINDS and ep.get("endorsement") is None and not policy_errors(ep):
+            log("aegis-fleet: %s: enrolment: %s" % (ep.get("name"), TOFU_NOTE), LOG_WARNING)
     while True:
         try:  # reload every cycle, so policy updates apply without a restart
             with open(a.policy) as f:

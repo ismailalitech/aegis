@@ -35,7 +35,11 @@ ap.add_argument("--lifetime", type=int, default=32, help="seconds; the endpoint 
 ap.add_argument("--state", default=fleet.GATEWAY_STATE)
 a = ap.parse_args()
 with open(a.policy) as f:
-    ep = next(e for e in json.load(f)["endpoints"] if e["name"] == a.endpoint)
+    policy = json.load(f)
+ep = next(e for e in policy["endpoints"] if e["name"] == a.endpoint)
+# an entry with "endorsement": "required" is checked against the policy's trusted endorsers (docs/enrolment.md); a
+# policy without them is passed on as before, so the check also runs against a fleet.py from before endorsements
+TRUST = {"endorsers": policy["endorsers"]} if policy.get("endorsers") else {}
 base = os.path.dirname(os.path.abspath(a.policy))
 sk, gid = fleet.load_gateway_identity(a.state)
 limit = a.lifetime + a.lifetime // 16
@@ -54,8 +58,8 @@ res = {"endpoint": a.endpoint, "lifetime_s": a.lifetime, "ends_after_s": limit}
 fleet.CRED_LIFETIME_S = a.lifetime
 # with "transcript": "v2" in the entry, the session continues a quote taken now (docs/architecture.md); a gateway
 # whose fleet.py is from before the transcript has neither the key nor the function
-quote = {"quote": fleet.quote_to_continue(ep, base, timeout=40)} if hasattr(fleet, "quote_to_continue") else {}
-r = fleet.provision(ep, base, sk, gid, {}, timeout=40, **quote)
+quote = {"quote": fleet.quote_to_continue(ep, base, timeout=40, **TRUST)} if hasattr(fleet, "quote_to_continue") else {}
+r = fleet.provision(ep, base, sk, gid, {}, timeout=40, **quote, **TRUST)
 t0 = time.monotonic()
 s1, _ = fleet.heartbeat(ep, r["session_key"])
 t1 = time.monotonic()

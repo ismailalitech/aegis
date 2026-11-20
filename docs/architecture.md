@@ -126,8 +126,9 @@ exchange may continue live in the context, which `aegis_prover_init` wipes at ev
 
 **What it does not change.** The protocol, the limits of the transcript above (an image that holds the key and
 lies; a key that depends on the measured code is the remedy, and belongs in the platform's identity functions),
-and the trust each endpoint claims. Endorsed enrolment and an EAT/COSE encoding are later work; `sdk/README.md`
-names the functions they attach to.
+and the trust each endpoint claims. Endorsed enrolment needed nothing from the core (it uses `PQKEY` and `PQCHAL`;
+[enrolment.md](enrolment.md)); an endorsement carried by the device and an EAT/COSE encoding are later work, and
+`sdk/README.md` names the functions they attach to.
 
 What was built from this source (after the review of 20 November 2026; the builds before its fixes were `-sdk`,
 SPE b876213a, and RW612 0.3.1, SPE b48d2ecf):
@@ -149,7 +150,9 @@ SPE b876213a, and RW612 0.3.1, SPE b48d2ecf):
 | Measurements | STM32: TF-M BL2 (MCUboot). RW612: the secure partition hashes both flash partitions whole before non-secure code runs | STM32 images verified with TF-M development keys; RW612 secure image not verified at boot |
 | Gateway identity key | `/var/lib/aegis/identity.sk` (0600) | software key: the MPFS095T (non-S) has no key-holding data-security services |
 | Gateway key at the endpoint | pinned in each endpoint's secure image at build time | as strong as the secure image |
-| Policy | gateway file system | edited by the operator; `enroll-pq` keeps existing pins |
+| Policy | gateway file system | edited by the operator; `enroll-pq` keeps existing pins. Whoever can write it decides which endorsers are trusted and which entries must be endorsed |
+| Endorser key (ML-DSA-65) | the bench PC, `~/.local/state/aegis-endorser`: sealed to its TPM, else a 0600 file | signs endorsement records ([enrolment.md](enrolment.md)); whoever can use it can make any key a trusted device key at each verifier that lists it |
+| Endorsement record per device | `endorsements/<name>.json` beside the policy | for an entry with `"endorsement": "required"`, the only way a device key is trusted: signed by a listed endorser, naming the device, its family, the key and the components appraised at the bench. As good as the cable the device was on when it was endorsed; the devices are in their development state |
 
 ## Protocols (all over TCP, one request per connection, hex lines on the endpoint side)
 

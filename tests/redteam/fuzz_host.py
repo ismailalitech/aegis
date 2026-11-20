@@ -13,6 +13,11 @@
      pieces which are not the transcript of the quote the verifier appraised (a KEM key signed the old way, signed
      over another challenge, another token, another key or another step, under the other label, or a random line)
      is never given a credential: provision() stops before it sends one, with ValueError and nothing else.
+  5. endorsed enrolment (policy "endorsement": "required", docs/enrolment.md): a record file that is not exactly what
+     a trusted endorser signed for this device, family and key (mutated bytes, edited claims with the old signature
+     or a new one by a key the policy does not list, the endorser's own signature under another label or for another
+     device, family, key or an expiry in the past, another key pinned, random JSON) never makes a key trusted:
+     device_key() raises endorsement.Refused and nothing else, attest() refuses without contacting the endpoint.
 
   fuzz_host.py [iterations]     prints a JSON summary, exit 0 only if no property broke
 """
@@ -349,7 +354,147 @@ for i in range(min(N, 220)):
 transcript_result = {"pieces_that_are_not_the_transcript": transcript_tried, "kinds": len(KINDS),
                      "given_a_credential": transcript_accepted, "raised_other_than_ValueError": transcript_raised}
 
+# ---- 5. endorsed enrolment: record files that are not a trusted endorser's statement about this key ----
+import endorsement  # noqa: E402
+import wire  # noqa: E402
+
+end_dir = tempfile.mkdtemp()
+e_pk, e_sk = mldsa.keypair()            # the endorser the policy trusts
+r_pk, r_sk = mldsa.keypair()            # one it does not
+with open(os.path.join(end_dir, "endorser.pub"), "w") as f:
+    f.write(e_pk.hex())
+with open(os.path.join(end_dir, "dev.pub"), "w") as f:
+    f.write(pq_pk.hex())
+trusted_list = [{"name": "bench", "pk_file": "endorser.pub", "pk_sha256": endorsement.pk_sha256(e_pk)}]
+end_ep = {"name": "dev", "kind": "aegis-pq", "pq_pub_file": "dev.pub", "endorsement": "required",
+          "endorsement_file": "dev.json", "iak_pub_pem": pemf, "allowed": allowed, "host": "127.0.0.1"}
+good_body = {"v": 1, "type": "endorsement", "device": "dev", "kind": "aegis-pq", "device_pk_alg": "ML-DSA-65",
+             "device_pk_sha256": endorsement.pk_sha256(pq_pk),
+             "measurements": [{"type": "NSPE", "measurement_value": tf.GOOD_NS, "signer_id": tf.SIGNER},
+                              {"type": "SPE", "measurement_value": tf.GOOD_S, "signer_id": tf.SIGNER}],
+             "evidence": {"challenge": "11" * 32, "token_sha3_256": "22" * 32}, "device_state": "development",
+             "endorser": "bench", "endorser_pk_sha256": endorsement.pk_sha256(e_pk), "issued": int(time.time()) - 10}
+good_rec = endorsement.sign(good_body, e_sk, pq_pk)
+good_bytes = endorsement.dumps(good_rec)
+rec_file = os.path.join(end_dir, "dev.json")
+
+
+def rand_json(depth=0):
+    r = R.randrange(8 if depth < 4 else 5)
+    if r == 0:
+        return R.randrange(-2 ** 40, 2 ** 40)
+    if r == 1:
+        return "".join(R.choice("0123456789abcdef") for _ in range(R.choice([0, 2, 64, R.randrange(80)])))
+    if r == 2:
+        return R.choice([True, False, None, 1.5, "dev", "aegis-pq", "endorsement", endorsement.FORMAT])
+    if r in (3, 4):
+        return R.choice([good_body["device_pk_sha256"], good_body["endorser_pk_sha256"], good_rec["sig"], 1, "x"])
+    if r == 5:
+        return [rand_json(depth + 1) for _ in range(R.randrange(4))]
+    return {R.choice(sorted(endorsement._BODY_KEYS | endorsement._RECORD_KEYS)): rand_json(depth + 1)
+            for _ in range(R.randrange(6))}
+
+
+def hostile_record(kind):
+    """(file bytes, the key file's content) for one record that must not make the pinned key trusted, except where
+    the bytes still decode to exactly what the endorser signed (a mutation in white space, say)."""
+    body, key, sk, label = json.loads(json.dumps(good_body)), pq_pk, None, endorsement.LABEL
+    if kind == "bytes":
+        return mutate(good_bytes), key
+    if kind == "random-json":
+        return json.dumps(rand_json()).encode(), key
+    if kind == "another-key-pinned":            # the record is the endorser's; the key file is someone else's
+        return good_bytes, R.choice([r_pk, tf.PQ_KEYS[1][0], mutate(pq_pk)])
+    if kind in ("edited", "edited-resigned", "rogue"):   # claims changed: old signature, or a key the policy lacks
+        k = R.choice(sorted(body))
+        if R.random() < 0.7:
+            body[k] = R.choice([rand_json(2), "x", 0])
+        else:
+            del body[k]
+        if body == good_body:
+            body["notes"] = "edited"
+        if kind != "edited":
+            sk = r_sk
+        if kind == "rogue":                      # ... that says so itself
+            body["endorser_pk_sha256"] = endorsement.pk_sha256(r_pk)
+    elif kind == "other-label":                  # the endorser's key, signing these bytes as something else
+        sk, label = e_sk, R.choice([fleet.CRED_LABEL, fleet.PQ_LABEL, wire.LABEL_IDENTITY, wire.LABEL_QUOTE,
+                                    endorsement.ENDORSER_LABEL, transcript.KEM_INIT_LABEL, b"aegis-endorsement-v2"])
+    elif kind == "endorsed-for-something-else":  # a genuine record of the trusted endorser: not for this entry
+        sk = e_sk
+        which = R.randrange(5)
+        if which == 0:
+            body["device"] = R.choice(["dev2", "Dev", "dev ", "de"])
+        elif which == 1:
+            body["kind"] = R.choice(["aegis-device", "aegis-linux", "aegis-tee"])
+        elif which == 2:
+            body["profile"] = fleet.DEVICE_TFM_PROFILE
+        elif which == 3:
+            body["device_pk_sha256"] = endorsement.pk_sha256(R.choice([r_pk, tf.PQ_KEYS[1][0]]))
+        else:
+            body["expires"] = body["issued"] + R.randrange(1, 10)
+    rec = dict(good_rec, body=body)
+    if sk is not None:
+        try:
+            rec["sig"] = mldsa.sign(sk, label, wire.canonical(body)).hex()
+        except (TypeError, ValueError):
+            pass
+    return json.dumps(rec).encode(), key
+
+
+END_KINDS = ("bytes", "bytes", "bytes", "edited", "edited-resigned", "rogue", "other-label",
+             "endorsed-for-something-else", "another-key-pinned", "random-json")
+end_tried = end_trusted = end_raised = end_same = end_admitted = end_contacted = 0
+with open(rec_file, "wb") as f:
+    f.write(good_bytes)
+_, e0 = fleet.device_key(end_ep, end_dir, trusted_list)
+want = dict(good_body, endorser_name="bench", record_sha256=endorsement.record_sha256(good_rec))
+if e0 != want:
+    broken.append("endorsement: the good record was not accepted as signed")
+for i in range(N):
+    kind = END_KINDS[i % len(END_KINDS)]
+    data, key = hostile_record(kind)
+    with open(rec_file, "wb") as f:
+        f.write(data)
+    with open(os.path.join(end_dir, "dev.pub"), "w") as f:
+        f.write(key.hex())
+    end_tried += 1
+    try:
+        pk_used, e = fleet.device_key(end_ep, end_dir, trusted_list)
+        if pk_used == pq_pk and e == want:
+            end_same += 1                       # the bytes still say exactly what the endorser signed, for this key
+        else:
+            end_trusted += 1
+            if len(broken) < 12:
+                broken.append("endorsement: a %s record made a key trusted" % kind)
+    except endorsement.Refused:
+        pass
+    except ValueError:
+        if kind != "another-key-pinned":        # a key file that is not hex at all is refused as such
+            end_raised += 1
+            broken.append("endorsement: device_key() raised a plain ValueError on a %s record" % kind)
+    except Exception as e:  # noqa: BLE001
+        end_raised += 1
+        if len(broken) < 12:
+            broken.append("endorsement: device_key() raised %r on a %s record" % (e, kind))
+    if i % 10 == 0 and kind != "bytes":         # the loop's own view: refused, and the endpoint never asked
+        h = Hostile([b"PQTOKEN 1 00 1 00 END\r\n"])
+        try:
+            v = fleet.attest(dict(end_ep, port=h.port), psa_token.verify_with_cryptography, end_dir, 1, trusted_list)
+            end_admitted += v["admitted"]
+            end_contacted += len(h.replies) != 1
+        except Exception as e:  # noqa: BLE001
+            end_raised += 1
+            broken.append("endorsement: attest() raised %r on a %s record" % (e, kind))
+endorsement_result = {"records_that_are_not_the_endorsement": end_tried, "kinds": len(set(END_KINDS)),
+                      "made_a_key_trusted": end_trusted, "still_exactly_the_signed_record": end_same,
+                      "raised_other_than_Refused": end_raised, "admitted": end_admitted,
+                      "endpoint_contacted": end_contacted}
+if end_admitted or end_contacted:
+    broken.append("endorsement: an endpoint without a valid endorsement was admitted or contacted")
+
 print(json.dumps({"token_parser": token_result, "aegisd_service": service_result,
-                  "hostile_endpoint": endpoint_result, "one_transcript": transcript_result, "broken": broken},
+                  "hostile_endpoint": endpoint_result, "one_transcript": transcript_result,
+                  "endorsed_enrolment": endorsement_result, "broken": broken},
                  indent=1))
 sys.exit(1 if broken else 0)

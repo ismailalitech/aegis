@@ -58,7 +58,9 @@ One decision cycle, every 30 seconds per endpoint (the default `--interval` of `
 ![Challenge, evidence, checks, then ADMITTED with an ML-KEM credential and a session, or QUARANTINED with the reason](docs/diagrams/decision-cycle.svg)
 
 Read `docs/architecture.md` first, then `docs/threat-model.md` for what is **not** claimed. This is
-a development prototype: development signing keys and trust-on-first-use enrolment are stated limits. Network
+a development prototype: development signing keys and devices left in their open state are stated limits, and a
+device key is only as trusted as its enrolment: endorsed at the bench ([`docs/enrolment.md`](docs/enrolment.md)), or,
+for a policy entry that does not require that, trust on first use. Network
 enforcement is not in place on the bench: the nftables ruleset and the one-port VLAN design are tested in network
 namespaces only ([`tests/host/test_enforcement.sh`](tests/host/test_enforcement.sh),
 [`tests/host/test_enforcement_vlan.sh`](tests/host/test_enforcement_vlan.sh);
@@ -83,6 +85,7 @@ attestation without credentials on the current images): `docs/pc-verifier.md`.
 ## Layout
 
 `gateway/` services and policy, `common/` wire formats and crypto glue, `host/` PC tools,
+`provision/` the endorser's tool for enrolling devices ([`docs/enrolment.md`](docs/enrolment.md)),
 `sdk/` the Prover SDK (the protocol core every endpoint builds and its platform layer,
 [`sdk/README.md`](sdk/README.md)), `endpoints/` firmware for the prover nodes, `hw/` fabric RTL, `tests/`, `vectors/` (ACVP
 checksums), `evidence/` (published records of real runs), `docs/` (architecture, threat model,

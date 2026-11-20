@@ -237,11 +237,17 @@ What may be outside: the transport and the buffers the request arrives in and th
 
 Nothing of these is in version 1; the seams are marked in `src/aegis_proto.c`.
 
-- **Endorsed enrolment.** Today a device trusts one pinned verifier key and the verifier learns device keys at
-  enrolment. A manufacturer's endorsement of the identity key, and a credential chain in place of the single pinned
-  key, both end in `check_credential()` and `struct aegis_config.verifier_pk`. An endorsement that must be stored on
-  the device would be the first persistent item: a pair of load and store functions added to
-  `struct aegis_platform`, with a new `AEGIS_SDK_API_VERSION`.
+- **Endorsed enrolment.** The verifier's half exists and needed nothing from the SDK (`docs/enrolment.md`): an
+  endorser at the bench reads the identity key with `PQKEY`, appraises its quotes (`PQCHAL`) and signs a record that
+  names the device, its family and the key; a verifier with `"endorsement": "required"` trusts no other key under
+  that name. Both commands are in API version 1, so every image built from this core can be enrolled as it is, and
+  the record lives at the verifier: the core still has no persistent state. What remains for a later version is the
+  device's half. A device still trusts one pinned verifier key; a credential chain in its place ends in
+  `check_credential()` and `struct aegis_config.verifier_pk`. An endorsement that the device stores and hands out
+  itself (so that a verifier that has never seen it can check it) would be the first persistent item and the first
+  new command: a pair of load and store functions added to `struct aegis_platform` and a line in
+  `aegis_prover_handle_line`, with a new `AEGIS_SDK_API_VERSION`, golden vectors and a fuzz seed family. And an
+  endorsement means more once the identity key depends on the measured code (next item but one).
 - **EAT and COSE.** The claims are encoded in one function, `make_claims()`; a platform can already supply a
   finished token through `evidence`. An EAT profile replaces the first or comes in through the second, and the
   signature framing is in `sign_work()`.

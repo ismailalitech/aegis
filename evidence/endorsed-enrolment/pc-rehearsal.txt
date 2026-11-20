@@ -1,0 +1,109 @@
+# Rehearsal of the runbook in docs/enrolment.md on the PC, 20 November 2026. No board, no gateway:
+# the gateway is a directory, ssh and scp are cp, the loop's cycle is fleet.run_once() printed as journal lines,
+# the devices are simulated (see README.md). Home and scratch paths are written as ~.
+
+## before: the three endpoints enrolled by trust on first use, one cycle of the loop (sessions issued)
+enrolled stm32h573-dk by trust on first use: ML-DSA-65 key sha256 ca25171f77458550869facd293424755d5809888051e
+enrolled stm32h573-dk-2 by trust on first use: ML-DSA-65 key sha256 29d96db0bbcdb3668880d271a935c5abbb4de5f82d
+enrolled frdm-rw612 by trust on first use: ML-DSA-65 key sha256 0ce25883e6ec006055be0947bb90df21e86ebfb294ba11
+13:07:02 stm32h573-dk ADMITTED  [credential: issued session e19707cde804... [unbound: the session is not tied to the attestation (no "transcript": "v2" in the policy entry); weaker]] [trust on first use] WARNING: session issued unbound: the session is not tied to the attestation (no "transcript": "v2" in the policy entry); weaker
+13:07:02 stm32h573-dk-2 ADMITTED  [credential: issued session b6ad6f4e7667... [unbound: the session is not tied to the attestation (no "transcript": "v2" in the policy entry); weaker]] [trust on first use] WARNING: session issued unbound: the session is not tied to the attestation (no "transcript": "v2" in the policy entry); weaker
+13:07:02 frdm-rw612 ADMITTED (device-key trust)  [credential: issued session b266c00fa89c... bound to quote 63b4d67ffa18... (transcript v2)] [trust on first use]
+13:07:02 arduino-uno-legacy QUARANTINED no attestation: [Errno 111] Connection refused
+
+## 1. the endorser
+endorser bench-pc created in ~/rehearsal/endorser, public key sha256 aa7f198b283ebc1f0f676e18db55fa14913d134fcb53e1753b2d45e021e0df79
+key store: software, file mode 0600 (no TPM: --key-store software)
+
+## 2. endorse the three devices
+{'device': 'stm32h573-dk', 'endorsed': True, 'family': 'aegis-pq', 'device_state': 'development', 'elapsed_s': 0.02}
+{'device': 'stm32h573-dk-2', 'endorsed': True, 'family': 'aegis-pq', 'device_state': 'development', 'elapsed_s': 0.02}
+{'device': 'frdm-rw612', 'endorsed': True, 'family': 'aegis-device/aegis-rw612-els-v1', 'device_state': 'development', 'elapsed_s': 0.015}
+frdm-rw612.json
+stm32h573-dk-2.json
+stm32h573-dk.json
+
+## 3./4. trust the endorser, enrol the records (the keys are the ones already pinned: no --force), next cycle
+enrolled frdm-rw612: ML-DSA-65 key sha256 0ce25883e6ec006055be0947bb90df21e86ebfb294ba11e185b68103ddaa87e4, endorsed by bench-pc -> ~/rehearsal/gw/policy/keys/frdm-rw612.mldsa65.pub, ~/rehearsal/gw/policy/endorsements/frdm-rw612.json (the entry does not say "endorsement": "required" yet: the record is not checked by the loop)
+enrolled stm32h573-dk-2: ML-DSA-65 key sha256 29d96db0bbcdb3668880d271a935c5abbb4de5f82d5ed52c339e68182ed1038d, endorsed by bench-pc -> ~/rehearsal/gw/policy/keys/stm32h573-dk-2.mldsa65.pub, ~/rehearsal/gw/policy/endorsements/stm32h573-dk-2.json (the entry does not say "endorsement": "required" yet: the record is not checked by the loop)
+enrolled stm32h573-dk: ML-DSA-65 key sha256 ca25171f77458550869facd293424755d5809888051e66018f6d014cfb43c80d, endorsed by bench-pc -> ~/rehearsal/gw/policy/keys/stm32h573-dk.mldsa65.pub, ~/rehearsal/gw/policy/endorsements/stm32h573-dk.json (the entry does not say "endorsement": "required" yet: the record is not checked by the loop)
+13:07:03 stm32h573-dk ADMITTED  [credential: valid, heartbeat 1 (uptime_s=1;link=1;fw=test) [unbound]] [trust on first use]
+13:07:03 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 1 (uptime_s=1;link=1;fw=test) [unbound]] [trust on first use]
+13:07:03 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 1 (uptime_s=1;link=1;fw=rw612-0.1.0;ttl=3824)] [trust on first use]
+13:07:03 arduino-uno-legacy QUARANTINED no attestation: [Errno 111] Connection refused
+
+## 5. tests/board/endorsement_check.py stm32h573-dk stm32h573-dk-2   (read from stdin, as over ssh)
+E1_as_enrolled                                 admitted asked     as expected: True  
+E2_no_record                                   refused            as expected: True  endorsement required: no endorsement record (/tmp/aegis-endorsement-check-c3_ajle4/none.json)
+E3_substituted_key                             refused            as expected: True  endorsement required: the pinned key (sha256 29d96db0bbcdb366...) is not the endorsed key (ca25171f77458550...): substit
+E4_substituted_key_and_its_record              refused            as expected: True  endorsement required: the record endorses device 'stm32h573-dk-2', not 'stm32h573-dk'
+E5_substituted_key_at_its_device               refused            as expected: True  endorsement required: the pinned key (sha256 29d96db0bbcdb366...) is not the endorsed key (ca25171f77458550...): substit
+E5_substituted_key_and_record_at_its_device    refused            as expected: True  endorsement required: the record endorses device 'stm32h573-dk-2', not 'stm32h573-dk'
+E6_another_device_answers                      refused  asked     as expected: True  ML-DSA-65 quote signature invalid (the device that answered does not hold the endorsed key)
+E7_altered_measurement                         refused            as expected: True  endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)
+E7_altered_device_state                        refused            as expected: True  endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)
+E7_altered_expiry                              refused            as expected: True  endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)
+E8_untrusted_endorser                          refused            as expected: True  endorsement required: signed by a key that is not a trusted endorser of this policy (f56ad61b600bc76b..., calls itself '
+E8_no_trusted_endorsers                        refused            as expected: True  endorsement required: the policy lists no trusted endorsers ("endorsers")
+E9_control_trust_on_first_use                  admitted           as expected: True  
+E10_as_enrolled_again                          admitted asked     as expected: True  
+ok: True
+exit 0
+
+## 5. tests/board/endorsement_check.py frdm-rw612 stm32h573-dk
+E1_as_enrolled                                 admitted asked     as expected: True  
+E2_no_record                                   refused            as expected: True  endorsement required: no endorsement record (/tmp/aegis-endorsement-check-vnpxfhxi/none.json)
+E3_substituted_key                             refused            as expected: True  endorsement required: the pinned key (sha256 ca25171f77458550...) is not the endorsed key (0ce25883e6ec0060...): substit
+E4_substituted_key_and_its_record              refused            as expected: True  endorsement required: the record endorses device 'stm32h573-dk', not 'frdm-rw612'
+E5_substituted_key_at_its_device               refused            as expected: True  endorsement required: the pinned key (sha256 ca25171f77458550...) is not the endorsed key (0ce25883e6ec0060...): substit
+E5_substituted_key_and_record_at_its_device    refused            as expected: True  endorsement required: the record endorses device 'stm32h573-dk', not 'frdm-rw612'
+E6_another_device_answers                      refused  asked     as expected: True  ML-DSA-65 quote signature invalid (the device that answered does not hold the endorsed key)
+E7_altered_measurement                         refused            as expected: True  endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)
+E7_altered_device_state                        refused            as expected: True  endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)
+E7_altered_expiry                              refused            as expected: True  endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)
+E8_untrusted_endorser                          refused            as expected: True  endorsement required: signed by a key that is not a trusted endorser of this policy (665cc54438803cfb..., calls itself '
+E8_no_trusted_endorsers                        refused            as expected: True  endorsement required: the policy lists no trusted endorsers ("endorsers")
+E9_control_trust_on_first_use                  refused            as expected: n/a   claims are not a map
+E10_as_enrolled_again                          admitted asked     as expected: True  
+ok: True
+exit 0
+
+## 6. the switch: "endorsement": "required" for the three, fleet.py check, next cycle
+stm32h573-dk ok
+  enrolment: endorsed by bench-pc (record 7064f04e52bf..., device key ca25171f77458550..., device state development)
+  credentials: issued by this verifier
+  session unbound: the session is not tied to the attestation (no "transcript": "v2" in the policy entry); weaker
+stm32h573-dk-2 ok
+  enrolment: endorsed by bench-pc (record e6ef9a873c93..., device key 29d96db0bbcdb366..., device state development)
+  credentials: issued by this verifier
+  session unbound: the session is not tied to the attestation (no "transcript": "v2" in the policy entry); weaker
+frdm-rw612 ok
+  enrolment: endorsed by bench-pc (record e95234338044..., device key 0ce25883e6ec0060..., device state development)
+  credentials: issued by this verifier
+  session bound to the attestation (transcript v2 required; the unbound exchange is refused)
+arduino-uno-legacy ok
+admission TTL: 322 s (interval 30 s)
+platform polarfire, state ~/rehearsal/gw/state, observe-only, this verifier's key sha256 61d454fdbc2d046df3439eaccc2a894d5af1d3eeace961cc2f6e59bd41b0aef8
+exit 0
+13:07:03 stm32h573-dk ADMITTED  [credential: valid, heartbeat 2 (uptime_s=1;link=1;fw=test) [unbound]] [endorsed by bench-pc]
+13:07:03 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 2 (uptime_s=1;link=1;fw=test) [unbound]] [endorsed by bench-pc]
+13:07:03 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 2 (uptime_s=1;link=1;fw=rw612-0.1.0;ttl=3824)] [endorsed by bench-pc]
+13:07:03 arduino-uno-legacy QUARANTINED no attestation: [Errno 111] Connection refused
+
+## 7. board 2's key file replaced by board 1's key; one cycle; restored
+13:07:03 stm32h573-dk-2 QUARANTINED endorsement required: the pinned key (sha256 ca25171f77458550...) is not the endorsed key (29d96db0bbcdb366...): substituted key [credential: revoked]
+
+## 7. board 2's record moved away; one cycle; restored; one cycle
+13:07:03 stm32h573-dk-2 QUARANTINED endorsement required: no endorsement record (~/rehearsal/gw/policy/endorsements/stm32h573-dk-2.json) [credential: revoked]
+13:07:03 stm32h573-dk-2 ADMITTED  [credential: issued session 271b1d205ad6... [unbound: the session is not tied to the attestation (no "transcript": "v2" in the policy entry); weaker]] [endorsed by bench-pc] WARNING: session issued unbound: the session is not tied to the attestation (no "transcript": "v2" in the policy entry); weaker
+
+## a record from an endorser the policy does not list: enroll-endorsed refuses it
+{'device': 'stm32h573-dk', 'endorsed': True, 'family': 'aegis-pq', 'device_state': 'development', 'elapsed_s': 0.021}
+REFUSED ~/rehearsal/other/records/stm32h573-dk.json: signed by a key that is not a trusted endorser of this policy (8587b04cf916bf37..., calls itself 'someone-else') (nothing was enrolled from it)
+exit 1
+
+## after: one more cycle
+13:07:03 stm32h573-dk ADMITTED  [credential: valid, heartbeat 6 (uptime_s=1;link=1;fw=test) [unbound]] [endorsed by bench-pc]
+13:07:03 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 3 (uptime_s=1;link=1;fw=test) [unbound]] [endorsed by bench-pc]
+13:07:03 frdm-rw612 ADMITTED (device-key trust)  [credential: valid, heartbeat 6 (uptime_s=1;link=1;fw=rw612-0.1.0;ttl=3824)] [endorsed by bench-pc]
+13:07:03 arduino-uno-legacy QUARANTINED no attestation: [Errno 111] Connection refused
