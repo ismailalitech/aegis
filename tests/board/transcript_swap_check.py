@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
 """One transcript on a real endpoint (docs/architecture.md, audit finding 2): a session is finished only with the code
-whose quote was appraised, in the boot that signed it.
+whose quote was appraised, in the boot that signed it (for images that follow the protocol: see the end of this
+text).
 
 Runs on the gateway, which holds the key that signs credentials, with the aegis-fleet service stopped (the service
 would attest and provision in the middle of the check, and a quote of its own replaces the one under test). The

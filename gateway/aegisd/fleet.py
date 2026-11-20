@@ -40,13 +40,14 @@ touches no session state on the endpoint.
 One transcript (common/transcript.py, docs/architecture.md): an entry with "transcript": "v2" gets a session only
 through the bound exchange. PQKEMINIT then carries the challenge of the quote this cycle appraised, the endpoint's
 signature over its ML-KEM key must cover that quote, and the credential, the confirmation tag and the session key all
-depend on the same hash chain: the session is finished with exactly the code that was appraised, in the same boot, or
-not at all. The older exchange (the endpoint signs nonce || ek and nothing of the quote) is then refused, and a stored
-session made that way is replaced. Without the key the older exchange is used, so an endpoint whose firmware has not
-been upgraded keeps working; every such session is marked "unbound" in the journal and the state file, with a line at
-warning priority when it is issued and when the loop starts. What the transcript says is that one boot of the code
-holding the endpoint's key signed the appraised quote and then made the session's key; it does not stop code that
-holds the key and lies (docs/architecture.md says what would).
+depend on the same hash chain: with endpoint images that follow the protocol, the session is finished with the code
+that was appraised, in the same boot, or not at all. The older exchange (the endpoint signs nonce || ek and nothing of
+the quote) is then refused, and a stored session made that way is replaced. Without the key the older exchange is
+used, so an endpoint whose firmware has not been upgraded keeps working; every such session is marked "unbound" in the
+journal and the state file, with a line at warning priority when it is issued and when the loop starts. What the
+transcript says is that one boot of the code holding the endpoint's key signed the appraised quote and then made the
+session's key; it does not stop code that holds the key and lies, which on this bench anyone who can flash the
+endpoint can build (docs/architecture.md says what would).
 """
 import argparse
 import json
@@ -231,11 +232,16 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
     else:
         nonce = secrets.token_bytes(32)
     p = _exchange(host, port, "PQKEMINIT " + nonce.hex(), timeout).split()
+    # bound: any answer that is not a signed continuation of the quote is refused the same way, malformed or not
+    bad = TranscriptRefused if bound else ValueError
     if len(p) != 6 or p[0] != "PQKEMEK" or p[5] != "END":
-        raise ValueError("no KEM key in reply: %r" % " ".join(p)[:40])
-    ek, sig = bytes.fromhex(p[2]), bytes.fromhex(p[4])
+        raise bad("no KEM key in reply: %r" % " ".join(p)[:40])
+    try:
+        ek, sig = bytes.fromhex(p[2]), bytes.fromhex(p[4])
+    except ValueError:
+        raise bad("KEM key or signature is not hex") from None
     if len(ek) != mlkem.EK_LEN:
-        raise ValueError("ML-KEM key of the wrong length")
+        raise bad("ML-KEM key of the wrong length")
     if bound:
         t2 = transcript.kem_init(t1, ek)
         if not mldsa.verify(pk, transcript.KEM_INIT_LABEL, t2, sig):
@@ -500,15 +506,23 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
 def admit_ttl(policy, interval):
     """Seconds an admission lives in the enforcement set unless the next cycle refreshes it (aegis.nft, set timeout).
     One cycle is the sleep plus, per endpoint, at most timeout_s for the quote and 40 s for provisioning and the
-    heartbeat; the TTL is two sleeps plus that, so a working loop always refreshes in time, while a gateway whose loop
-    has stopped (crash, hang, service stopped) drops every endpoint within minutes. "admit_ttl_s" overrides it."""
+    heartbeat, and for an entry with "transcript" the retry after a refused exchange (credential_step): the pause, a
+    second quote and a second provisioning. The TTL is two sleeps plus that, so a working loop always refreshes in
+    time, while a gateway whose loop has stopped (crash, hang, service stopped) drops every endpoint within minutes.
+    "admit_ttl_s" overrides it."""
     try:
         if policy.get("admit_ttl_s"):
             return max(int(policy["admit_ttl_s"]), 1)
     except (TypeError, ValueError):
         pass            # a malformed override must not stop the loop: use the derived value
     per_ep = float(policy.get("timeout_s", 10))
-    cycle = sum(per_ep + (40 if ep.get("provision") else 0) for ep in policy.get("endpoints", []))
+    retry = BUSY_BACKOFF_S[1] + per_ep + 40
+
+    def one(ep):
+        if not ep.get("provision"):
+            return per_ep
+        return per_ep + 40 + (retry if ep.get("transcript") is not None else 0)
+    cycle = sum(one(ep) for ep in policy.get("endpoints", []))
     return max(int(2 * float(interval) + cycle + 0.999), 60)
 
 
@@ -658,7 +672,11 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
     cycle's quote and its exchange makes the exchange fail. requote, if given, is called once then: it must return a
     new verdict (attest() again). The exchange is tried once more with that quote only if the new verdict is admitted
     and reports the same measurements, so the session is still bound to a quote appraised in this cycle with the
-    result this cycle reports; an endpoint that restarted into other code in between gets nothing from the retry.
+    result this cycle reports; an endpoint that restarted into other code in between gets nothing from the retry. If
+    the new verdict is not admitted it is this cycle's: verdict["admitted"] becomes False, its reasons are added, the
+    stored session is deleted, and run_once enforces the quarantine. When the bound exchange is refused (any answer
+    that does not continue the quote), a stored session that still works is kept until it expires; one already
+    unusable (failed heartbeat, another binding than the policy asks for) is deleted.
     Sets verdict["session_binding"] to "transcript-v2" or "unbound" for a session issued or kept."""
     if not ep.get("provision"):
         return None
@@ -676,6 +694,7 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
         return "revoked"
     want = ep.get("transcript")
     hb_error = None
+    stored_usable = False   # a stored session of the binding the policy asks for, not expired, its heartbeat not failed
     if os.path.exists(meta):
         with open(meta) as f:
             m = json.load(f)
@@ -699,21 +718,41 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
                 hb_error = "counter did not rise"
             except (OSError, ValueError) as e:
                 hb_error = str(e)
+        else:
+            # the renewal window: the session is still the one an earlier admitted quote made, until it expires
+            stored_usable = m["body"]["expires"] > time.time()
     sk, gid = load_gateway_identity(state)
     second = False
     try:
         try:
             r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}), quote=verdict.get("quote"))
-        except TranscriptRefused:
+        except TranscriptRefused as first:
             again = requote() if requote else None
-            if not (again and again.get("admitted") and again.get("quote") and
-                    again.get("measurements") == verdict.get("measurements")):
+            if again is not None and not again.get("admitted"):
+                # the endpoint was admitted at the start of this cycle and is not now: this cycle's verdict is the
+                # later one (run_once enforces it again), and a quarantined endpoint keeps no session
+                verdict["admitted"] = False
+                verdict["reasons"] = list(verdict.get("reasons", [])) + [
+                    "second quote of the cycle not admitted: %s" % "; ".join(again.get("reasons", []))]
+                for f in (meta, keyf):
+                    if os.path.exists(f):
+                        os.remove(f)
+                return "revoked: provisioning REFUSED (%s), and the second quote of the cycle was not admitted" % first
+            if not (again and again.get("quote") and again.get("measurements") == verdict.get("measurements")):
+                if again:
+                    raise TranscriptRefused("%s; second quote of the cycle not used (%s)" % (
+                        first, "other measurements" if again.get("quote") else
+                        "; ".join(again.get("reasons", [])) or "no quote")) from None
                 raise
             r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}), quote=again["quote"])
             verdict["quote"], second = again["quote"], True
     except TranscriptRefused as e:
-        # nothing of an older session may outlive a refused transcript: the endpoint did not show that the code
-        # appraised in this cycle is the code that holds a session
+        # The endpoint did not show that the code appraised in this cycle holds the new session. A stored session that
+        # still works (the binding the policy asks for, made from an earlier admitted quote, not expired, no failed
+        # heartbeat) is kept until it expires: another verifier's quote in between must not cost this one its session.
+        # One that is already unusable is deleted.
+        if stored_usable:
+            return "provisioning REFUSED: %s (stored session kept until it expires)" % e
         for f in (meta, keyf):
             if os.path.exists(f):
                 os.remove(f)
@@ -760,13 +799,28 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
             def requote(ep=ep):
                 import random
                 time.sleep(random.uniform(*BUSY_BACKOFF_S))   # as for a busy endpoint: do not collide again
-                return attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)))
+                try:
+                    return attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)))
+                except Exception as e:  # noqa: BLE001 - as for the first quote of the cycle
+                    return {"admitted": False, "reasons": ["attestation error: %s: %s" % (type(e).__name__, e)]}
+            admitted = v["admitted"]
             try:
                 cs = credential_step(ep, v, base_dir, state=state, require_pin=require_pin, requote=requote)
             except Exception as e:  # noqa: BLE001
                 cs = "credential step failed: %s: %s" % (type(e).__name__, e)
             if cs:
                 v["credential"] = cs
+            if admitted and not v["admitted"]:
+                # the second quote of the cycle was not admitted (credential_step): that is this cycle's verdict, so
+                # the network must hear it too, not the admission enforced above
+                for k in ("enforce_note", "enforcement", "enforce_error"):
+                    v.pop(k, None)
+                result = enforce(policy, v, ttl) if enforce_hooks else None
+                note = record_enforcement(v, result)
+                if note:
+                    v["enforce_note"] = note
+                    log("aegis-fleet: enforcement hook failed for %s (quarantine), rc=%s:\n%s" % (
+                        v["endpoint"], result["rc"], result["stderr"] or "(no output)"), LOG_ERR, file=sys.stderr)
         out.append(v)
     return out
 

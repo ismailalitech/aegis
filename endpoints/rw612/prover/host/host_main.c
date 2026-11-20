@@ -25,10 +25,26 @@ static time_t t0;
 /* With AEGIS_TEST_STALE_RNG in the environment (tests/host/test_reset_replay_check.py and nothing else): the bytes of
  * a generator that starts again at every start of the program, to show what the reset-and-replay check sees on an
  * endpoint whose keys are not new after a reset. */
+/* With AEGIS_TEST_RNG naming a file that says "fail" (tests/host/test_rw612_proto.py): a generator that fails, so
+ * that every signature and every ML-KEM key is refused while the file says so. PC build only. */
+static int rng_fails(void)
+{
+	const char *path = getenv("AEGIS_TEST_RNG");
+	char buf[8] = "";
+	FILE *f = path ? fopen(path, "r") : NULL;
+
+	if (f) {
+		if (!fgets(buf, sizeof(buf), f)) buf[0] = 0;
+		fclose(f);
+	}
+	return !strncmp(buf, "fail", 4);
+}
+
 static int host_random(uint8_t *out, size_t n)
 {
 	static uint64_t x = 0x9e3779b97f4a7c15ull;
 
+	if (rng_fails()) return -1;
 	if (!getenv("AEGIS_TEST_STALE_RNG")) {
 		return getrandom(out, n, 0) == (ssize_t)n ? 0 : -1;
 	}

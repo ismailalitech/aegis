@@ -41,11 +41,17 @@ What has run on the bench, each with the record or test that shows it:
   ([`tests/host/test_linux_host_verifier.py`](tests/host/test_linux_host_verifier.py)).
 - Claims maps with non-scalar or repeated CBOR keys are refused
   ([`tests/host/test_cbor_keys.py`](tests/host/test_cbor_keys.py)).
-- In the source, attestation and the ML-KEM session are one signed transcript (policy key `"transcript": "v2"`;
-  [`docs/architecture.md`](docs/architecture.md), "One transcript"): the gateway finishes a session only with the
-  code whose quote it appraised, in the boot that signed it. Tested on the PC
-  ([`tests/host/test_transcript.py`](tests/host/test_transcript.py)) and built for the STM32 and the RW612; not yet
-  on the boards.
+- Attestation and the ML-KEM session are one signed transcript (policy key `"transcript": "v2"`;
+  [`docs/architecture.md`](docs/architecture.md), "One transcript"): the endpoint signs its ML-KEM key over the quote
+  it issued in this boot. Against images that follow the protocol (this repository's, old or new) the gateway then
+  finishes a session only with the code whose quote it appraised, in the boot that signed it: a swap to another such
+  image between the quote and the exchange, such as a rollback to an image from before the transcript, is refused.
+  It adds nothing against someone who can flash code of their own, which on this bench is anyone with the debugger
+  (the RW612 has no secure boot; the STM32s are in the Open state with TF-M's public development signing keys): such
+  an image holds the key and can sign a transcript for a quote it saw. Closing that needs a device key that depends
+  on the measured code. On both STM32s since 20 November 2026, including the swap to the previous image
+  ([`evidence/transcript-v2/`](evidence/transcript-v2/)); tested on the PC
+  ([`tests/host/test_transcript.py`](tests/host/test_transcript.py)); the RW612 image is built, not yet flashed.
 
 One decision cycle, every 30 seconds per endpoint (the default `--interval` of `gateway/aegisd/fleet.py`):
 

@@ -133,7 +133,11 @@ What the endpoint code says (`aegis_pq_attest.c`, `rw612/tfm/aegis_pq/aegis_pq.c
   exchange is refused (`provisioning REFUSED: ... the endpoint answered the unbound exchange`). `fleet.py` then waits
   0.4 to 1.2 s, takes one more quote and continues that one in the same cycle, if it is admitted and reports the same
   measurements (the journal line says `second quote of the cycle`); if that fails too, the next cycle tries again.
-  Admission does not depend on it, and an established session is not touched: a session is provisioned once an hour.
+  An established session is not touched: a session is provisioned once an hour, in the last five minutes of the one
+  before, and a stored session that still works is kept until it expires when its renewal is refused this way (the
+  line ends `stored session kept until it expires`). Admission does not depend on the exchange, only on the quotes:
+  if the second quote is not admitted, that is the cycle's verdict (quarantined, its reasons in the line, the
+  enforcement hook run again with it).
 - `PQKEMINIT` cancels a pending exchange (not an established session); a foreign `PQKEMFIN` is refused and the session
   kept. The host never sends either without the pin (above).
 - `PQHB` needs the session key; the counter is shared but only rises, so another verifier's heartbeat would not

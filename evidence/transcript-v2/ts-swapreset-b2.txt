@@ -1,0 +1,21 @@
+{
+ "endpoint": "stm32h573-dk-2",
+ "phase": "swap",
+ "recorded_s_ago": 3,
+ "recorded_measurements": {
+  "SPE": "3183f74a02e5f7bedb20fa38d22a556a2ce6c57afa928c1d4f4c3bebe5c5ece4",
+  "NSPE": "1f4110fd8b2a5e93839bccdd37c8ff13d206527bc649fb3e57318117ce6ecb8b"
+ },
+ "S0_session_after_reset": "ERR pq -137",
+ "S1_recorded_quote_continued": "refused: transcript v2 required, but the endpoint answered the unbound exchange: its ML-KEM key is not tied to the quote just appraised (firmware without transcript v2, a restart or another quote in between)",
+ "S1_credential_sent": false,
+ "S1_session": "ERR pq -137",
+ "S2_measurements_now": {
+  "SPE": "3183f74a02e5f7bedb20fa38d22a556a2ce6c57afa928c1d4f4c3bebe5c5ece4",
+  "NSPE": "1f4110fd8b2a5e93839bccdd37c8ff13d206527bc649fb3e57318117ce6ecb8b"
+ },
+ "S2_admitted_now": true,
+ "S2_quote_for_the_recorded_challenge": "another quote (6fc77cde2219d64f...): this boot does not report what was appraised",
+ "S2_recorded_quote_continued": "refused: ML-KEM key not signed over the transcript of the quote just appraised",
+ "S3_new_cycle": "accepted, session 39082c4f76e0c553; uptime_s=13;link=1;fw=0.6.0;sstack=18880/26624;ttl=127"
+}
