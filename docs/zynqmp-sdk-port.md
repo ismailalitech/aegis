@@ -119,7 +119,7 @@ Windows PC with their `SHA256SUMS`. Replace exactly one of them:
 | `tee-raw.bin` (replaced) | `257cc9dcb39958f7a88fece034c1166f4e634c420da74f1555a65919e1042c3e` | must be the one staged for `ff57c4fd`; if it is not, stop and report |
 | `fsbl.elf`, `pmufw.elf`, `system.bit`, `bl31.elf`, `u-boot.elf` | as for `ff57c4fd` | unchanged; check them against that image's `SHA256SUMS` |
 
-**BIF.** `endpoints/zynqmp/windows/puf/boot-encrypted.bif.template`, filled in by `make_boot_encrypted.ps1` with the
+**BIF.** `endpoints/zynqmp/windows/puf/boot-encrypted.bif.template`, filled in by `make_boot_encrypted.py`, called through the bench's `build_image.ps1` (bootgen 2019.1; the 2025.2 wrapper `make_boot_encrypted.ps1` cannot RSA-sign on Windows) with the
 same `-RegDir` (the same PUF registration, helper data and black key) and the same `-Auth` as `ff57c4fd`. It is
 **boot-header PUF mode only**: `[fsbl_config] ... puf4kmode, shutter=..., pufhd_bh`, `[keysrc_encryption] bh_blk_key`.
 **No eFUSE and no OTP programming of any kind.** The partition line that takes the new file is unchanged:
@@ -214,3 +214,18 @@ the policy first. Edit it on the PC and put it in place with a rename, as in `do
 - The stand-in's key derivation is a hash of a seed text. OP-TEE's real derivation is checked separately against
   known answers (`run.sh`), and "same key after the swap" is an argument from the design (same HUK, same UUID). Step 5
   of the swap checks it.
+
+## Result on the bench (2026-11-20)
+
+The Windows session built BOOT.BIN `e540d774f3ba10d03701a60e5e25daee067103d219d5f2ba3afc123cef3dc3d2` from the six
+inputs of `ff57c4fd` with only `tee-raw.bin` replaced (PUF boot-header mode, key source `0xA35C7C53`, only the FSBL
+partition encrypted). After the card swap and a power cycle (boot_id changed; fresh FSBL banner; OP-TEE build date
+`Fri Nov 20 19:03:12`; the TA line with `bh_key_src 0xa35c7c53`), `PQKEY` still gave `c02f156d...`, the gateway admitted
+the board with `fw=zynqmp-optee-0.2.0`, a session bound to the quote (transcript v2), and, after endorsement by the
+bench endorser, `[endorsed by bench-pc]` with `"endorsement": "required"`.
+
+**Measurements of an encrypted image change on every build.** The FSBL partition, which carries the PMUFW, is
+AES-encrypted with a fresh random IV on each bootgen run, and the measurement hashes the partition as stored. The
+FSBL and PMUFW values therefore differ between images built from the same inputs. The gateway pin for a new image
+must take the new FSBL, PMUFW and TEE values from that image's `measure.json`. For the endorsement, use a reference
+holding only the current image's seven components, not the policy's whole history of allowed values.
