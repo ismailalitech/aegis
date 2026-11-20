@@ -15,6 +15,8 @@ if [ ! -x "$REPO/.venv/bin/pip" ]; then
   "$REPO/.venv/bin/python" "$T/get-pip.py" -q
 fi
 "$REPO/.venv/bin/pip" install -q pyocd cmake ninja cryptography pytest requests pyyaml
+# the standalone evidence checker (tools/verify_evidence.py): pycose 1.1.0 does not work with cbor2 6
+"$REPO/.venv/bin/pip" install -q pycose==1.1.0 'cbor2<6'
 
 # 2. Arm GNU toolchain 14.2.rel1 (checked against Arm's published SHA-256)
 ARM=arm-gnu-toolchain-14.2.rel1-x86_64-arm-none-eabi

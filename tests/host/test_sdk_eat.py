@@ -13,6 +13,7 @@ the device's side of "evidence_format": "eat-cose-v1".
                    standalone checker
 Needs gcc and the mldsa-native / mlkem-native v2.0.0 trees (MLDSA_NATIVE_DIR, MLKEM_NATIVE_DIR)."""
 import contextlib
+import glob
 import hashlib
 import io
 import json
@@ -32,6 +33,7 @@ import cose  # noqa: E402
 import eat  # noqa: E402
 import fleet  # noqa: E402
 import mldsa  # noqa: E402
+import sdk_golden  # noqa: E402
 import transcript  # noqa: E402
 import test_rw612_proto as rw  # noqa: E402
 
@@ -166,6 +168,47 @@ class Objects(unittest.TestCase):
         pk = bytes.fromhex(next(x.split()[1] for x in r.stdout.splitlines() if x.startswith("KEY ")))
         s = cose.verify1(bytes.fromhex(ln[3]), pk)
         self.assertNotEqual(bytes.fromhex(ln[4]), transcript.quote(bytes.fromhex(ln[2]), transcript.token_hash(s.tbs)))
+
+
+@unittest.skipUnless(HAVE, "needs gcc and mldsa-native / mlkem-native")
+class Corpus(unittest.TestCase):
+    """The shared fuzz corpus through the harness built with the option (tests/fuzz/fuzz_sdk_core.c says what its
+    model checks of an EAT); tests/host/test_sdk_golden.py runs the same files through the default build."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.d = tempfile.mkdtemp()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.d, ignore_errors=True)
+
+    def test_every_seed_passes_with_the_option(self):
+        exe = sdk_golden.build_new("line", self.d, EAT, "line-eat")
+        seeds = sorted(glob.glob(os.path.join(ROOT, "tests", "fuzz", "seeds", "*")))
+        self.assertGreaterEqual(len([s for s in seeds if os.path.basename(s).startswith("sdk-eat-")]), 11)
+        for path in seeds:
+            r = subprocess.run([exe, path], capture_output=True, text=True)
+            self.assertEqual((r.returncode, r.stdout.strip().splitlines()[-1:]), (0, ["1 inputs, no finding"]),
+                             os.path.basename(path) + ": " + r.stderr)
+
+    def test_the_seeds_are_the_generators(self):
+        sys.path.insert(0, os.path.join(ROOT, "tests", "fuzz"))
+        import make_eat_seeds
+        for name, (cfg, data) in make_eat_seeds.SEEDS.items():
+            with open(os.path.join(ROOT, "tests", "fuzz", "seeds", name), "rb") as f:
+                self.assertEqual(f.read(), b"AEG\x01" + bytes([cfg]) + data, name)
+
+    def test_a_transcript_over_other_bytes_is_caught(self):
+        """Control: a model whose T1 hashes the claims alone disagrees with the core at the first bound exchange."""
+        exe = sdk_golden.build_new("line", self.d, EAT + ["-DFZ_EAT_T1_CLAIMS"], "line-eat-t1-claims")
+        for name in ("sdk-eat-bound-exchange-line", "sdk-eat-bound-exchange-binary", "sdk-eat-token-line"):
+            r = subprocess.run([exe, os.path.join(ROOT, "tests", "fuzz", "seeds", name)], capture_output=True, text=True)
+            self.assertNotEqual(r.returncode, 0, name)
+            self.assertIn("ORACLE: ", r.stderr, name)
+        r = subprocess.run([exe, os.path.join(ROOT, "tests", "fuzz", "seeds", "transcript-bound-exchange")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
 
 
 @unittest.skipUnless(HAVE, "needs gcc and mldsa-native / mlkem-native")
