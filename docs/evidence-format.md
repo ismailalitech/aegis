@@ -226,8 +226,10 @@ How a verdict becomes a vector (`common/eat.py`, `appraisal`):
 The status is `affirming` only if the endpoint is admitted, every value in the vector is affirming and the verdict
 carries no warning; `warning` if it is admitted otherwise; `contraindicated` if evidence was appraised, or the key's
 endorsement refused, and the endpoint is not admitted; `incomplete` if there was nothing to appraise. **It is never
-better than the verdict**: not admitted is never affirming or warning, and a reader refuses a result that says
-`aegis.admitted` under any other status (`test_the_status_is_never_better_than_the_verdict`).
+better than the verdict**: not admitted is never affirming or warning. A reader (`common/eat.py`, the checker)
+refuses a result whose `aegis.admitted` and status disagree in either direction: admitted under contraindicated or
+incomplete, or not admitted under affirming or warning (`test_the_status_is_never_better_than_the_verdict`,
+`test_a_status_that_contradicts_the_verdict_is_refused`).
 
 A relying party checks: the signature under the verifier key it trusts (by thumbprint), the profile, `exp`, the
 status, and the policy's `ni` name if it knows which policy it expects. A result is about 4.4 kB.
@@ -299,6 +301,9 @@ For a pack it checks every file against the manifest; the evidence under the dev
 verifier key and the endorsement under the endorser key; and that the three speak of the same thing: the result
 names this evidence file's hash, the quote hash, the device key, the nonce and the measurements of the evidence, the
 policy of the manifest, and the endorsement names this device, its key and the measurements of an admitted result.
+The manifest is not signed, so what the signed result names must be in the pack: the evidence file when the result
+has `aegis.evidence-sha256` (and `evidence.sig` with the older quote), and the endorsement when the result has endorser
+claims or `--endorser-key` was given. A pack with one of them left out does not verify.
 
 What it does not do, and says so in its report: the keys in a pack are there for convenience, and without the
 thumbprints on the command line the report marks each key `NOT CHECKED`; whoever relies on a pack compares them with

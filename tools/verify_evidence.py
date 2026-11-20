@@ -232,7 +232,8 @@ def check_result(data, pub, now=None):
     need(isinstance(a.get(1001), dict) and a[1001], "attestation result: no trustworthiness vector")
     ver = a.get(1006) or {}
     need(isinstance(ver.get("aegis.admitted"), bool), "attestation result: no aegis.admitted")
-    need(not ver["aegis.admitted"] or status in (2, 32), "attestation result: admitted with status %s" % TIERS[status])
+    need(ver["aegis.admitted"] == (status in (2, 32)), "attestation result: %s with status %s" % (
+        "admitted" if ver["aegis.admitted"] else "not admitted", TIERS[status]))
     if now is not None and 4 in claims:
         need(now < claims[4], "attestation result: expired at %d" % claims[4])
     att = a.get(1005) or {}
@@ -340,6 +341,12 @@ def check_pack(d, trust):
     def same(what, a, b):
         need(a == b, "pack: %s differ between the files (%r, %r)" % (what, a, b))
         report["checks"].append("%s agree" % what)
+    # the manifest is not signed: a file missing from the pack is caught by what the signed result names
+    if vc.get("aegis.evidence-sha256") is not None:
+        need("evidence.cbor" in files or "evidence.token" in files,
+             "pack: the result names evidence (aegis.evidence-sha256) and the pack has none")
+        need(vc.get("aegis.evidence-format") != "aegis-quote-v1" or "evidence.sig" in files,
+             "pack: the result names evidence of the older quote and the pack has no evidence.sig")
     for name in ("evidence.cbor", "evidence.token"):
         if name in files:
             same("the evidence file and the result's evidence hash", hashlib.sha256(files[name]).hexdigest(),
@@ -358,6 +365,9 @@ def check_pack(d, trust):
     if "policy.json" in files:
         same("the policy file and the manifest's policy hash", hashlib.sha256(files["policy.json"]).hexdigest(),
              man["policy_now_sha256"])
+    if res.get("endorser_claims") or trust.get("endorser"):
+        need("endorsement.cbor" in files or "endorsement.json" in files,
+             "pack: the result names an endorsement, or an endorser key was given, and the pack has no endorsement")
     for name in ("endorsement.cbor", "endorsement.json"):
         if name in files:
             need("endorser" in keys, "pack: no endorser key")

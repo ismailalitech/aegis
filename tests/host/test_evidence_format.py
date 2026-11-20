@@ -742,6 +742,30 @@ class Results(Bench):
             got = eat.read_ear(data, self.vpk)
             self.assertEqual((got["admitted"], got["status"]), (verdict["admitted"], eat.TIER_NAMES[status]))
 
+    def test_a_status_that_contradicts_the_verdict_is_refused(self):
+        """Signed by the right key, but "admitted" under a failing status, or not admitted under affirming or warning:
+        neither reader takes it."""
+        facts = {"stage": "appraised", "signature": True, "components_ok": True}
+        for admitted, status in ((True, eat.CONTRAINDICATED), (True, eat.INCOMPLETE),
+                                 (False, eat.AFFIRMING), (False, eat.WARNING)):
+            c = cbor.loads(eat.ear_payload({"endpoint": "x", "admitted": not admitted, "reasons": []}, facts,
+                                           "ni:///sha-256;x", 1000, 1060))
+            a = next(iter(c[266].values()))
+            c[1000] = a[1000] = status
+            a[1006]["aegis.admitted"] = admitted
+            data = cose.sign1(self.vsk, self.vpk, cbor.dumps(c, sort=True))
+            with self.assertRaises(eat.Refused):
+                eat.read_ear(data, self.vpk)
+            if have_checker_libs():
+                path = os.path.join(self.d, "r.cbor")
+                with open(path, "wb") as f:
+                    f.write(data)
+                with open(os.path.join(self.d, "v.pub"), "w") as f:
+                    f.write(self.vpk.hex())
+                rc, rep = checker("result", path, "--key", os.path.join(self.d, "v.pub"))
+                self.assertEqual((rc, rep["verified"]), (1, False), rep)
+                self.assertIn("admitted with status", rep["reason"])
+
     def test_without_an_identity_the_loop_runs_and_signs_nothing(self):
         self.add("dev", EatDevice())
         v, = fleet.run_once(self.policy, self.d, VERIFY, credentials=False, state=tempfile.mkdtemp(),
@@ -1052,6 +1076,28 @@ class Pack(Bench):
                 f.write(fleet.cbor_key(PK2))
             remanifest(d)
         self.assertIn("not the one you trust", changed(resign))
+        # the manifest is not signed: a file left out of the pack (and the manifest) is caught by what the result names
+        def drop(*names):
+            def edit(d):
+                with open(os.path.join(d, "manifest.json")) as f:
+                    m = json.load(f)
+                for name in names:
+                    os.remove(os.path.join(d, name))
+                    del m["files"][name]
+                with open(os.path.join(d, "manifest.json"), "w") as f:
+                    json.dump(m, f)
+            return edit
+        self.assertIn("the pack has none", changed(drop("evidence.cbor")))
+        self.assertIn("the pack has none", changed(drop("evidence.cbor", "keys/device.cosekey"),
+                                                   "--verifier-key", thumb(self.vpk).hex()))
+        self.assertIn("has no endorsement", changed(drop("endorsement.cbor")))
+        self.assertIn("has no endorsement", changed(drop("endorsement.cbor", "keys/endorser.cosekey"),
+                                                    "--verifier-key", thumb(self.vpk).hex()))
+        # a result without endorser claims, checked by someone who expects an endorsement
+        rc, rep = checker("pack", other, "--verifier-key", thumb(self.vpk).hex(), "--device-key", thumb(PK2).hex(),
+                          "--endorser-key", thumb(self.endorser.pk).hex())
+        self.assertEqual((rc, rep["verified"]), (1, False), rep)
+        self.assertIn("has no endorsement", rep["reason"])
         # a file the manifest names outside the pack
         def escape(d):
             with open(os.path.join(d, "manifest.json")) as f:
@@ -1085,6 +1131,19 @@ class Pack(Bench):
         rc, rep = checker("endorsement", os.path.join(out, "endorsement.json"), "--key",
                           os.path.join(out, "keys", "endorser.cosekey"))
         self.assertEqual((rc, rep["verified"]), (0, True), rep)
+        # the older quote's detached signature cannot be left out of the pack either
+        import shutil
+        nosig = os.path.join(tempfile.mkdtemp(), "pack")
+        shutil.copytree(out, nosig)
+        os.remove(os.path.join(nosig, "evidence.sig"))
+        with open(os.path.join(nosig, "manifest.json")) as f:
+            m = json.load(f)
+        del m["files"]["evidence.sig"]
+        with open(os.path.join(nosig, "manifest.json"), "w") as f:
+            json.dump(m, f)
+        rc, rep = checker("pack", nosig, *self.trust())
+        self.assertEqual((rc, rep["verified"]), (1, False), rep)
+        self.assertIn("no evidence.sig", rep["reason"])
         # the detached signature belongs to this token
         with open(os.path.join(out, "evidence.token"), "r+b") as f:
             f.write(b"\xa5")

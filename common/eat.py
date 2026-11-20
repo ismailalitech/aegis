@@ -384,8 +384,9 @@ def _read_ear(payload):
     if not (isinstance(ver, dict) and isinstance(ver.get("aegis.endpoint"), str)
             and isinstance(ver.get("aegis.admitted"), bool)):
         raise Refused("the appraisal lacks the verifier's claims")
-    if ver["aegis.admitted"] and status not in (AFFIRMING, WARNING):
-        raise Refused("admitted, but the status is %s" % TIER_NAMES[status])
+    if ver["aegis.admitted"] != (status in (AFFIRMING, WARNING)):
+        raise Refused("%s, but the status is %s" % ("admitted" if ver["aegis.admitted"] else "not admitted",
+                                                     TIER_NAMES[status]))
     return {"iat": c[IAT], "exp": c.get(EXP), "verifier": dict(vid), "label": label, "status": TIER_NAMES[status],
             "vector": dict(vector), "details": a.get(EAR_STATUS_DETAILS), "policy_ids": a.get(EAR_POLICY_IDS),
             "nonce": a.get(NONCE), "attester_claims": a.get(EAR_ATTESTER_CLAIMS), "verifier_claims": ver,
