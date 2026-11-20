@@ -1657,12 +1657,13 @@ class AuditTrail:
 
     # -- writing --
 
-    def flush(self, final=False):
-        """Sign and append what was noted (common/audit.py Log.flush). One line per batch on stderr: the journal then
-        holds each batch's hash too, which tools/verify_audit.py --head compares a log with. A log that cannot be
-        written is said once, at error priority; the entries wait in memory."""
+    def flush(self, final=False, last=False):
+        """Sign and append what was noted (common/audit.py Log.flush). final: do not wait, and promise no further
+        batch of this writer; last: the log itself ends here. One line per batch on stderr: the journal then holds
+        each batch's hash too, which tools/verify_audit.py --head compares a log with. A log that cannot be written
+        is said once, at error priority; the entries wait in memory."""
         try:
-            written = self.log.flush(promise=self.promise and not final, force=final)
+            written = self.log.flush(promise=self.promise and not final, force=final or last, last=last)
         except Exception as e:  # noqa: BLE001 - no key, a full disk: the loop goes on
             why = "%s: %s" % (type(e).__name__, e)
             if why != self.error:
@@ -1679,7 +1680,7 @@ class AuditTrail:
 
     def stop(self, why):
         self.log.add("stop", None, {"why": str(why)[:300]})
-        return self.flush(final=True)
+        return self.flush(last=True)
 
 
 def open_audit(policy, state, current=None, grace_s=120, promise=True, start=None, said=None):

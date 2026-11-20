@@ -97,9 +97,11 @@ def entry(event, subject=None, details=None, now=None):
     """One entry as the map a batch carries. event: a short lower-case word ("admit", "refuse", ...)."""
     if not (isinstance(event, str) and EVENT.match(event)):
         raise ValueError("an event is a short lower-case word, not %r" % (event,))
-    e = {E_TIME: int(time.time() if now is None else now), E_EVENT: event}
-    if not 0 <= e[E_TIME] < MAX_TIME:
-        e[E_TIME] = 0
+    try:
+        when = int(time.time() if now is None else now)
+    except (TypeError, ValueError, OverflowError):
+        when = -1
+    e = {E_TIME: when if 0 <= when < MAX_TIME else int(time.time()), E_EVENT: event}     # not a time: the time it is
     if subject is not None:
         e[E_SUBJECT] = clean(str(subject))[:64]
     if details:
@@ -367,6 +369,9 @@ class Log:
     """The writer. add() queues an entry in memory; flush() signs what is queued as one batch (or several, if it is
     much) and appends it, flushed to disk before it returns.
 
+    The writer continues the log from its last record, which it checks (a batch record, signed by this key). It
+    does not read the whole log each time: damage further back is found by whoever checks the log.
+
     directory: where the segments live (made 0700). pk: the verifier's public key. load_sk: called when a batch is
     about to be signed, and only then, so a verifier with nothing to log never opens its key. checkpoint_s: a batch
     is written at least this often even with nothing to say, and every batch promises the next one within
@@ -397,7 +402,7 @@ class Log:
         try:
             e = entry(event, subject, details, now)
         except Exception as err:  # noqa: BLE001 - an entry that cannot be made is still an entry
-            e = entry("unwritable", None, {"event": repr(event)[:40], "error": "%s: %s" % (type(err).__name__, err)}, now)
+            e = entry("unwritable", None, {"event": repr(event)[:40], "error": "%s: %s" % (type(err).__name__, err)})
         if len(self.pending) >= MAX_PENDING:
             self.dropped += 1
             self.dropped_from = self.dropped_from if self.dropped_from is not None else e[E_TIME]
@@ -496,15 +501,17 @@ class Log:
         self._size = before + len(rec)
         self._seen = (self._segment, self._size)
 
-    def flush(self, now=None, promise=True, force=False):
+    def flush(self, now=None, promise=True, force=False, last=False):
         """Sign and append what is queued; returns the batches written, as [Batch] (empty: nothing was due).
 
         promise: this writer will write again (the loop): the batch says by when ("due"), and a batch is written
         when the last promise is about to lapse even with nothing queued. Without it (one run, a command) the last
-        promise in the log is repeated unchanged, and nothing is written with nothing queued. force: do not wait for
-        min_interval_s. Raises OSError, RuntimeError or ValueError if the key cannot be used or the directory
-        written; what was queued stays queued."""
+        promise in the log is repeated unchanged, and nothing is written with nothing queued. last: the writer that
+        promised ends its log here; the batch promises nothing. force: do not wait for min_interval_s. Raises
+        OSError, RuntimeError or ValueError if the key cannot be used or the directory written; what was queued
+        stays queued."""
         now = int(time.time() if now is None else now)
+        promise = promise and not last
         heartbeat = promise and self.checkpoint_s > 0
         fd = self._lock()
         try:
@@ -537,7 +544,8 @@ class Log:
                     due = now + self.checkpoint_s + self.grace_s
                 else:
                     # another writer's promise stands as it was; one that has lapsed is not made again
-                    due = tail.due if tail is not None and tail.due is not None and tail.due > now else None
+                    due = tail.due if tail is not None and tail.due is not None and tail.due > now and not last \
+                        else None
                 rec = make_batch(sk, self.pk, self._log_id, tail.batch + 1 if tail else 1,
                                  tail.head if tail else GENESIS, tail.next_entry if tail else 1, take, now, due)
                 self._append(rec)
