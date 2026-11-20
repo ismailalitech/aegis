@@ -23,7 +23,8 @@
      "image": "aegis prover-ns 0.4.0 (heartbeat)"
     }
    ],
-   "provision": true
+   "provision": true,
+   "heartbeat_mac": "kmac256"
   },
   {
    "name": "arduino-uno-legacy",
@@ -33,6 +34,19 @@
    "iak_pub_pem": "keys/tfm-dev-iak.pub.pem",
    "allowed": [],
    "note": "Arduino Uno R3 running a legacy-sensor sketch: no keys, no measurements, cannot attest. Reached through the PC (host/serial_bridge.py --port 7445) because the Uno has no network interface."
+  },
+  {
+   "name": "zynqmp-te0808",
+   "kind": "aegis-tee",
+   "host": "192.0.2.40",
+   "port": 7444,
+   "pq_pub_file": "keys/zynqmp-te0808.mldsa65.pub",
+   "profile": "aegis-zynqmp-optee-devhuk-v1",
+   "allow_dev_profile": true,
+   "allowed": [],
+   "provision": true,
+   "heartbeat_mac": "kmac256",
+   "note": "Bench only: the -devhuk profile's key comes from OP-TEE's fixed development HUK, the same on every chip, so it is refused unless allow_dev_profile is true, and then admitted as 'development-shared-key' trust with a WARNING. Pin aegis-zynqmp-optee-v1 and drop allow_dev_profile once the key comes from the PUF. Fill 'allowed' from 'fleet.py once'."
   }
  ]
 }

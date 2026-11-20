@@ -71,8 +71,18 @@ def verify_with_openssl_cli(pub_pem, message, der_sig):
         return r.returncode == 0
 
 
-def parse(token):
-    """Return (protected_bytes, payload_bytes, signature, claims) without checking anything."""
+def _guarded(what, fn, *args):
+    """Run a decoding step; any failure (CBORError, TypeError, KeyError, RecursionError, ...) becomes TokenError,
+    so a hostile token can only ever produce a refusal."""
+    try:
+        return fn(*args)
+    except TokenError:
+        raise
+    except Exception as e:  # noqa: BLE001 - every decoding failure is a bad token
+        raise TokenError("%s do not decode: %s: %s" % (what, type(e).__name__, e)) from None
+
+
+def _envelope(token):
     obj = cbor.loads(token)
     if isinstance(obj, cbor.Tag):
         if obj.tag != 18:
@@ -89,7 +99,27 @@ def parse(token):
         raise TokenError("protected header is not a map")
     if hdr.get(1) != -7:
         raise TokenError("algorithm is not ES256 (got %r)" % hdr.get(1))
-    return protected, payload, signature, claims_from_map(cbor.loads(payload))
+    return protected, payload, signature
+
+
+def envelope(token):
+    """Decode only the COSE_Sign1 structure: (protected_bytes, payload_bytes, signature). The claims (payload) are not
+    decoded. Raises TokenError only."""
+    return _guarded("COSE_Sign1 fields", _envelope, token)
+
+
+def decode_claims(payload):
+    """Decode a claims payload to named claims. Raises TokenError only."""
+    return _guarded("claims", lambda p: claims_from_map(cbor.loads(p)), payload)
+
+
+def parse(token):
+    """Return (protected_bytes, payload_bytes, signature, claims) WITHOUT checking the ES256 signature. Only for a
+    token whose integrity was established another way (kind aegis-pq: an ML-DSA-65 signature over the whole token,
+    verified first) or for display; otherwise use verify(), which checks the signature before decoding the claims.
+    Raises TokenError only."""
+    protected, payload, signature = envelope(token)
+    return protected, payload, signature, decode_claims(payload)
 
 
 def claims_from_map(raw):
@@ -110,20 +140,17 @@ def claims_from_map(raw):
 def parse_plain(token):
     """Claims of an unsigned CBOR claims map (kind aegis-linux: the ML-DSA-65 signature over it is the only
     signature, and it is checked by the caller)."""
-    try:
-        raw = cbor.loads(token)
-    except Exception as e:  # noqa: BLE001 - any decoding failure is a bad token
-        raise TokenError("claims do not decode: %s" % e)
-    return claims_from_map(raw)
+    return decode_claims(token)
 
 
 def verify(token, pub_pem, ecdsa_verify):
-    """Check the signature; return the claims. Raises TokenError on failure."""
-    protected, payload, signature, claims = parse(token)
+    """Check the signature, then decode and return the claims: unsigned claim bytes never reach the claims decoder.
+    Raises TokenError on failure."""
+    protected, payload, signature = envelope(token)
     sig_structure = cbor.dumps(["Signature1", protected, b"", payload])
     if not ecdsa_verify(pub_pem, sig_structure, raw_to_der(signature)):
         raise TokenError("token signature invalid")
-    return claims
+    return decode_claims(payload)
 
 
 def instance_id_for(pub_pem_der_point):

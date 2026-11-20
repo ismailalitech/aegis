@@ -62,7 +62,7 @@ class LinuxProver(unittest.TestCase):
                 return hashlib.sha256(f.read()).hexdigest()
         good, prov = sha256_file(self.bootf), sha256_file(prover_mod.__file__)
         e = {"name": "zybo", "kind": "aegis-linux", "host": "127.0.0.1", "port": self.port, "pq_pub_file": "ep.pub",
-             "heartbeat_mac": "kmac256",
+             "heartbeat_mac": "kmac256", "profile": "aegis-linux-software-v1",
              "allowed": [{"type": "BOOT", "measurement_value": good}, {"type": "PROVER", "measurement_value": prov}]}
         e.update(kw)
         return e

@@ -103,7 +103,7 @@ class Rw612Proto(unittest.TestCase):
         with open(self.image, "rb") as f:
             good = hashlib.sha256(f.read()).hexdigest()
         e = {"name": "frdm-rw612", "kind": "aegis-device", "host": "127.0.0.1", "port": self.port,
-             "pq_pub_file": "ep.pub", "heartbeat_mac": "kmac256",
+             "pq_pub_file": "ep.pub", "heartbeat_mac": "kmac256", "profile": "aegis-rw612-els-v1",
              "allowed": [{"type": "APP", "measurement_value": good}]}
         e.update(kw)
         return e
@@ -138,9 +138,12 @@ class Rw612Proto(unittest.TestCase):
         v = fleet.attest(self.ep(pq_pub_file="other.pub"), None, self.d, timeout=10)
         self.assertFalse(v["admitted"])
         self.assertIn("ML-DSA-65 quote signature invalid", v["reasons"])
-        v = fleet.attest(self.ep(kind="aegis-linux"), None, self.d, timeout=10)
+        v = fleet.attest(self.ep(kind="aegis-linux", profile="aegis-linux-software-v1"), None, self.d, timeout=10)
         self.assertFalse(v["admitted"])
         self.assertIn("profile is not aegis-linux-software-v1", v["reasons"])
+        v = fleet.attest(self.ep(kind="aegis-linux"), None, self.d, timeout=10)     # a pin the kind cannot have
+        self.assertFalse(v["admitted"])
+        self.assertTrue(v["reasons"][0].startswith("policy: pinned profile aegis-rw612-els-v1 is not one of kind"), v)
 
     def test_5_provision_heartbeat_session(self):
         r = fleet.provision(self.ep(), self.d, self.gw_sk, "gid", {"APP": "x"}, timeout=20)
@@ -356,9 +359,14 @@ class Rw612TfmProfile(unittest.TestCase):
         self.assertEqual(v.get("pq_signature"), "ML-DSA-65 valid")
         self.assertFalse(v["admitted"])
         self.assertIn("profile aegis-rw612-els-v1, policy requires aegis-rw612-tfm-v1", v["reasons"])
+        # without a pin the entry is refused before the endpoint is asked (strict profiles)
         unpinned = self.ep(self.port_els, profile=None,
                            allowed=[{"type": "APP", "measurement_value": self.sha(self.spe)}])
         v = fleet.attest(unpinned, None, self.d, timeout=10)
+        self.assertFalse(v["admitted"])
+        self.assertNotIn("pq_signature", v)
+        self.assertTrue(v["reasons"][0].startswith("policy: no profile pinned"), v["reasons"])
+        v = fleet.attest(dict(unpinned, profile="aegis-rw612-els-v1"), None, self.d, timeout=10)
         self.assertTrue(v["admitted"], v["reasons"])
         self.assertEqual(v["trust"], "device-key")
 

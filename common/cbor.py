@@ -57,9 +57,10 @@ def _decode(data, i, depth):
         out = {}
         for _ in range(v):
             k, i = _decode(data, i, depth + 1)
-            # Keys are integers or strings only, and never repeated: an array or map as key is unhashable in
+            # Keys are integers or text strings only, and never repeated: an array or map as key is unhashable in
             # Python (a TypeError the callers do not expect), and a repeated key would let two parsers disagree.
-            if isinstance(k, bool) or not isinstance(k, (int, str, bytes)):
+            # Byte-string keys are refused too: no PSA token, COSE header or Aegis claims map uses them.
+            if isinstance(k, bool) or not isinstance(k, (int, str)):
                 raise CBORError("map key of unsupported type")
             if k in out:
                 raise CBORError("duplicate map key")
