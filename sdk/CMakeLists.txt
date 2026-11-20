@@ -60,7 +60,7 @@ if(AEGIS_EAT_COSE)
   # PUBLIC: whoever includes aegis_sdk.h must see the same option (it declares aegis_prover_quote_eat)
   target_compile_definitions(aegis_sdk PUBLIC AEGIS_EAT_COSE=1)
 endif()
-set_target_properties(aegis_sdk PROPERTIES POSITION_INDEPENDENT_CODE ON OUTPUT_NAME aegis_sdk)
+set_target_properties(aegis_sdk PROPERTIES POSITION_INDEPENDENT_CODE ON OUTPUT_NAME aegis_sdk EXPORT_NAME sdk)  # aegis::sdk
 
 # Warnings for the SDK's own files only; mldsa-native and mlkem-native are built as they are shipped.
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
