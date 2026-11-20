@@ -87,11 +87,11 @@ The loop adds an entry **when something changes, not every cycle** (`fleet.py`, 
 | `log-start`, `recovered`, `gap`, `audit-error`, `unwritable` | | the log's own housekeeping (below); the last two stand for an entry that could not be made from what a verdict held | |
 
 A decision is remembered under the entry's name and address, so two entries that a policy names alike do not take
-turns in the log. **What makes a decision another decision:** admitted or not, the stage (`policy`, `endorsement`, `no-evidence`,
-`evidence`, `appraised`), the device key, the measurements, how the key is trusted (enrolment, trust label,
-endorsement record), the evidence format, and whether enforcement worked. The *words* of a refusal are recorded
-but are not part of it: some carry a time or an errno that differs from cycle to cycle, and an endpoint that stays
-refused for the same reason must not cost a batch per cycle
+turns in the log. **What makes a decision another decision:** admitted or not, the stage (`policy`, `endorsement`,
+`no-evidence`, `evidence`, `appraised`), the device key, the measurements, how the key is trusted (enrolment, trust
+label, endorsement record), the evidence format, and whether enforcement worked. The *words* of a refusal are
+recorded but are not part of it: some carry a time or an errno that differs from cycle to cycle, and an endpoint
+that stays refused for the same reason must not cost a batch per cycle
 (`test_a_decision_that_changes_is_an_entry_and_one_that_only_words_itself_differently_is_not`).
 
 Everything put into an entry is bounded and made encodable first (`audit.clean`): text to 300 characters, lists to
