@@ -1,0 +1,17 @@
+{
+ "endpoint": "stm32h573-dk",
+ "phase": "live",
+ "image_knows_the_transcript": true,
+ "L1_bound_exchange": "accepted, session 6fca96b1b3bf5261, bound to quote 49362885af963be6",
+ "L1_heartbeat": "uptime_s=102;link=1;fw=0.6.0;sstack=18880/26624;ttl=127",
+ "L1_endpoint_reports_the_same_session": true,
+ "L2_same_quote_again": "refused: transcript v2 required, but the endpoint answered the unbound exchange: its ML-KEM key is not tied to the quote just appraised (firmware without transcript v2, a restart or another quote in between)",
+ "L2_session_kept": true,
+ "L3_older_quote": "refused: transcript v2 required, but the endpoint answered the unbound exchange: its ML-KEM key is not tied to the quote just appraised (firmware without transcript v2, a restart or another quote in between)",
+ "L3_newer_quote": "accepted, session df63e4a94c16ef19",
+ "L4_credential_without_the_transcript": "ERR pq -149",
+ "L4_credential_for_another_transcript": "ERR pq -149",
+ "L4_session_kept": true,
+ "L5_entry_without_transcript": "first version's exchange accepted, session 56f874ef115e9ca5",
+ "L6_last_cycle": "accepted, session 19db3571a8e86a49; uptime_s=105;link=1;fw=0.6.0;sstack=18880/26624;ttl=127"
+}

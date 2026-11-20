@@ -33,3 +33,5 @@ d29843fdbd8338f1762a188ad9bd9c93c618a429bbfa013cea3be6eb743b7759  endpoints/stm3
 755d6869656e9cde92b5b148e09577d203cf38a3e1ae233f0a81db1ee027ff75  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix-sstack-expiry.bin
 7246ae397b15c5022581f4aaa5683b00145d7ca98d5ddd3bb2892c0baba289a2  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix-sstack-expiry-freshkem.hex
 9320aa53cf829e7453d0c96e0328ba3327609038b769ffd3f6a83b0c8b43157e  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix-sstack-expiry-freshkem.bin
+39c20e8fcbbd5ddaaf1f9c99de2acf19d1af498e8799461d1c59a4368d3839ce  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix-sstack-expiry-freshkem-transcript.hex
+fef2526577d65d186362ee119cbc935ce01591596f151b03320086b9c547ab7e  endpoints/stm32h573/artifacts/tfm-s-v2.3.0-aegis-pq-hb-hedged-kmac-kemfix-sstack-expiry-freshkem-transcript.bin

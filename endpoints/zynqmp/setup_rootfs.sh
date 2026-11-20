@@ -42,7 +42,7 @@ fi
 P=$R/opt/aegis-prover
 install -d "$P/common"
 install -m 644 "$REPO/endpoints/zybo/aegis_linux_prover.py" "$P/"
-for m in cbor kmac mldsa mlkem; do install -m 644 "$REPO/common/$m.py" "$P/common/"; done
+for m in cbor kmac mldsa mlkem transcript; do install -m 644 "$REPO/common/$m.py" "$P/common/"; done
 install -m 644 "$LIBOQS" "$P/common/liboqs.so.9"
 install -d "$R/etc/aegis-prover"
 install -m 644 "$GWPK" "$R/etc/aegis-prover/gateway.mldsa65.pub"

@@ -9,6 +9,7 @@ the program started again with the same device secrets.
     recorded key comes back and the recorded PQKEMFIN is accepted. That is what the STM32H573 partition did before
     it took random bytes into the key; its own PC test is test_stm32_partition.py.
 Needs gcc and the mldsa-native / mlkem-native v2.0.0 trees (MLDSA_NATIVE_DIR, MLKEM_NATIVE_DIR)."""
+import hashlib
 import json
 import os
 import shutil
@@ -80,7 +81,7 @@ class ResetReplayCheck(unittest.TestCase):
         self.assertIn(r.returncode, (0, 1, 2), r.stderr)
         return r.returncode, json.loads(r.stdout)
 
-    def enrol(self, stale):
+    def enrol(self, stale, transcript=False):
         port = rw.free_port()
         self.boot(port, stale)
         with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
@@ -90,10 +91,29 @@ class ResetReplayCheck(unittest.TestCase):
                 reply += s.recv(65536)
         with open(os.path.join(self.d, "ep-%d.pub" % port), "w") as f:
             f.write(reply.split()[2].decode())
+        entry = {"name": NAME, "kind": "aegis-device", "host": "127.0.0.1", "port": port,
+                 "pq_pub_file": "ep-%d.pub" % port, "heartbeat_mac": "kmac256"}
+        if transcript:      # the exchange then continues a quote, which the policy must admit
+            with open(os.path.join(self.d, "image.bin"), "rb") as f:
+                good = hashlib.sha256(f.read()).hexdigest()
+            entry.update({"transcript": "v2", "profile": "aegis-rw612-els-v1",
+                          "allowed": [{"type": "APP", "measurement_value": good}]})
         with open(os.path.join(self.d, "policy-%d.json" % port), "w") as f:
-            json.dump({"endpoints": [{"name": NAME, "kind": "aegis-device", "host": "127.0.0.1", "port": port,
-                                      "pq_pub_file": "ep-%d.pub" % port, "heartbeat_mac": "kmac256"}]}, f)
+            json.dump({"endpoints": [entry]}, f)
         return port
+
+    def test_fresh_keys_pass_where_the_policy_requires_the_transcript(self):
+        """The recorded exchange continued a quote; after the reset the endpoint has none, answers the recorded
+        PQKEMINIT with the first version's signature and another key, and refuses the recorded PQKEMFIN."""
+        port = self.enrol(stale=False, transcript=True)
+        rc, rec = self.check("record", port)
+        self.assertEqual((rc, rec["R_first_exchange_since_reset"]), (0, True), rec)
+        self.boot(port, stale=False)
+        rc, res = self.check("replay", port, "--tries", "2")
+        self.assertEqual(rc, 0, res)
+        self.assertEqual((res["B_keys_signed_by_the_endpoint"], res["B_recorded_key_issued_again"],
+                          res["C_refused_every_time"], res["E_new_session_kept"]), (True, False, True, True), res)
+        self.assertEqual(res["C_recorded_finish"], ["ERR cred other-key"] * 2, res)
 
     def test_fresh_keys_pass(self):
         port = self.enrol(stale=False)

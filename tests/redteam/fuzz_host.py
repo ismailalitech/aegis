@@ -8,7 +8,11 @@
      never stop the service; a valid quote still verifies afterwards;
   3. fleet verifier vs a hostile endpoint: random reply lines, a classic-token downgrade for a
      post-quantum endpoint, a replayed KEM key from an earlier nonce: never admitted / provisioned;
-     validly signed tokens (ES256 and ML-DSA-65) carrying random CBOR claims: attest() never raises.
+     validly signed tokens (ES256 and ML-DSA-65) carrying random CBOR claims: attest() never raises;
+  4. one transcript (policy "transcript": "v2", docs/architecture.md): a hostile endpoint that holds validly signed
+     pieces which are not the transcript of the quote the verifier appraised (a KEM key signed the old way, signed
+     over another challenge, another token, another key or another step, under the other label, or a random line)
+     is never given a credential: provision() stops before it sends one, with ValueError and nothing else.
 
   fuzz_host.py [iterations]     prints a JSON summary, exit 0 only if no property broke
 """
@@ -31,6 +35,7 @@ import fleet  # noqa: E402
 import mldsa  # noqa: E402
 import mlkem  # noqa: E402
 import psa_token  # noqa: E402
+import transcript  # noqa: E402
 import test_fleet as tf  # noqa: E402
 import test_identity_quote as tq  # noqa: E402
 import aegis_verify as av  # noqa: E402
@@ -272,6 +277,79 @@ if not downgrade_refused:
 if not kem_replay_refused:
     broken.append("a replayed KEM key was accepted")
 
+# ---- 4. one transcript: signed pieces that are not the transcript of the appraised quote ----
+
+
+def flip(b):
+    b = bytearray(b)
+    b[R.randrange(len(b))] ^= 1 << R.randrange(8)
+    return bytes(b)
+
+
+def other_transcript_piece(kind, challenge, tok_hash):
+    """A PQKEMEK reply whose signature is valid under the endpoint's key, for something else than
+    T2 = H(kem-init || H(quote || challenge || token hash) || ek) under the label aegis-kem-init-v2."""
+    ek, _ = mlkem.keypair()
+    ek2, _ = mlkem.keypair()
+    t1 = transcript.quote(challenge, tok_hash)
+    t2 = transcript.kem_init(t1, ek)
+    label, msg, sent = transcript.KEM_INIT_LABEL, t2, ek
+    if kind == "first-version":            # what a firmware from before the transcript signs
+        label, msg = fleet.KEM_INIT_LABEL, challenge + ek
+    elif kind == "other-challenge":
+        msg = transcript.kem_init(transcript.quote(flip(challenge), tok_hash), ek)
+    elif kind == "other-token":            # the quote of another firmware, or of another boot
+        msg = transcript.kem_init(transcript.quote(challenge, flip(tok_hash)), ek)
+    elif kind == "other-key":              # signed for one KEM key, sent with another
+        sent = ek2
+    elif kind == "first-version-label":    # the transcript under the old label
+        label = fleet.KEM_INIT_LABEL
+    elif kind == "transcript-label":       # the old message under the transcript's label
+        msg = challenge + ek
+    elif kind == "quote-label":            # a quote signature is not a KEM key signature
+        label = fleet.PQ_LABEL
+    elif kind == "earlier-step":           # T1 in the place of T2
+        msg = t1
+    elif kind == "later-step":
+        msg = transcript.kem_fin(t2, b"ct", b"cred")
+    sig = mldsa.sign(pq_sk, label, msg)
+    if kind == "damaged-signature":
+        sig = flip(sig)
+    return b"PQKEMEK %d %s %d %s END\r\n" % (len(sent), sent.hex().encode(), len(sig), sig.hex().encode())
+
+
+KINDS = ("first-version", "other-challenge", "other-token", "other-key", "first-version-label", "transcript-label",
+         "quote-label", "earlier-step", "later-step", "damaged-signature", "random-line")
+gw_sk_t = mldsa.keypair()[1]
+transcript_tried = transcript_accepted = transcript_raised = 0
+for i in range(min(N, 220)):
+    kind = KINDS[i % len(KINDS)]
+    challenge, tok_hash = os.urandom(32), os.urandom(32)
+    if kind == "random-line":
+        line = R.choice([b"PQKEMEK ", b"PQKEMEK 1184 ", b"PQKEMOK ", b""]) + \
+            bytes(R.randrange(32, 127) for _ in range(R.randrange(0, 300))) + b"\r\n"
+    else:
+        line = other_transcript_piece(kind, challenge, tok_hash)
+    h = Hostile([line, b"PQKEMOK " + b"00" * 32 + b" END\r\n"])
+    transcript_tried += 1
+    try:
+        fleet.provision({"name": "t", "host": "127.0.0.1", "port": h.port, "pq_pub_file": pqf, "transcript": "v2"},
+                        store, gw_sk_t, "gid", {}, timeout=2,
+                        quote={"challenge": challenge.hex(), "token_sha3_256": tok_hash.hex()})
+        transcript_accepted += 1
+        broken.append("transcript v2: a %s piece was given a credential" % kind)
+    except ValueError:
+        if len(h.replies) != 1:            # the second reply was asked for: a PQKEMFIN went out
+            transcript_accepted += 1
+            broken.append("transcript v2: a credential was sent for a %s piece" % kind)
+    except Exception as e:  # noqa: BLE001
+        transcript_raised += 1
+        if len(broken) < 8:
+            broken.append("provision() raised %r on a %s piece" % (e, kind))
+transcript_result = {"pieces_that_are_not_the_transcript": transcript_tried, "kinds": len(KINDS),
+                     "given_a_credential": transcript_accepted, "raised_other_than_ValueError": transcript_raised}
+
 print(json.dumps({"token_parser": token_result, "aegisd_service": service_result,
-                  "hostile_endpoint": endpoint_result, "broken": broken}, indent=1))
+                  "hostile_endpoint": endpoint_result, "one_transcript": transcript_result, "broken": broken},
+                 indent=1))
 sys.exit(1 if broken else 0)

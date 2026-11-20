@@ -4,6 +4,9 @@ built for the PC and run against the gateway's own code (fleet.py): attestation 
 provisioning with the credential checks, KMAC256 heartbeats, the session query, and the refusals (a changed
 image, a wrong pinned key, a credential from another key, for another exchange or for another endpoint), and the
 session's end on the endpoint's own clock (docs/endpoint-expiry.md), which the tests move through a file.
+One transcript (docs/architecture.md): an exchange that continues a quote, what the C code refuses in it, and the two
+firmwares of this chip that hold the same key (the single-image prover and the TF-M partition): a quote from one and
+the exchange from the other, which is audit finding 2 as it exists on this bench.
 Needs gcc and the mldsa-native / mlkem-native v2.0.0 trees (MLDSA_NATIVE_DIR, MLKEM_NATIVE_DIR)."""
 import hashlib
 import os
@@ -22,6 +25,7 @@ sys.path.insert(0, os.path.join(ROOT, "gateway", "aegisd"))
 import fleet  # noqa: E402
 import mldsa  # noqa: E402
 import mlkem  # noqa: E402
+import transcript  # noqa: E402
 import wire  # noqa: E402
 
 TOOLS = os.environ.get("AEGIS_TOOLS", os.path.expanduser("~/aegis-tools"))
@@ -66,6 +70,7 @@ class Rw612Proto(unittest.TestCase):
         cls.seed, cls.root = os.urandom(32).hex(), os.urandom(32).hex()
         cls.procs = []
         cls.clock = os.path.join(cls.d, "clock")       # seconds added to the endpoint's session clock, or "fail"
+        cls.rng = os.path.join(cls.d, "rng")           # "fail": the endpoint's random generator fails (host_main.c)
         cls.port, cls.fp = cls.start(cls.seed)
         with socket.create_connection(("127.0.0.1", cls.port), timeout=5) as s:
             s.sendall(b"PQKEY\n")
@@ -81,7 +86,8 @@ class Rw612Proto(unittest.TestCase):
     def start(cls, seed):
         port = free_port()
         pr = subprocess.Popen([cls.exe, str(port), seed, cls.root, os.path.join(cls.d, "gw.pub"), cls.image],
-                              stdout=subprocess.PIPE, text=True, env=dict(os.environ, AEGIS_TEST_CLOCK=cls.clock))
+                              stdout=subprocess.PIPE, text=True,
+                              env=dict(os.environ, AEGIS_TEST_CLOCK=cls.clock, AEGIS_TEST_RNG=cls.rng))
         cls.procs.append(pr)
         line = pr.stdout.readline().split()
         assert line[0] == "READY", line
@@ -203,6 +209,99 @@ class Rw612Proto(unittest.TestCase):
         self.assertIn("ERR cred other-key", fleet._exchange("127.0.0.1", self.port, rec["fin"], 10))
         sid, _ = fleet.query_session(self.ep())
         self.assertEqual(sid, r["session_id"], "a refused exchange must not replace the session")
+
+    def bound_raw(self, name=lambda t2: t2):
+        """A quote and the exchange that continues it, by hand; name gives the transcript the credential names (None:
+        none). Returns the PQKEMFIN reply and the tag the gateway would compare it with."""
+        v = fleet.attest(self.ep(), None, self.d, timeout=10)
+        self.assertTrue(v["admitted"], v["reasons"])
+        ch, th = bytes.fromhex(v["quote"]["challenge"]), bytes.fromhex(v["quote"]["token_sha3_256"])
+        p = fleet._exchange("127.0.0.1", self.port, "PQKEMINIT " + ch.hex(), 10).split()
+        ek, sig = bytes.fromhex(p[2]), bytes.fromhex(p[4])
+        t2 = transcript.kem_init(transcript.quote(ch, th), ek)
+        self.assertTrue(mldsa.verify(self.pk, transcript.KEM_INIT_LABEL, t2, sig))
+        self.assertFalse(mldsa.verify(self.pk, fleet.KEM_INIT_LABEL, ch + ek, sig))
+        ct, k = mlkem.encaps(ek)
+        body = {"v": 1, "type": "credential", "endpoint": "frdm-rw612",
+                "endpoint_pq_pk_sha256": hashlib.sha256(self.pk).hexdigest(),
+                "kem_ct_sha3_256": fleet._sha3(ct).hex(), "kem_ek_sha3_256": fleet._sha3(ek).hex(),
+                "issued": 4102441200, "expires": 4102444800}
+        if name:
+            body["transcript_sha3_256"] = name(t2).hex()
+        cred = wire.canonical(body) + b"\n" + mldsa.sign(self.gw_sk, fleet.CRED_LABEL, wire.canonical(body))
+        reply = fleet._exchange("127.0.0.1", self.port, "PQKEMFIN %s %s" % (ct.hex(), cred.hex()), 10).strip()
+        return reply, transcript.confirm_tag(k, transcript.kem_fin(t2, ct, cred))
+
+    def test_a_transcript_bound_exchange(self):
+        self.set_clock(0)
+        ep = self.ep(transcript="v2")
+        v = fleet.attest(ep, None, self.d, timeout=10)
+        r = fleet.provision(ep, self.d, self.gw_sk, "gid", v["measurements"], timeout=20, quote=v["quote"])
+        self.assertEqual(r["transcript"], "v2")
+        self.assertEqual(fleet.query_session(ep), (r["session_id"], r["credential_sha3_256"]))
+        self.assertEqual(fleet.heartbeat(ep, r["session_key"], timeout=10)[1], 1)
+        # a quote continues one exchange: the same quote again gets the unbound exchange, which the gateway refuses
+        with self.assertRaises(fleet.TranscriptRefused) as e:
+            fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        self.assertIn("answered the unbound exchange", str(e.exception))
+        self.assertEqual(fleet.query_session(ep)[0], r["session_id"], "a refused exchange must not replace the session")
+        # a quote of an earlier cycle is not the last one; the last one works
+        fleet.attest(ep, None, self.d, timeout=10)
+        newer = fleet.attest(ep, None, self.d, timeout=10)
+        with self.assertRaises(fleet.TranscriptRefused):
+            fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        r2 = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=newer["quote"])
+        self.assertNotEqual(r2["session_id"], r["session_id"])
+        # and the unbound exchange is what an entry without the key still gets, from the same firmware
+        r3 = fleet.provision(self.ep(), self.d, self.gw_sk, "gid", {}, timeout=20)
+        self.assertIsNone(r3["transcript"])
+        self.assertEqual(fleet.heartbeat(self.ep(), r3["session_key"], timeout=10)[1], 1)
+
+    def test_b_credential_must_name_the_transcript(self):
+        self.set_clock(0)
+        ep = self.ep(transcript="v2")
+        v = fleet.attest(ep, None, self.d, timeout=10)
+        r = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        for name in (None, lambda t2: bytes(32), lambda t2: t2[::-1]):
+            self.assertEqual(self.bound_raw(name)[0], "ERR cred other-transcript")
+        self.assertEqual(fleet.query_session(ep)[0], r["session_id"], "a refused credential must not replace the session")
+        reply, tag = self.bound_raw()
+        self.assertEqual(reply, "PQKEMOK %s END" % tag.hex())
+
+    def test_c_quote_does_not_outlive_a_restart(self):
+        """The same seed in a second process: the same key after a restart. It signed no quote, so it answers the
+        unbound exchange, and the gateway refuses to finish with it."""
+        port, fp = self.start(self.seed)
+        self.assertEqual(fp, self.fp)
+        ep = self.ep(transcript="v2")
+        v = fleet.attest(ep, None, self.d, timeout=10)
+        with self.assertRaises(fleet.TranscriptRefused) as e:
+            fleet.provision(dict(ep, port=port), self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        self.assertIn("answered the unbound exchange", str(e.exception))
+        self.assertEqual(fleet._exchange("127.0.0.1", port, "PQSESSION", 10).strip(), "ERR pq no-session")
+
+    def test_d_quote_whose_signing_fails_ends_the_previous_quote(self):
+        """A PQCHAL ends the quote kept for the next PQKEMINIT before it signs (aegis_proto.c: quote_ready = 0 at its
+        start). If signing the new quote fails (here: no random bytes for the hedged signature), the previous quote
+        must not be continued either: the gateway that asked for it may since have seen the endpoint fail to quote."""
+        self.set_clock(0)
+        ep = self.ep(transcript="v2")
+        v = fleet.attest(ep, None, self.d, timeout=10)
+        self.assertTrue(v["admitted"], v["reasons"])
+        with open(self.rng, "w") as f:
+            f.write("fail")
+        try:
+            self.assertEqual(self.ask("PQCHAL " + os.urandom(32).hex()), "ERR sign")
+        finally:
+            os.remove(self.rng)
+        with self.assertRaises(fleet.TranscriptRefused) as e:
+            fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        self.assertIn("answered the unbound exchange", str(e.exception))
+        # a malformed PQCHAL is refused before it touches the quote: that one is still continued
+        v = fleet.attest(ep, None, self.d, timeout=10)
+        self.assertEqual(self.ask("PQCHAL 00"), "ERR bad-request")
+        r = fleet.provision(ep, self.d, self.gw_sk, "gid", {}, timeout=20, quote=v["quote"])
+        self.assertEqual(r["transcript"], "v2")
 
     def test_8_session_ends_on_the_endpoints_clock(self):
         """The credential lasts an hour (fleet.CRED_LIFETIME_S); the endpoint ends the session 3825 s (an hour and a
@@ -383,6 +482,36 @@ class Rw612TfmProfile(unittest.TestCase):
             fleet.main(["enroll-pq", pol])
         self.assertIn("kept frdm-rw612", out.getvalue())
         self.assertEqual(open(os.path.join(self.d, "ep.pub")).read(), before)
+
+    def test_6_one_key_two_firmwares(self):
+        """Audit finding 2 on this chip: the single-image prover and the TF-M partition derive the same ML-DSA-65 key.
+        The gateway appraises the TF-M partition's quote (trustzone trust, SPE and NSPE as allowed); the ML-KEM
+        exchange is then answered by the single-image prover."""
+        ask = lambda port, line: fleet._exchange("127.0.0.1", port, line, 10).strip()  # noqa: E731
+        tfm, els = self.ep(self.port_tfm, transcript="v2"), self.ep(self.port_els, transcript="v2")
+        v = fleet.attest(tfm, None, self.d, timeout=10)
+        self.assertTrue(v["admitted"], v["reasons"])
+        self.assertEqual(v["trust"], "trustzone")
+        # the other firmware has no such quote: it answers the unbound exchange
+        with self.assertRaises(fleet.TranscriptRefused) as e:
+            fleet.provision(els, self.d, self.gw_sk, "gid", v["measurements"], timeout=20, quote=v["quote"])
+        self.assertIn("answered the unbound exchange", str(e.exception))
+        # even after it signed a quote of its own for the same challenge: that quote says who it is
+        self.assertTrue(ask(self.port_els, "PQCHAL " + v["quote"]["challenge"]).startswith("PQTOKEN "))
+        with self.assertRaises(fleet.TranscriptRefused) as e:
+            fleet.provision(els, self.d, self.gw_sk, "gid", v["measurements"], timeout=20, quote=v["quote"])
+        self.assertIn("not signed over the transcript of the quote just appraised", str(e.exception))
+        self.assertEqual(ask(self.port_els, "PQSESSION"), "ERR pq no-session")
+        # the firmware that was appraised finishes its own transcript
+        r = fleet.provision(tfm, self.d, self.gw_sk, "gid", v["measurements"], timeout=20, quote=v["quote"])
+        self.assertEqual(fleet.query_session(tfm), (r["session_id"], r["credential_sha3_256"]))
+        # without the policy key the swap goes through: a credential listing the TF-M measurements, a session with
+        # the single-image prover
+        v = fleet.attest(self.ep(self.port_tfm), None, self.d, timeout=10)
+        r = fleet.provision(self.ep(self.port_els), self.d, self.gw_sk, "gid", v["measurements"], timeout=20)
+        self.assertIsNone(r["transcript"])
+        self.assertEqual(set(r["body"]["measurements"]), {"SPE", "NSPE"})
+        self.assertEqual(ask(self.port_els, "PQSESSION").split()[1], r["session_id"])
 
     def test_4_provision_and_heartbeat(self):
         r = fleet.provision(self.ep(self.port_tfm), self.d, self.gw_sk, "gid", {}, timeout=20)

@@ -115,3 +115,18 @@ left>`:
 - `ttl` must fall by the gateway's cycle time from one heartbeat to the next.
 
 The secure console prints the choice at start, for example `[Aegis] session clock: ref, 1015625 Hz` (260 MHz / 256).
+
+## One transcript (0.3.0, built; not yet on the board)
+
+The partition keeps the last quote it signed, and a `PQKEMINIT` that carries that quote's challenge continues it: the
+ML-KEM key is signed over the transcript of the quote, the credential must name it, and the session key depends on it
+(`docs/architecture.md`, "One transcript"; the code is in `../prover/src/aegis_proto.c`). With `"transcript": "v2"`
+in this endpoint's policy entry the gateway finishes a session only that way. This chip is where it matters most on
+the bench: the single-image prover (`../prover`) has the same key, and before this the gateway could appraise this
+partition's quote and finish the session with that firmware (`tests/host/test_rw612_proto.py`,
+`test_6_one_key_two_firmwares`).
+
+The non-secure image is unchanged, byte for byte (`prover_ns.bin`, sha256 `9af83bab...`), so only `SPE` changes in
+the gateway policy: `tools/rw612_tfm_reference.py` gives SPE `76f89751c178c99d086c362f8334869bd0b0c691a71cf8a244dd1e609035ee28`
+for this build (`aegis_s.bin`, sha256 `8f7a0197...`; NSPE stays `24979a1f...`). The heartbeat status says
+`fw=rw612-tfm-0.3.0`. On the board: `tests/board/transcript_swap_check.py`.

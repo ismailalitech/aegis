@@ -24,7 +24,7 @@ Then DHCP, and the protocol (`prover/src/aegis_proto.c`, no RTOS code in it, so 
 |---|---|
 | `PQKEY` | the ML-DSA-65 public key |
 | `PQCHAL <32 bytes>` | CBOR claims (PSA claim numbers, profile `aegis-rw612-els-v1`, the challenge, one measurement `APP` = SHA-256 of the firmware image as it sits in flash) and an ML-DSA-65 signature over `"aegis-endpoint-quote-v1\0" ‖ claims` (hedged: 32 bytes from the RW612's hardware TRNG in every signature) |
-| `PQKEMINIT <nonce>` | an ML-KEM-768 key for this exchange, derived from `prov_root`, signed |
+| `PQKEMINIT <nonce>` | an ML-KEM-768 key for this exchange, derived from `prov_root`, signed; with the challenge of the last quote as the nonce, signed over that quote's transcript (`docs/architecture.md`, "One transcript"; in source, this firmware not rebuilt) |
 | `PQKEMFIN <ct> <credential>` | the confirmation tag, only if the credential is signed by the gateway key pinned in the image (`gateway_pk.h`) and names this exchange's ciphertext and this device's key |
 | `PQHB <nonce>` | a KMAC256 heartbeat over the session (`"aegis-hb-v2"`) |
 | `PQSESSION` | the session ID and the credential hash |
