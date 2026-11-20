@@ -26,6 +26,7 @@ claimed. Every document below is in this directory unless a path says otherwise.
 | [`evidence-format.md`](evidence-format.md) | evidence, attestation results and endorsements as EAT / COSE |
 | [`audit-and-policy.md`](audit-and-policy.md) | the signed audit log and the signed policy |
 | [`vlan-enforcement.md`](vlan-enforcement.md) | network enforcement with one port and a VLAN switch |
+| [`soak-and-watchdogs.md`](soak-and-watchdogs.md) | the watchdogs and the 24-hour soak: what it catches, pass and fail, how to run it |
 
 ## The Prover SDK (for device makers)
 
