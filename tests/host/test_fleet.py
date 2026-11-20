@@ -131,7 +131,7 @@ class FakeEndpoint:
             self.hb = getattr(self, "hb", 0) + 1
             ctr = self.hb.to_bytes(8, "little")
             status = getattr(self, "hb_status", b"uptime_s=1;link=1;fw=test")
-            if getattr(self, "hb_mac", None) == "kmac256":
+            if getattr(self, "hb_mac", "kmac256") == "kmac256":   # every current endpoint image
                 tag = kmac.kmac256(self.session, nonce + ctr + status, 32, b"aegis-hb-v2")
             else:
                 tag = sha3(b"aegis-hb-v1", self.session, nonce, ctr, status)
@@ -330,9 +330,30 @@ class Fleet(unittest.TestCase):
     def test_heartbeat_mac_mismatch_refused(self):
         ep, conf, _, gw_sk = self.provision_ep("kem-good")
         r = fleet.provision(conf, self.dir, gw_sk, "gid", {}, timeout=5)
-        ep.hb_mac = "kmac256"          # endpoint on KMAC, gateway policy still on the first version
+        ep.hb_mac = "kmac256"          # endpoint on KMAC, gateway policy pinned to the first version
+        conf["heartbeat_mac"] = "sha3-256"
         with self.assertRaises(ValueError):
             fleet.heartbeat(conf, r["session_key"], timeout=5)
+
+    def test_heartbeat_default_is_kmac256(self):
+        """An entry without "heartbeat_mac" expects KMAC256, what every endpoint image now computes."""
+        self.assertEqual(fleet.heartbeat_tag(None, b"k" * 32, b"n" * 32, bytes(8), b"s"),
+                         fleet.heartbeat_tag("kmac256", b"k" * 32, b"n" * 32, bytes(8), b"s"))
+        ep, conf, _, gw_sk = self.provision_ep("kem-good")
+        r = fleet.provision(conf, self.dir, gw_sk, "gid", {}, timeout=5)
+        self.assertNotIn("heartbeat_mac", conf)
+        self.assertEqual(fleet.heartbeat(conf, r["session_key"], timeout=5)[1], 1)
+
+    def test_heartbeat_sha3_only_endpoint_still_works_when_named(self):
+        """A SHA-3-only image (STM32 built with AEGIS_HB_KMAC=0) keeps working with "heartbeat_mac": "sha3-256", and
+        is refused by the new default."""
+        ep, conf, _, gw_sk = self.provision_ep("kem-good")
+        r = fleet.provision(conf, self.dir, gw_sk, "gid", {}, timeout=5)
+        ep.hb_mac = "sha3-256"
+        with self.assertRaises(ValueError):
+            fleet.heartbeat(conf, r["session_key"], timeout=5)
+        conf["heartbeat_mac"] = "sha3-256"
+        self.assertEqual(fleet.heartbeat(conf, r["session_key"], timeout=5)[1], 2)
 
     def test_heartbeat_unknown_mac_refused(self):
         with self.assertRaises(ValueError):

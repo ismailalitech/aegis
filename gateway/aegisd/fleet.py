@@ -16,9 +16,19 @@ endpoint is ADMITTED only if all of these hold:
 Anything else, including no answer at all (a node that cannot attest), is
 QUARANTINED with the reasons listed. Standard library only, plus the openssl tool.
 
+Strict by default: a "psa" endpoint without "iak_pub_pem" (unsigned claims) and a
+plain-claims endpoint without a pinned "profile" are refused without contacting
+them. The ZynqMP development profile (one OP-TEE key for every chip) is refused
+too unless its entry says "allow_dev_profile": true; it is then admitted with the
+trust label "development-shared-key" and a WARNING line. `fleet.py check POLICY`
+lists what a policy would refuse.
+
 Enforcement is a hook: if the policy names "enforce_cmd", it is run with the
 endpoint name and verdict after every decision (for example to add or remove a
-firewall rule). Without it the gateway only decides and records.
+firewall rule), with AEGIS_ADMIT_TTL set to the seconds an admission may live
+without being refreshed by the next cycle (admit_ttl()). A hook that fails is
+reported in the verdict and in the journal line ("enforcement FAILED"). Without
+the hook the gateway only decides and records.
 """
 import argparse
 import json
@@ -43,8 +53,15 @@ TEE_DEVHUK_PROFILE = "aegis-zynqmp-optee-devhuk-v1"  # ZynqMP, OP-TEE: key in th
 TEE_PROFILE = "aegis-zynqmp-optee-v1"         # ZynqMP, OP-TEE: key from the PUF-protected device key (design)
 PLAIN_KINDS = {"aegis-linux": {LINUX_PROFILE: "software"},
                "aegis-device": {DEVICE_PROFILE: "device-key", DEVICE_TFM_PROFILE: "trustzone"},
-               "aegis-tee": {TEE_DEVHUK_PROFILE: "trustzone-devkey", TEE_PROFILE: "trustzone"}}
+               "aegis-tee": {TEE_DEVHUK_PROFILE: "development-shared-key", TEE_PROFILE: "trustzone"}}
+# Profiles whose key is the same on every chip: a quote proves the firmware, not which device sent it. Refused unless
+# the endpoint's entry opts in with "allow_dev_profile": true (bench use).
+DEV_PROFILES = {TEE_DEVHUK_PROFILE}
 PQ_KINDS = ("aegis-pq",) + tuple(PLAIN_KINDS)
+KNOWN_KINDS = ("psa",) + PQ_KINDS
+HEARTBEAT_MACS = ("kmac256", "sha3-256")
+DEFAULT_HEARTBEAT_MAC = "kmac256"   # every current endpoint image; SHA-3-only images need "heartbeat_mac": "sha3-256"
+ENFORCE_TIMEOUT_S = 30
 KEM_INIT_LABEL = b"aegis-kem-init-v1"
 CRED_LABEL = b"aegis-credential-v1"
 CRED_LIFETIME_S = 3600
@@ -170,12 +187,16 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
 
 def heartbeat_tag(mode, session_key, nonce, ctr, status):
     """The heartbeat MAC. Policy key "heartbeat_mac" per endpoint:
-    "kmac256":            KMAC256(K=session, X=nonce || counter || status, L=256, S="aegis-hb-v2")  (SP 800-185)
-    "sha3-256" (default): SHA3-256("aegis-hb-v1" || session || nonce || counter || status)        (the first version)
-    Both sides must use the same one; switch an endpoint's policy entry when its secure image changes."""
+    "kmac256" (default): KMAC256(K=session, X=nonce || counter || status, L=256, S="aegis-hb-v2")  (SP 800-185)
+    "sha3-256":          SHA3-256("aegis-hb-v1" || session || nonce || counter || status)        (the first version)
+    Both sides must use the same one. Every endpoint image in endpoints/ computes KMAC256 (the STM32 partition unless
+    built with AEGIS_HB_KMAC=0, the RW612 and ZynqMP TA always, the Linux prover by default); an endpoint still on a
+    SHA-3 image needs "heartbeat_mac": "sha3-256" in its entry."""
+    if mode is None:
+        mode = DEFAULT_HEARTBEAT_MAC
     if mode == "kmac256":
         return kmac.kmac256(session_key, nonce + ctr + status, 32, b"aegis-hb-v2")
-    if mode in (None, "sha3-256"):
+    if mode == "sha3-256":
         return _sha3(b"aegis-hb-v1", session_key, nonce, ctr, status)
     raise ValueError("unknown heartbeat_mac %r" % mode)
 
@@ -208,12 +229,20 @@ def check_components(claims, allowed):
     comps = claims.get("sw_components", [])
     if not comps:
         return ["token has no software components"]
+    if not isinstance(comps, list):
+        return ["sw_components is not a list"]
     for c in comps:
+        if not isinstance(c, dict):
+            reasons.append("malformed software component")
+            continue
         typ = c.get("measurement_type")
         mv = c.get("measurement_value", b"")
         sid = c.get("signer_id", b"")
         mv = mv.hex() if isinstance(mv, bytes) else mv
         sid = sid.hex() if isinstance(sid, bytes) else sid
+        if not isinstance(mv, str) or not isinstance(sid, str):
+            reasons.append("component %r has a malformed measurement or signer" % (typ,))
+            continue
         ok = any(a["type"] == typ and a["measurement_value"] == mv and a.get("signer_id", sid) == sid
                  for a in allowed)
         if not ok:
@@ -223,6 +252,39 @@ def check_components(claims, allowed):
 
 def _path(base_dir, p):
     return p if os.path.isabs(p) else os.path.join(base_dir, p)
+
+
+def policy_errors(ep):
+    """Reasons an endpoint entry is refused before the endpoint is even asked (strict profiles). Empty if the entry
+    is acceptable."""
+    kind = ep.get("kind", "psa")
+    if kind not in KNOWN_KINDS:
+        return ["policy: unknown kind %r" % kind]
+    errors = []
+    if kind == "psa" and not ep.get("iak_pub_pem"):
+        errors.append("policy: kind psa without iak_pub_pem (unsigned tokens are not accepted)")
+    if kind in PQ_KINDS and not ep.get("pq_pub_file"):
+        errors.append("policy: kind %s without pq_pub_file" % kind)
+    if kind in PLAIN_KINDS:
+        pin, accepted = ep.get("profile"), PLAIN_KINDS[kind]
+        if not pin:
+            errors.append("policy: no profile pinned (kind %s needs \"profile\": %s)" % (kind, " or ".join(sorted(accepted))))
+        elif pin not in accepted:
+            errors.append("policy: pinned profile %s is not one of kind %s (%s)" % (pin, kind, " or ".join(sorted(accepted))))
+        elif pin in DEV_PROFILES and ep.get("allow_dev_profile") is not True:
+            errors.append("policy: profile %s is a development profile (one key for every chip); "
+                          "set \"allow_dev_profile\": true to admit it on the bench" % pin)
+    mac = ep.get("heartbeat_mac")
+    if mac is not None and mac not in HEARTBEAT_MACS:
+        errors.append("policy: unknown heartbeat_mac %r" % mac)
+    return errors
+
+
+def policy_warnings(ep):
+    if ep.get("allow_dev_profile") is True and ep.get("profile") in DEV_PROFILES:
+        return ["WARNING: %s may be admitted on development profile %s: its key is the same on every chip"
+                % (ep.get("name"), ep["profile"])]
+    return []
 
 
 def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
@@ -236,10 +298,15 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
     kind "aegis-device": the same plain claims from a microcontroller whose ML-DSA-65 key is derived inside the chip's
     key store (NXP ELS) and never stored. Profile aegis-rw612-els-v1: the firmware measures itself, "trust":
     "device-key" (the key proves the chip, not the firmware). Profile aegis-rw612-tfm-v1: the key and the measurements
-    (SPE, NSPE) are in a TF-M secure partition that the non-secure image cannot reach, "trust": "trustzone". An
-    endpoint entry may pin the profile ("profile": ...)."""
+    (SPE, NSPE) are in a TF-M secure partition that the non-secure image cannot reach, "trust": "trustzone".
+    Plain-claims kinds must pin the profile ("profile": ...); see policy_errors() for what is refused up front.
+    Never raises for anything the endpoint sends."""
     kind = ep.get("kind", "psa")
     verdict = {"endpoint": ep["name"], "kind": kind, "time": int(time.time()), "admitted": False, "reasons": []}
+    errors = policy_errors(ep)
+    if errors:
+        verdict["reasons"] += errors
+        return verdict
     challenge = secrets.token_bytes(32)
     t0 = time.monotonic()
     sig = None
@@ -269,37 +336,114 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0):
             if profile not in accepted:
                 verdict["reasons"].append("profile is not %s" % " or ".join(sorted(accepted)))
                 return verdict
-            verdict["trust"] = accepted[profile]
-            # The RW612 derives the same key under either firmware, so a policy pins the profile it expects: without
-            # the pin, the single-image prover could pass as the TrustZone one.
-            if ep.get("profile") and profile != ep["profile"]:
+            # The RW612 derives the same key under either firmware, so the policy pins the profile it expects (now
+            # mandatory, policy_errors()): without the pin, the single-image prover could pass as the TrustZone one.
+            if profile != ep["profile"]:
                 verdict["reasons"].append("profile %s, policy requires %s" % (profile, ep["profile"]))
                 return verdict
+            verdict["trust"] = accepted[profile]
+            if profile in DEV_PROFILES:
+                verdict["warning"] = ("development profile %s admitted only because allow_dev_profile is set: "
+                                      "its key is the same on every chip" % profile)
         elif ep.get("iak_pub_pem"):
             with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
                 claims = psa_token.verify(tok, f.read(), ecdsa_verify)
         else:
+            # aegis-pq without an ES256 key: the ML-DSA-65 signature over the whole token was verified above
             claims = psa_token.parse(tok)[3]
     except (psa_token.TokenError, ValueError, OSError) as e:
         verdict["reasons"].append(str(e))
         return verdict
-    if claims.get("challenge") != challenge:
-        verdict["reasons"].append("challenge mismatch (replayed or stale token)")
-    verdict["reasons"] += check_components(claims, ep.get("allowed", []))
-    s = psa_token.summary(claims)
-    verdict["measurements"] = {c.get("measurement_type"): c.get("measurement_value") for c in s["sw_components"]}
-    verdict["instance_id"] = s.get("instance_id")
+    except Exception as e:  # noqa: BLE001 - nothing an endpoint sends may stop the fleet loop
+        verdict["reasons"].append("token not usable: %s: %s" % (type(e).__name__, e))
+        return verdict
+    try:
+        if claims.get("challenge") != challenge:
+            verdict["reasons"].append("challenge mismatch (replayed or stale token)")
+        verdict["reasons"] += check_components(claims, ep.get("allowed", []))
+        s = psa_token.summary(claims)
+        verdict["measurements"] = {c.get("measurement_type"): c.get("measurement_value") for c in s["sw_components"]}
+        verdict["instance_id"] = s.get("instance_id")
+    except Exception as e:  # noqa: BLE001 - malformed but signed claims: refuse, do not crash
+        verdict["reasons"].append("claims not usable: %s: %s" % (type(e).__name__, e))
     verdict["admitted"] = not verdict["reasons"]
     return verdict
 
 
-def enforce(policy, verdict):
+def admit_ttl(policy, interval):
+    """Seconds an admission lives in the enforcement set unless the next cycle refreshes it (aegis.nft, set timeout).
+    One cycle is the sleep plus, per endpoint, at most timeout_s for the quote and 40 s for provisioning and the
+    heartbeat; the TTL is two sleeps plus that, so a working loop always refreshes in time, while a gateway whose loop
+    has stopped (crash, hang, service stopped) drops every endpoint within minutes. "admit_ttl_s" overrides it."""
+    try:
+        if policy.get("admit_ttl_s"):
+            return max(int(policy["admit_ttl_s"]), 1)
+    except (TypeError, ValueError):
+        pass            # a malformed override must not stop the loop: use the derived value
+    per_ep = float(policy.get("timeout_s", 10))
+    cycle = sum(per_ep + (40 if ep.get("provision") else 0) for ep in policy.get("endpoints", []))
+    return max(int(2 * float(interval) + cycle + 0.999), 60)
+
+
+def enforce(policy, verdict, ttl=None):
+    """Run the policy's enforcement hook; returns None without one, else {"rc", "stderr", "failed"}. A hook that
+    exits non-zero, cannot be started or hangs is a failure: the verdict did not reach the network."""
     cmd = policy.get("enforce_cmd")
     if not cmd:
         return None
-    r = subprocess.run(cmd + [verdict["endpoint"], "admit" if verdict["admitted"] else "quarantine"],
-                       capture_output=True, text=True)
-    return r.returncode
+    action = "admit" if verdict["admitted"] else "quarantine"
+    env = dict(os.environ)
+    if ttl:
+        env["AEGIS_ADMIT_TTL"] = str(int(ttl))
+    try:
+        r = subprocess.run(list(cmd) + [verdict["endpoint"], action], capture_output=True, text=True, env=env,
+                           timeout=ENFORCE_TIMEOUT_S)
+        rc, err = r.returncode, (r.stderr or "").strip()
+    except subprocess.TimeoutExpired:
+        rc, err = None, "hook did not finish in %d s" % ENFORCE_TIMEOUT_S
+    except OSError as e:
+        rc, err = None, "hook could not be started: %s" % e
+    return {"rc": rc, "stderr": err, "failed": rc != 0}
+
+
+def record_enforcement(verdict, result):
+    """Copy the hook's result into the verdict (state file) and return the journal suffix."""
+    if result is None:
+        verdict["enforce_rc"] = None
+        return ""
+    verdict["enforce_rc"] = result["rc"]
+    if not result["failed"]:
+        verdict["enforcement"] = "ok"
+        return ""
+    first = result["stderr"].splitlines()[0] if result["stderr"] else "no message"
+    verdict["enforcement"] = "FAILED"
+    verdict["enforce_error"] = result["stderr"]
+    return " [enforcement FAILED rc=%s: %s]" % ("none" if result["rc"] is None else result["rc"], first)
+
+
+def log(msg, priority=None, file=None):
+    """One journal line. Under systemd (JOURNAL_STREAM set) a "<N>" prefix sets the syslog priority, so
+    `journalctl -p warning` shows failed enforcement and development-profile admissions."""
+    if priority is not None and os.environ.get("JOURNAL_STREAM"):
+        msg = "\n".join("<%d>%s" % (priority, m) for m in msg.split("\n"))
+    print(msg, file=file or sys.stdout, flush=True)
+
+
+LOG_ERR, LOG_WARNING = 3, 4
+
+
+def journal_line(v):
+    """The watch loop's line for one verdict; returns (text, priority or None)."""
+    line = "%s %s %s %s%s" % (time.strftime("%H:%M:%S"), v["endpoint"],
+                              ("ADMITTED" if v["admitted"] else "QUARANTINED") +
+                              (" (%s trust)" % v["trust"] if v.get("trust") else "") + v.get("enforce_note", ""),
+                              "; ".join(v["reasons"]),
+                              (" [credential: %s]" % v["credential"]) if v.get("credential") else "")
+    if v.get("enforcement") == "FAILED":
+        return line, LOG_ERR
+    if v["admitted"] and v.get("warning"):
+        return line + " WARNING: " + v["warning"], LOG_WARNING
+    return line, None
 
 
 GATEWAY_STATE = "/var/lib/aegis"
@@ -342,37 +486,57 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE):
                     with open(meta, "w") as f:
                         json.dump(m, f, indent=1)
                     return "valid, heartbeat %d (%s)" % (ctr, m["last_status"])
-            except (OSError, ValueError):
-                pass
+                hb_error = "counter did not rise"
+            except (OSError, ValueError) as e:
+                hb_error = str(e)
+        else:
+            hb_error = None
+    else:
+        hb_error = None
     sk, gid = load_gateway_identity(state)
     try:
         r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}))
     except (OSError, ValueError, RuntimeError) as e:
-        return "provisioning failed: %s" % e
+        return "provisioning failed: %s" % e + (" (after heartbeat failure: %s)" % hb_error if hb_error else "")
     fd = os.open(keyf, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(r["session_key"])
     with open(meta, "w") as f:
         json.dump({"body": r["body"], "session_id": r["session_id"],
                    "credential_sha3_256": r["credential_sha3_256"]}, f, indent=1)
-    return "issued session %s..." % r["session_id"][:12]
+    return "issued session %s..." % r["session_id"][:12] + (" (heartbeat failed: %s)" % hb_error if hb_error else "")
 
 
-def run_once(policy, base_dir, ecdsa_verify, credentials=True):
+def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, state=GATEWAY_STATE):
     out = []
+    ttl = admit_ttl(policy, interval)
     for ep in policy["endpoints"]:
-        v = attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)))
-        v["enforce_rc"] = enforce(policy, v)
-        cs = credential_step(ep, v, base_dir) if (credentials and ep.get("provision")) else None
-        if cs:
-            v["credential"] = cs
+        try:
+            v = attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)))
+        except Exception as e:  # noqa: BLE001 - one endpoint must never stop the loop for the others
+            v = {"endpoint": ep.get("name", "?"), "kind": ep.get("kind", "psa"), "time": int(time.time()),
+                 "admitted": False, "reasons": ["attestation error: %s: %s" % (type(e).__name__, e)]}
+        result = enforce(policy, v, ttl)
+        note = record_enforcement(v, result)
+        if note:
+            v["enforce_note"] = note
+            log("aegis-fleet: enforcement hook failed for %s (%s), rc=%s:\n%s" % (
+                v["endpoint"], "admit" if v["admitted"] else "quarantine", result["rc"], result["stderr"] or "(no output)"),
+                LOG_ERR, file=sys.stderr)
+        if credentials and ep.get("provision"):
+            try:
+                cs = credential_step(ep, v, base_dir, state=state)
+            except Exception as e:  # noqa: BLE001
+                cs = "credential step failed: %s: %s" % (type(e).__name__, e)
+            if cs:
+                v["credential"] = cs
         out.append(v)
     return out
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Aegis fleet verifier")
-    ap.add_argument("cmd", choices=["once", "watch", "enroll-pq", "session"])
+    ap.add_argument("cmd", choices=["once", "watch", "enroll-pq", "session", "check"])
     ap.add_argument("--force", action="store_true", help="enroll-pq: replace keys that are already pinned")
     ap.add_argument("policy")
     ap.add_argument("--interval", type=float, default=30)
@@ -415,8 +579,21 @@ def main(argv=None):
                               "endpoint_session_id": sid, "same_session": bool(mine) and sid == mine["session_id"],
                               "same_credential": bool(mine) and ch == mine["credential_sha3_256"]}, indent=1))
         return 0
+    if a.cmd == "check":
+        # what the strict profile rules refuse in this policy, without contacting any endpoint
+        bad = 0
+        for ep in policy["endpoints"]:
+            errs, warns = policy_errors(ep), policy_warnings(ep)
+            bad += bool(errs)
+            print("%s %s%s" % (ep.get("name"), "REFUSED: " + "; ".join(errs) if errs else "ok",
+                               "".join(" " + w for w in warns)))
+        print("admission TTL: %d s (interval %g s)" % (admit_ttl(policy, a.interval), a.interval))
+        return 1 if bad else 0
     if a.cmd == "once":
-        print(json.dumps(run_once(policy, base, ev, credentials=not a.no_credentials), indent=1))
+        res = run_once(policy, base, ev, credentials=not a.no_credentials, interval=a.interval)
+        for v in res:
+            v.pop("enforce_note", None)
+        print(json.dumps(res, indent=1))
         return 0
     while True:
         try:  # reload every cycle, so policy updates apply without a restart
@@ -424,18 +601,16 @@ def main(argv=None):
                 policy = json.load(f)
         except (OSError, ValueError) as e:
             print("policy reload failed, keeping the previous one: %s" % e, flush=True)
-        res = run_once(policy, base, ev)
+        res = run_once(policy, base, ev, interval=a.interval)
+        lines = [journal_line(v) for v in res]
+        for v in res:
+            v.pop("enforce_note", None)
         tmp = a.state + ".tmp"
         with open(tmp, "w") as f:
             json.dump({"updated": int(time.time()), "verdicts": res}, f, indent=1)
         os.replace(tmp, a.state)
-        for v in res:
-            print("%s %s %s %s%s" % (time.strftime("%H:%M:%S"), v["endpoint"],
-                                     ("ADMITTED" if v["admitted"] else "QUARANTINED") +
-                                     (" (%s trust)" % v["trust"] if v.get("trust") else ""),
-                                     "; ".join(v["reasons"]),
-                                     (" [credential: %s]" % v["credential"]) if v.get("credential") else ""),
-                  flush=True)
+        for text, prio in lines:
+            log(text, prio)
         time.sleep(a.interval)
 
 

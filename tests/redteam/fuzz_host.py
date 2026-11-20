@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Red-team checks on the PC (no hardware). Each check states the property it tries to break.
 
-  1. token parser: mutated / truncated / random PSA tokens are never accepted and only raise the
-     expected error types (no crash, no other exception);
+  1. token parser: mutated / truncated / random PSA tokens are never accepted and raise nothing but
+     psa_token.TokenError (no crash, no other exception);
   2. aegisd quote service: malformed requests (garbage, wrong JSON, huge length prefix, bad nonce)
      never stop the service; a valid quote still verifies afterwards;
   3. fleet verifier vs a hostile endpoint: random reply lines, a classic-token downgrade for a
-     post-quantum endpoint, a replayed KEM key from an earlier nonce: never admitted / provisioned.
+     post-quantum endpoint, a replayed KEM key from an earlier nonce: never admitted / provisioned;
+     validly signed tokens (ES256 and ML-DSA-65) carrying random CBOR claims: attest() never raises.
 
   fuzz_host.py [iterations]     prints a JSON summary, exit 0 only if no property broke
 """
@@ -70,10 +71,9 @@ for _ in range(N):
     t = mutate(good)
     try:
         psa_token.verify(t, pub, psa_token.verify_with_cryptography)
-        if psa_token.parse(t)[:3] != signed_parts:  # signed content changed, yet accepted
+        if psa_token.envelope(t) != signed_parts:  # signed content changed, yet accepted
             accepted += 1
-    except (psa_token.TokenError, cbor.CBORError, ValueError, TypeError, KeyError, AttributeError,
-            UnicodeDecodeError, IndexError, RecursionError):
+    except psa_token.TokenError:  # every decoding failure is reported as a TokenError (verified first)
         pass
     except Exception as e:  # anything else is a robustness bug
         other_exc += 1
@@ -196,8 +196,75 @@ try:
 except ValueError:
     kem_replay_refused = True
 
+# signed hostile claims: the signature is valid (ES256 for "psa", ML-DSA-65 for the PQ kinds), the claims are random
+# CBOR of any shape. attest() must return a verdict, never raise, never admit.
+
+
+def rand_cbor(depth=0):
+    r = R.randrange(9 if depth < 4 else 5)
+    if r == 0:
+        return R.randrange(-2 ** 40, 2 ** 40)
+    if r == 1:
+        return bytes(R.randrange(256) for _ in range(R.choice([0, 1, 32, R.randrange(70)])))
+    if r == 2:
+        return "".join(chr(R.randrange(32, 127)) for _ in range(R.randrange(12)))
+    if r == 3:
+        return R.choice([True, False, None])
+    if r == 4:
+        return R.choice(["SPE", "NSPE", "BOOT", fleet.TEE_PROFILE, fleet.TEE_DEVHUK_PROFILE])
+    if r in (5, 6):
+        return [rand_cbor(depth + 1) for _ in range(R.randrange(4))]
+    if r == 7:
+        return cbor.Tag(R.randrange(30), rand_cbor(depth + 1))
+    return {R.choice([R.randrange(-5, 12), -75006, 2399, -75008, 10, 265, 256, "k"]): rand_cbor(depth + 1)
+            for _ in range(R.randrange(5))}
+
+
+def rand_claims():
+    claims = {R.choice([-75008, 10]): R.choice([b"\x00" * 32, rand_cbor()])}
+    for k in R.sample([265, -75000, 256, -75009, 2399, -75006, 1, "x"], R.randrange(1, 6)):
+        if k in (2399, -75006) and R.random() < 0.6:
+            claims[k] = [{R.choice([1, 2, 4, 5, 6, 9]): rand_cbor(2) for _ in range(R.randrange(4))}
+                         for _ in range(R.randrange(3))]
+        else:
+            claims[k] = rand_cbor(1)
+    return claims
+
+
+from test_gateway_hardening import es256_token  # noqa: E402
+signed_attests = signed_raised = signed_admitted = 0
+tee_pf = os.path.join(store, "tee.pub")
+open(tee_pf, "w").write(pq_pk.hex())
+for _ in range(min(N, 300)):
+    claims = rand_claims()
+    payload = cbor.dumps(claims)
+    for kind in ("psa", "aegis-tee"):
+        if kind == "psa":
+            tok = es256_token(key, payload)
+            line = b"TOKEN %d %s END\r\n" % (len(tok), tok.hex().encode())
+            conf = {"name": "s", "kind": "psa", "iak_pub_pem": pemf}
+        else:
+            sig = mldsa.sign(pq_sk, fleet.PQ_LABEL, payload)
+            line = b"PQTOKEN %d %s %d %s END\r\n" % (len(payload), payload.hex().encode(), len(sig), sig.hex().encode())
+            conf = {"name": "s", "kind": "aegis-tee", "pq_pub_file": tee_pf, "profile": fleet.TEE_DEVHUK_PROFILE,
+                    "allow_dev_profile": True}
+        h = Hostile([line])
+        conf.update({"host": "127.0.0.1", "port": h.port, "allowed": allowed})
+        signed_attests += 1
+        try:
+            v = fleet.attest(conf, psa_token.verify_with_cryptography, store, timeout=2)
+            signed_admitted += v["admitted"]
+        except Exception as e:  # noqa: BLE001
+            signed_raised += 1
+            if len(broken) < 8:
+                broken.append("attest() raised on signed hostile claims (%s): %r" % (kind, e))
+if signed_admitted:
+    broken.append("signed random claims were admitted")
+
 endpoint_result = {"random_replies": min(N, 400) * 2, "admitted_by_garbage": admitted_by_garbage,
-                   "classic_token_downgrade_refused": downgrade_refused, "kem_key_replay_refused": kem_replay_refused}
+                   "classic_token_downgrade_refused": downgrade_refused, "kem_key_replay_refused": kem_replay_refused,
+                   "signed_hostile_claims": signed_attests, "signed_hostile_raised": signed_raised,
+                   "signed_hostile_admitted": signed_admitted}
 if admitted_by_garbage:
     broken.append("a garbage reply was admitted")
 if not downgrade_refused:

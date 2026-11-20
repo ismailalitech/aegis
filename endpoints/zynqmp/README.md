@@ -32,8 +32,10 @@ it `zynqmp-te0808`, from before the module was identified; it is a TE0807.) File
   code in OP-TEE, with the key from OP-TEE's system PTA. `bridge/` is the Linux pipe (TCP 7444 to `/dev/tee0`).
   `build_ta.sh` stages the shared sources and builds the TA, and OP-TEE 4.7 takes it in with `EARLY_TA_PATHS`.
   TF-A is built with `SPD=opteed`, and the device tree reserves 0x6000_0000-0x7FFF_FFFF. The gateway kind is
-  `aegis-tee`: the profile `aegis-zynqmp-optee-devhuk-v1` ("trustzone-devkey") until the HUK comes from the PUF
-  (phase B). Evidence: `evidence/zynqmp/optee-phase-a.txt`.
+  `aegis-tee`: the profile `aegis-zynqmp-optee-devhuk-v1` until the HUK comes from the PUF (phase B). That
+  profile's key is the same on every chip, so the gateway refuses it unless the policy entry pins it and says
+  `"allow_dev_profile": true`; it is then admitted as "development-shared-key" trust (before: "trustzone-devkey")
+  with a WARNING line in the journal. Evidence: `evidence/zynqmp/optee-phase-a.txt`.
 
 - Phase B (`evidence/zynqmp/puf-phase-b.txt`): `fsbl/` (the FSBL hook: seed under the device key, partition
   measurements, hand-off page), `handoff/` (its layout), `optee/os-patches` + `build_optee.sh` (OP-TEE takes the

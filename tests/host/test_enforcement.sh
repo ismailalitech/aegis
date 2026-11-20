@@ -107,6 +107,24 @@ check block "the endpoint reaches another gateway port (SSH)" tcp 10.77.1.1 22
 echo "-- re-admitted"
 hook ep1 admit
 check allow "TCP to the network"          tcp 10.77.2.2 8080
+expires() { ip netns exec $GW nft list set inet aegis admitted | grep -o 'expires [0-9hms]*' | head -1; }
+EXP=$(expires)
+if [ -n "$EXP" ]; then echo "PASS an admission without AEGIS_ADMIT_TTL takes the set's default timeout ($EXP)"; pass=$((pass+1))
+else echo "FAIL the admitted element has no timeout"; fail=$((fail+1)); fi
+
+echo "-- admissions expire unless refreshed"
+AEGIS_ADMIT_TTL=3 hook ep1 admit
+check allow "admitted for 3 s: TCP to the network" tcp 10.77.2.2 8080
+sleep 2
+AEGIS_ADMIT_TTL=3 hook ep1 admit             # the next cycle's attestation refreshes the timeout
+sleep 2                                      # 4 s after the first admission, 2 s after the refresh
+check allow "refreshed in time: still admitted after the first timeout" tcp 10.77.2.2 8080
+sleep 2.5                                    # no refresh: the fleet loop has stopped
+check block "not refreshed: the admission has expired" tcp 10.77.2.2 8080
+check block "not refreshed: ping the network" ping_lan
+check allow "expired: the gateway still attests the endpoint" attest
+AEGIS_ADMIT_TTL=60 hook ep1 admit
+check allow "re-attested: admitted again" tcp 10.77.2.2 8080
 
 echo "passed $pass, failed $fail"
 [ "$fail" = 0 ]
