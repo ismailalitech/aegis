@@ -1,20 +1,25 @@
 # SPDX-License-Identifier: Apache-2.0
-# The build context of container/Dockerfile: the repository without history, local state, builds and secrets.
+# The build context of container/Dockerfile: the repository without history, local state, builds and secrets. It
+# covers everything .gitignore does (at any depth), so the image holds what a fresh clone holds; keep the two in step.
+# The Dockerfile copies container/requirements.txt and the whole tree, and no tracked file matches a line here.
 .git
-.venv
+**/.venv
 **/__pycache__
 **/*.pyc
-logs
-build
-build-*
-sdk/build
-sdk/build-eat
+**/logs
+**/*.log
+**/build
+**/build-*
+**/*.out
+**/out
 backups
 bench.env
 host/enrolled
 gateway/policy/fleet.json
+vectors/acvp/*.json
 endpoints/stm32h573/artifacts/*.hex
 endpoints/stm32h573/artifacts/*.bin
+endpoints/stm32h573/tfm-aegis-partition/gateway_pk.h
 **/identity.json
 **/identity.tpm.json
 **/*.session
