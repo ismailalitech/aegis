@@ -245,14 +245,16 @@ device; the target is under a minute including the operator's typing.
 
 ## Runbook: this bench (two STM32H573I-DK, FRDM-RW612, PolarFire gateway)
 
-Run from the checkout on the bench PC. Addresses come from `bench.env`. Nothing here touches a board's flash, a
-programmer or a device's lifecycle; every step on the gateway has its undo at the end. The entries are assumed to be
+Run from the checkout on the bench PC. Addresses come from `bench.env` (git-ignored: a fresh worktree has none, so
+source the one of the main checkout); only `GATEWAY` is used, the endpoints' addresses are the ones in the gateway's
+policy. Nothing here touches a board's flash, a programmer or a device's lifecycle; every step on the gateway has its undo at the end. The entries are assumed to be
 named as in `gateway/policy/fleet.pc.example.json`: `stm32h573-dk`, `stm32h573-dk-2`, `frdm-rw612`.
 
 **1. The endorser, and the gateway's policy as the reference.**
 
     set -a; . ./bench.env; set +a
     PY=.venv/bin/python; W=~/.local/state/aegis-endorser/bench; GW=root@$GATEWAY; GP=/root/aegis/gateway/policy
+    BK=/root/aegis-backup-endorsement-$(date +%Y%m%d-%H%M%S); IN=/root/aegis-incoming/endorsement; echo $BK
     $PY provision/aegis_provision.py init --name bench-pc
     $PY provision/aegis_provision.py show
     mkdir -p $W/keys && scp -o BatchMode=yes $GW:$GP/fleet.json $W/fleet.json
@@ -273,12 +275,12 @@ serials should be in the records (they stay on the bench: do not publish them).
 either way.
 
     ssh -o BatchMode=yes $GW "sha256sum < /root/aegis/gateway/aegisd/fleet.py"; git show origin/main:gateway/aegisd/fleet.py | sha256sum
-    ssh -o BatchMode=yes $GW "mkdir -p /root/aegis-backup-endorsement /root/aegis-incoming && cp -p /root/aegis/gateway/aegisd/fleet.py $GP/fleet.json /root/aegis-backup-endorsement/"
+    ssh -o BatchMode=yes $GW "mkdir -p $BK $IN/records && cp -p /root/aegis/gateway/aegisd/fleet.py $GP/fleet.json $BK/"
     scp -o BatchMode=yes common/endorsement.py $GW:/root/aegis/common/
     scp -o BatchMode=yes gateway/aegisd/fleet.py $GW:/root/aegis/gateway/aegisd/
     $PY provision/aegis_provision.py export $W/endorsers
     scp -o BatchMode=yes -r $W/endorsers $GW:$GP/
-    scp -o BatchMode=yes $W/records/*.json $GW:/root/aegis-incoming/
+    scp -o BatchMode=yes $W/records/*.json $GW:$IN/records/
 
 **4. Trust the endorser, enrol the records, restart the loop on the new code.** The policy is edited on the PC and
 put in place on the gateway by a rename, because the loop reads it every cycle.
@@ -287,8 +289,8 @@ put in place on the gateway by a rename, because the loop reads it every cycle.
     scp -o BatchMode=yes $GW:$GP/fleet.json $W/fleet.gw.json
     $PY -c 'import json,sys; f,pin=sys.argv[1:]; p=json.load(open(f)); p["endorsers"]=[{"name":"bench-pc","pk_file":"endorsers/bench-pc.mldsa65.pub","pk_sha256":pin}]; json.dump(p,open(f,"w"),indent=1)' $W/fleet.gw.json $PIN
     scp -o BatchMode=yes $W/fleet.gw.json $GW:$GP/fleet.json.new && ssh -o BatchMode=yes $GW "mv $GP/fleet.json.new $GP/fleet.json"
-    ssh -o BatchMode=yes $GW "cd /root/aegis/gateway/aegisd && python3 fleet.py enroll-endorsed ../policy/fleet.json /root/aegis-incoming/*.json"
-    ssh -o BatchMode=yes $GW "systemctl restart aegis-fleet && sleep 45 && journalctl -u aegis-fleet -o cat --no-pager -n 14"
+    ssh -o BatchMode=yes $GW "cd /root/aegis/gateway/aegisd && python3 fleet.py enroll-endorsed ../policy/fleet.json $IN/records/*.json"
+    ssh -o BatchMode=yes $GW "systemctl restart aegis-fleet && sleep 75 && journalctl -u aegis-fleet -o cat --no-pager -n 14"
 
 Expected: three `enrolled ...` lines, none needing `--force` (the key each device showed at the bench is the key the
 gateway has pinned all along; if one is refused with `another key is already pinned`, stop here and find out why).
@@ -309,17 +311,18 @@ endorsed. In the second E9 is not applicable (two families).
 
     $PY -c 'import json,sys; f=sys.argv[1]; p=json.load(open(f)); [e.update(endorsement="required") for e in p["endpoints"] if e["name"] in sys.argv[2:]]; json.dump(p,open(f,"w"),indent=1)' $W/fleet.gw.json stm32h573-dk stm32h573-dk-2 frdm-rw612
     scp -o BatchMode=yes $W/fleet.gw.json $GW:$GP/fleet.json.new && ssh -o BatchMode=yes $GW "mv $GP/fleet.json.new $GP/fleet.json"
-    ssh -o BatchMode=yes $GW "cd /root/aegis/gateway/aegisd && python3 fleet.py check ../policy/fleet.json; sleep 40; journalctl -u aegis-fleet -o cat --no-pager -n 10"
+    ssh -o BatchMode=yes $GW "cd /root/aegis/gateway/aegisd && python3 fleet.py check ../policy/fleet.json; sleep 75; journalctl -u aegis-fleet -o cat --no-pager -n 10"
 
 `check` prints `enrolment: endorsed by bench-pc (...)` under each of the three and exits 0; the journal's next cycle
 has `ADMITTED ... [credential: valid, heartbeat N ...] [endorsed by bench-pc]` for each: the sessions are kept.
 
 **7. A substituted key and a missing record, through the running service.** Optional, and it costs board 2 its
 session for a cycle (the gateway revokes it and provisions again; there is no enforcement hook on the bench, so the
-network sees nothing). Each change is undone at the end of its own line.
+network sees nothing). Each change is undone at the end of its own line. The pauses are 75 s so that a whole cycle
+of the loop falls inside them (30 s of sleep, and up to 20 s for an endpoint that does not answer).
 
-    ssh -o BatchMode=yes $GW "cd $GP && cp -p keys/stm32h573-dk-2.mldsa65.pub /root/aegis-incoming/dk2.pub.keep && cp keys/stm32h573-dk.mldsa65.pub keys/dk2.sub && mv keys/dk2.sub keys/stm32h573-dk-2.mldsa65.pub && sleep 40; journalctl -u aegis-fleet -o cat --no-pager -n 14 | grep dk-2 | tail -1; cp -p /root/aegis-incoming/dk2.pub.keep keys/dk2.back && mv keys/dk2.back keys/stm32h573-dk-2.mldsa65.pub"
-    ssh -o BatchMode=yes $GW "cd $GP && mv endorsements/stm32h573-dk-2.json /root/aegis-incoming/dk2.json.keep && sleep 40; journalctl -u aegis-fleet -o cat --no-pager -n 14 | grep dk-2 | tail -1; mv /root/aegis-incoming/dk2.json.keep endorsements/stm32h573-dk-2.json; sleep 40; journalctl -u aegis-fleet -o cat --no-pager -n 14 | grep dk-2 | tail -1"
+    ssh -o BatchMode=yes $GW "cd $GP && cp -p keys/stm32h573-dk-2.mldsa65.pub $IN/dk2.pub.keep && cp keys/stm32h573-dk.mldsa65.pub keys/dk2.sub && mv keys/dk2.sub keys/stm32h573-dk-2.mldsa65.pub && sleep 75; journalctl -u aegis-fleet -o cat --no-pager -n 14 | grep dk-2 | tail -1; cp -p $IN/dk2.pub.keep keys/dk2.back && mv keys/dk2.back keys/stm32h573-dk-2.mldsa65.pub"
+    ssh -o BatchMode=yes $GW "cd $GP && mv endorsements/stm32h573-dk-2.json $IN/dk2.json.keep && sleep 75; journalctl -u aegis-fleet -o cat --no-pager -n 14 | grep dk-2 | tail -1; mv $IN/dk2.json.keep endorsements/stm32h573-dk-2.json; sleep 75; journalctl -u aegis-fleet -o cat --no-pager -n 14 | grep dk-2 | tail -1"
     ssh -o BatchMode=yes $GW "cd /root/aegis/gateway/aegisd && python3 fleet.py check ../policy/fleet.json"
 
 Expected, in order: `stm32h573-dk-2 QUARANTINED endorsement required: the pinned key (sha256 ...) is not the endorsed
@@ -337,11 +340,11 @@ key (...): substituted key [credential: revoked]`; `... QUARANTINED endorsement 
 and the journal lines of steps 6 and 7 go to `evidence/endorsed-enrolment/`, with LAN addresses and serial numbers
 written out of them; a line in `docs/board-changes.md`.
 
-**Undo.** `ssh $GW "cp -p /root/aegis-backup-endorsement/fleet.json $GP/fleet.json"` puts the policy back (the loop
-picks it up in its next cycle; the old `fleet.py` ignores the keys it does not know, so the files can go back in
-either order); `cp -p /root/aegis-backup-endorsement/fleet.py /root/aegis/gateway/aegisd/ && systemctl restart
-aegis-fleet` puts the code back. `endorsements/`, `endorsers/` and `/root/aegis-incoming` can stay or be deleted.
-No device was changed at any point.
+**Undo.** `ssh $GW "cp -p $BK/fleet.json $GP/fleet.json.new && mv $GP/fleet.json.new $GP/fleet.json"` puts the
+policy back (the loop picks it up in its next cycle; the old `fleet.py` ignores the keys it does not know, so code
+and policy can go back in either order); `ssh $GW "cp -p $BK/fleet.py /root/aegis/gateway/aegisd/ && systemctl
+restart aegis-fleet"` puts the code back. `$BK` is a new directory at every run of step 1, so note the one that was
+printed. `endorsements/`, `endorsers/` and `$IN` can stay or be deleted. No device was changed at any point.
 
 ## Tests
 
