@@ -52,7 +52,7 @@ POLICY_TYP = "application/vnd.aegis.fleet-policy+cbor"
 POLICY_FORMAT = "tag:github.com,2026:ismailalitech/aegis/policy/v1"
 MAX_RECORD = 16384
 MAX_POLICY = 1 << 20
-SEGMENT = re.compile(r"audit-(\d{6})\.cbor\Z")
+SEGMENT = re.compile(r"audit-(\d{6,12})\.cbor\Z")
 EVENT = re.compile(r"[a-z][a-z0-9-]{0,31}\Z")
 
 
@@ -205,8 +205,8 @@ def printable(v):
 
 def check_log(paths, pubs, anchors=(), heads=(), now=None, allow_pruned=False, with_entries=False):
     if len(paths) == 1 and os.path.isdir(paths[0]):
-        found = sorted(n for n in os.listdir(paths[0]) if SEGMENT.match(n))
-        paths = [os.path.join(paths[0], n) for n in found]
+        found = sorted((int(SEGMENT.match(n).group(1)), n) for n in os.listdir(paths[0]) if SEGMENT.match(n))
+        paths = [os.path.join(paths[0], n) for _, n in found]
     keys = {thumbprint(p): p for p in pubs}
     logs, seen, entries, back = [], {}, [], []
     cur = last = None

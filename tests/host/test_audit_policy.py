@@ -611,6 +611,7 @@ class Trail(Fleet):
         e = self.entries()
         self.assertEqual(e[2]["details"], {"sha256": hashlib.sha256(self.policy_bytes).digest(), "signed": False})
         self.assertEqual(e[3]["details"], {"kind": "psa", "stage": "appraised", "evidence_format": "psa-token",
+                                           "address": "127.0.0.1:%d" % self.good.port,
                                            "measurements": {"SPE": bytes.fromhex(tf.GOOD_S),
                                                             "NSPE": bytes.fromhex(tf.GOOD_NS)}})
         self.assertEqual(e[4]["details"]["stage"], "no-evidence")
@@ -713,6 +714,26 @@ class Trail(Fleet):
             "file_sha256": b"\xcd" * 32})
         self.assertEqual(e[-1]["details"]["in_use_sha256"], hashlib.sha256(self.policy_bytes).digest())
 
+    def test_two_entries_of_one_name_do_not_take_turns_in_the_log(self):
+        """A decision is remembered by the entry's name and address: a policy that names two devices alike (which
+        nothing forbids) must not cost a batch every cycle."""
+        self.policy["endpoints"][1]["name"] = "good"         # admitted at one address, refused at the other
+        self.save()
+        trail = self.trail()
+        trail.policy({"sha256": "00" * 32, "signed": False}, self.policy)
+        self.assertEqual(len(self.cycle(trail)[1]), 1)
+        self.assertEqual(self.events()[-2:], [("admit", "good"), ("refuse", "good")])
+        for _ in range(3):
+            trail.policy({"sha256": "00" * 32, "signed": False}, self.policy)
+            self.assertEqual(self.cycle(trail)[1], [])
+        gone = self.policy["endpoints"].pop(1)               # one of them leaves: said with its address
+        self.save()
+        trail.policy({"sha256": "11" * 32, "signed": False}, self.policy)
+        self.cycle(trail)
+        e = self.entries()
+        self.assertEqual([(x["event"], x["subject"]) for x in e][-2:], [("policy", None), ("remove", "good")])
+        self.assertEqual(e[-1]["details"]["address"], "127.0.0.1:%d" % gone["port"])
+
     def test_the_policy_no_longer_asks_and_the_log_says_so(self):
         trail = self.trail()
         self.cycle(trail)
@@ -738,7 +759,13 @@ class Trail(Fleet):
         trail.policy({"sha256": None}, {"endpoints": 5})
         trail.policy_refused(object())
         self.assertEqual(len(self.cycle(trail)[1]), 1)
+        for _ in range(3):                                   # what cannot be noted is said once, not every cycle
+            trail.session_change({}, {"id": 5}, None)
+            trail.policy({"sha256": None}, {"endpoints": 5})
+        self.assertEqual([(e[2], e[4]["what"]) for e in trail.log.pending], [("audit-error", "session")])
         ev = self.events()
+        errors = [e for e in self.entries() if e["event"] == "audit-error"]
+        self.assertEqual(len(errors), len({(e["details"]["what"], e["details"]["error"]) for e in errors}))
         self.assertGreaterEqual(len(ev), 8)
         self.assertEqual([e for e in ev if e[0] in ("admit", "refuse")][:3], [("refuse", "None"), ("refuse", "None"),
                                                                              ("admit", "x" * 64)])

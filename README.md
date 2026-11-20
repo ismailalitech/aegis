@@ -88,6 +88,13 @@ and EAR in COSE_Sign1 signed with ML-DSA-65 (RFC 9964). `fleet.py export-evidenc
 repository's code: [`docs/evidence-format.md`](docs/evidence-format.md). On the device it is an option of the SDK that
 is off by default; the boards on the bench do not run it yet.
 
+Two more options, both off by default and so far run on the PC only
+([`docs/audit-and-policy.md`](docs/audit-and-policy.md)): the verifier can keep a signed, hash-chained audit log of
+its decisions (`"audit_log": true` in the policy; an entry when something changes, nothing in a cycle where nothing
+did), and it can be made to run only from a policy signed by an operator's key that is not on the gateway, with a
+version that never goes back (`provision/aegis_provision.py policy-sign`). `tools/verify_audit.py` checks both with
+third-party libraries only.
+
 ## Layout
 
 `gateway/` services and policy, `common/` wire formats and crypto glue, `host/` PC tools,

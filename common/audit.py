@@ -50,7 +50,7 @@ MAX_BATCH_PAYLOAD = 10240       # so a record stays under cose.MAX_SIGN1 with it
 MAX_ENTRIES = 256               # in one batch
 MAX_PENDING = 512               # entries held in memory while the log cannot be written; later ones are counted
 MAX_TIME = 1 << 40
-SEGMENT = re.compile(r"audit-(\d{6})\.cbor\Z")
+SEGMENT = re.compile(r"audit-(\d{6,12})\.cbor\Z")     # written with six digits; more are read, in numeric order
 EVENT = re.compile(r"[a-z][a-z0-9-]{0,31}\Z")
 LOCK = "lock"
 

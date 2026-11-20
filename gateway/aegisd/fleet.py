@@ -1537,7 +1537,7 @@ class AuditTrail:
         self.state, self.settings, self.promise = state, dict(settings), promise
         self.log = audit.Log(os.path.join(state, "audit"), pk, lambda: load_gateway_identity(state)[0],
                              grace_s=grace_s, **settings)
-        self.decisions, self.policy_seen, self.refusal_seen, self.error = {}, None, None, None
+        self.decisions, self.policy_seen, self.refusal_seen, self.error, self.failed = {}, None, None, None, {}
         if start is not None:
             self.log.add("start", None, dict(start, verifier_key_sha256=hashlib.sha256(pk).digest()))
 
@@ -1545,7 +1545,10 @@ class AuditTrail:
         try:
             return fn(*args)
         except Exception as e:  # noqa: BLE001 - whatever a verdict holds, the loop goes on and the log says so
-            self.log.add("audit-error", None, {"what": what, "error": "%s: %s" % (type(e).__name__, e)})
+            why = "%s: %s" % (type(e).__name__, e)
+            if self.failed.get(what) != why:        # once per reason, not once per cycle
+                self.failed[what] = why
+                self.log.add("audit-error", None, {"what": what, "error": why})
             return None
 
     # -- the policy --
@@ -1566,11 +1569,16 @@ class AuditTrail:
                 self.log.add("policy", None, d)
                 self.policy_seen, self.refusal_seen = info["sha256"], None
             if policy is not None:
-                names = {str(ep.get("name"))[:64] for ep in policy.get("endpoints", []) if isinstance(ep, dict)}
-                for name in [n for n in self.decisions if n not in names]:
-                    del self.decisions[name]
-                    self.log.add("remove", name, {"why": "no longer in the policy"})
+                there = {self._slot(ep.get("name"), ep) for ep in policy.get("endpoints", []) if isinstance(ep, dict)}
+                for slot in [s for s in self.decisions if s not in there]:
+                    del self.decisions[slot]
+                    self.log.add("remove", slot[0], {"why": "no longer in the policy", "address": slot[1]})
         self._guard("policy", note)
+
+    @staticmethod
+    def _slot(name, ep):
+        """What a decision is remembered under: the entry's name and the address it is asked at."""
+        return str(name)[:64], "%s:%s" % (str(ep.get("host"))[:64], str(ep.get("port"))[:8])
 
     def policy_refused(self, why):
         """A policy file the verifier did not take, once per reason."""
@@ -1617,10 +1625,11 @@ class AuditTrail:
 
     # -- decisions --
 
-    def decision(self, v, facts):
-        """The verdict of one cycle for one endpoint: an entry if it is the first or not the last one's again."""
+    def decision(self, v, facts, ep=None):
+        """The verdict of one cycle for one endpoint (ep: its policy entry): an entry if it is the first or not the
+        last one's again."""
         def note():
-            name = str(v.get("endpoint"))[:64]
+            name, address = self._slot(v.get("endpoint"), ep if isinstance(ep, dict) else {})
             admitted = v.get("admitted") is True
             e = v.get("endorsement") if isinstance(v.get("endorsement"), dict) else {}
             meas = v.get("measurements") if isinstance(v.get("measurements"), dict) else {}
@@ -1629,12 +1638,13 @@ class AuditTrail:
             key = repr((admitted, facts.get("stage"), v.get("device_pk_sha256"),
                         sorted((str(k), str(m)) for k, m in meas.items()), v.get("enrolment"), v.get("trust"),
                         e.get("record_sha256"), facts.get("format"), v.get("enforcement")))
-            if self.decisions.get(name) == key:
+            if self.decisions.get((name, address)) == key:
                 return
-            self.decisions[name] = key
+            self.decisions[(name, address)] = key
             quote = v.get("quote") if isinstance(v.get("quote"), dict) else {}
             result = v.get("attestation_result") if isinstance(v.get("attestation_result"), dict) else {}
-            d = {"kind": v.get("kind"), "stage": facts.get("stage"), "evidence_format": facts.get("format"),
+            d = {"kind": v.get("kind"), "address": address if isinstance(ep, dict) else None,
+                 "stage": facts.get("stage"), "evidence_format": facts.get("format"),
                  "enrolment": v.get("enrolment"), "trust": v.get("trust"), "enforcement": v.get("enforcement"),
                  "session_binding": v.get("session_binding"), "credential": v.get("credential"),
                  "device_key_sha256": _digest(v.get("device_pk_sha256")),
@@ -1817,7 +1827,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
         if signs:
             issue_result(v, facts, signer, policy_bytes, state, ttl)
         if audit is not None:
-            audit.decision(v, facts)
+            audit.decision(v, facts, ep)
         out.append(v)
     return out
 
@@ -2068,6 +2078,7 @@ def main(argv=None):
         log("aegis-fleet: %s" % policy_line(pinfo))
     trail, refused = None, None
     while True:
+        not_taken = None
         try:  # reload every cycle, so policy updates apply without a restart
             loaded = load_policy(a.policy, state_dir, a.policy_signers, remember=True, known=loaded)
             if loaded[2] != pinfo and (loaded[2]["signed"] or loaded[2].get("warning")):
@@ -2087,16 +2098,16 @@ def main(argv=None):
             if str(e) != refused:       # at error priority once; the previous policy stays in use
                 refused = str(e)
                 log("aegis-fleet: policy REFUSED, keeping the previous one: %s" % e, LOG_ERR, file=sys.stderr)
-            if trail is not None:
-                trail.policy_refused(e)
+            not_taken = e
         except (OSError, ValueError) as e:
             print("policy reload failed, keeping the previous one: %s" % e, flush=True)
-            if trail is not None:
-                trail.policy_refused("policy reload failed: %s" % e)
+            not_taken = "policy reload failed: %s" % e
         trail = open_audit(policy, state_dir, trail, admit_ttl(policy, a.interval), True, dict(started, cmd="watch"),
                            said)
         if trail is not None:
             trail.policy(pinfo, policy)
+            if not_taken is not None:
+                trail.policy_refused(not_taken)
         res = run_once(policy, base, ev, policy_bytes=policy_bytes, audit=trail, **run)
         lines = [journal_line(v) for v in res]
         for v in res:

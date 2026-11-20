@@ -235,6 +235,8 @@ from, a disk that is full: no file.
 
 **The verifier** (`fleet.py enroll-endorsed POLICY RECORD...`) writes three files per device: the record, the key and
 the policy, whose entry for the device gets `"endorsement_sha256"` (the previous policy is kept as `POLICY.bak`).
+(Where the verifier runs from a signed policy, [audit-and-policy.md](audit-and-policy.md), it cannot change the
+policy: it writes the record and the key, and prints the pin for the operator to sign into the next version.)
 It checks the record against the policy's trusted endorsers and the entry it names, refuses if another key is
 already pinned for that entry or the installed record was issued later than this one (`--force` overrides both), and
 refuses if the entry in the policy file changed since it was read. Then it writes all three under temporary names
