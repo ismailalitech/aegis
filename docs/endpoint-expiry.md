@@ -127,10 +127,10 @@ Provers up to 0.5.0, which do not ask for the status text, get no `ttl` in it; t
 
 | | |
 |---|---|
-| `endpoints/rw612/prover/src/aegis_proto.c` | the rule, for the RW612 partition, the Zephyr prover and the ZynqMP TA; the platform gives `monotonic_s` |
+| `sdk/src/aegis_proto.c` | the rule, for every device (the Prover SDK's core); the platform gives `clock` and its rate (`sdk/README.md`) |
 | `endpoints/rw612/tfm/aegis_pq/aegis_pq.c` | the secure SysTick |
 | `endpoints/zynqmp/optee/ta/aegis_ta.c` | OP-TEE's system time and its protection level |
-| `endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c` | the rule again (this partition has its own code) and the RTC |
+| `endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c` | the RTC, read in counts of 1/250 s |
 | `endpoints/zybo/aegis_linux_prover.py` | the rule in Python |
 | `tests/host/test_rw612_proto.py`, `test_linux_prover.py`, `test_fleet.py` | before the end accepted, at the end refused and the session gone, no clock, a clock running backwards, credentials without a lifetime, the gateway provisioning again |
 | `tests/fuzz` | both partitions against a model that holds the clock: every answer after any sequence of requests, clock moves and clock faults |

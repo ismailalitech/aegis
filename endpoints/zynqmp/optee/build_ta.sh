@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Build the Aegis trusted application for OP-TEE on the ZynqMP.
 #   endpoints/zynqmp/optee/build_ta.sh <OP-TEE build dir (with export-ta_arm64)> <new out dir> [gateway host]
-# The out dir must not exist yet (nothing is deleted). Stages the shared sources (the RW612 prover's protocol code,
-# the STM32 partition's KMAC/ML-KEM unit and configs, mldsa-native and mlkem-native v2.0.0, the hand-off and PTA
-# headers) and a gateway_pk.h made from the gateway's identity record, then builds.
+# The out dir must not exist yet (nothing is deleted). Stages the shared sources (the Prover SDK: protocol core,
+# SHA-256, KMAC, the ML-KEM unit and the PQ configurations; mldsa-native and mlkem-native v2.0.0; the hand-off and
+# PTA headers) and a gateway_pk.h made from the gateway's identity record, then builds.
 # The gateway's ML-DSA-65 public key comes from the gateway host over ssh, or, with GATEWAY_PK_HEX=<file>, from a
 # file holding it in hex (3904 characters).
 set -eu
@@ -14,17 +14,16 @@ OPTEE=${1:?OP-TEE out dir}; OUT=${2:?out dir}; GW=${3:-${GATEWAY:-}}
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../.." && pwd)
 MLDSA=${MLDSA_NATIVE_DIR:-$HOME/aegis-tools/mldsa-native/mldsa}
 MLKEM=${MLKEM_NATIVE_DIR:-$HOME/aegis-tools/mlkem-native/mlkem}
-PART=$REPO/endpoints/stm32h573/tfm-aegis-partition
+SDK=$REPO/sdk
 mkdir -p "$OUT/shared"
 cp -r "$HERE/ta/." "$OUT/"
 cp "$HERE/include/aegis_ta.h" "$HERE/include/aegis_boot_pta.h" "$HERE/../handoff/aegis_zynqmp_handoff.h" "$OUT/"
 S=$OUT/shared
-cp "$REPO/endpoints/rw612/prover/src/aegis_proto.c" "$REPO/endpoints/rw612/prover/src/aegis_proto.h" \
-   "$REPO/endpoints/rw612/prover/src/sha256.c" "$REPO/endpoints/rw612/prover/src/aegis_sha256.h" "$S/"
-cp "$PART/aegis_kmac.c" "$PART/aegis_kmac.h" "$PART/mlkem_unit.c" "$S/"
+cp "$SDK/include/aegis_sdk.h" "$SDK/src/aegis_proto.c" "$SDK/src/aegis_sha256.c" "$SDK/src/aegis_sha256.h" \
+   "$SDK/src/aegis_kmac.c" "$SDK/src/aegis_kmac.h" "$SDK/crypto/mlkem_unit.c" "$S/"
 mkdir -p "$S/mldsa" "$S/mlkem"
-cp "$PART/mldsa/aegis_mldsa_config.h" "$S/mldsa/"
-cp "$PART/mlkem/aegis_mlkem_config.h" "$S/mlkem/"
+cp "$SDK/crypto/mldsa/aegis_mldsa_config.h" "$S/mldsa/"
+cp "$SDK/crypto/mlkem/aegis_mlkem_config.h" "$S/mlkem/"
 cp -r "$MLDSA" "$S/mldsa-native"
 cp -r "$MLKEM" "$S/mlkem-native"
 if [ -n "${GATEWAY_PK_HEX:-}" ]; then

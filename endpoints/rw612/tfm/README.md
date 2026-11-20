@@ -12,8 +12,9 @@ under NXP's TF-M (v2.1.4, from the MCUXpresso SDK), and the non-secure image onl
   - At the first request: the ML-DSA-65 key from ELS (CKDF from the die key, then HMAC, as in `../prover`). Not at
     initialisation, because TF-M's crypto partition sets ELS up during its own initialisation. Using ELS before that
     left the chip resetting moments later.
-  - Every request: one line of the Aegis protocol in, the reply out. The code is `../prover/src/aegis_proto.c`, the
-    same code the PC tests run against the gateway.
+  - Every request: one line of the Aegis protocol in, the reply out. The code is the Prover SDK's core,
+    `sdk/src/aegis_proto.c`, the same code the PC tests run against the gateway; `aegis_pq/aegis_pq.c` is the SDK's
+    port to this chip (randomness, clock, measurements, status) and the PSA transport.
 - **Non-secure:** a client that passes lines to the partition with `psa_call`. It never holds the key, the seed or the
   session, and it cannot reach ELS, which TF-M makes secure-privileged only.
 
@@ -82,7 +83,7 @@ All re-tested on the board.
 
 ## Fuzzing (tests/fuzz, after the review)
 
-`tests/fuzz/run.sh` builds `aegis_proto.c` into a libFuzzer harness with AddressSanitizer and UndefinedBehaviorSanitizer
+`tests/fuzz/run.sh` builds `sdk/src/aegis_proto.c` into a libFuzzer harness with AddressSanitizer and UndefinedBehaviorSanitizer
 and calls it exactly as `aegis_pq.c` does: raw request bytes up to `AEGIS_LINE_MAX`, a reply buffer of exactly
 `AEGIS_REPLY_MAX`. The harness also plays the gateway (it holds the pinned gateway key, encapsulates, signs
 credentials whose body the input changes), so the fuzzer reaches the paths behind the signature check, and it checks
@@ -120,7 +121,7 @@ The secure console prints the choice at start, for example `[Aegis] session cloc
 
 The partition keeps the last quote it signed, and a `PQKEMINIT` that carries that quote's challenge continues it: the
 ML-KEM key is signed over the transcript of the quote, the credential must name it, and the session key depends on it
-(`docs/architecture.md`, "One transcript"; the code is in `../prover/src/aegis_proto.c`). With `"transcript": "v2"`
+(`docs/architecture.md`, "One transcript"; the code is in `sdk/src/aegis_proto.c`). With `"transcript": "v2"`
 in this endpoint's policy entry the gateway finishes a session only that way. This chip is where it matters most on
 the bench: the single-image prover (`../prover`) has the same key, and before this the gateway could appraise this
 partition's quote and finish the session with that firmware (`tests/host/test_rw612_proto.py`,

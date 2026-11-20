@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The RW612 prover's protocol code (endpoints/rw612/prover/src/aegis_proto.c, the same C file as in the firmware),
+"""The Prover SDK's protocol core (sdk/src/aegis_proto.c, the same C file as in every device's firmware),
 built for the PC and run against the gateway's own code (fleet.py): attestation with device-key trust, ML-KEM
 provisioning with the credential checks, KMAC256 heartbeats, the session query, and the refusals (a changed
 image, a wrong pinned key, a credential from another key, for another exchange or for another endpoint), and the
@@ -31,18 +31,20 @@ import wire  # noqa: E402
 TOOLS = os.environ.get("AEGIS_TOOLS", os.path.expanduser("~/aegis-tools"))
 MLDSA = os.environ.get("MLDSA_NATIVE_DIR", os.path.join(TOOLS, "mldsa-native", "mldsa"))
 MLKEM = os.environ.get("MLKEM_NATIVE_DIR", os.path.join(TOOLS, "mlkem-native", "mlkem"))
-PROVER = os.path.join(ROOT, "endpoints", "rw612", "prover")
-PART = os.path.join(ROOT, "endpoints", "stm32h573", "tfm-aegis-partition")
+SDK = os.path.join(ROOT, "sdk")
 
 
 def build(out):
+    """The SDK's core behind a TCP socket, through the reference port (sdk/ports/host)."""
     cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", "-D_GNU_SOURCE",
            '-DMLD_CONFIG_FILE="aegis_mldsa_config.h"',
-           "-I", os.path.join(PROVER, "src"), "-I", PART, "-I", os.path.join(PART, "mldsa"), "-I", MLDSA,
-           "-I", os.path.join(PART, "mlkem"), "-I", MLKEM,
-           os.path.join(PROVER, "host", "host_main.c"), os.path.join(PROVER, "src", "aegis_proto.c"),
-           os.path.join(PROVER, "src", "sha256.c"), os.path.join(PART, "aegis_kmac.c"),
-           os.path.join(PART, "mlkem_unit.c"), os.path.join(MLDSA, "mldsa_native.c"), "-o", out]
+           "-I", os.path.join(SDK, "include"), "-I", os.path.join(SDK, "src"), "-I", os.path.join(SDK, "ports", "host"),
+           "-I", os.path.join(SDK, "crypto", "mldsa"), "-I", MLDSA, "-I", os.path.join(SDK, "crypto", "mlkem"),
+           "-I", MLKEM,
+           os.path.join(SDK, "ports", "host", "host_main.c"), os.path.join(SDK, "ports", "host", "aegis_port_host.c"),
+           os.path.join(SDK, "src", "aegis_proto.c"), os.path.join(SDK, "src", "aegis_sha256.c"),
+           os.path.join(SDK, "src", "aegis_kmac.c"), os.path.join(SDK, "crypto", "mlkem_unit.c"),
+           os.path.join(MLDSA, "mldsa_native.c"), "-o", out]
     subprocess.run(cmd, check=True)
 
 

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0
- * HMAC-SHA-256 for the PC tests, on the repository's one-shot SHA-256 (endpoints/rw612/prover/src/sha256.c), in the
+ * HMAC-SHA-256 for the PC tests, on the repository's one-shot SHA-256 (sdk/src/aegis_sha256.c), in the
  * shape aegis_handoff_kdf.h asks for. Short messages only. */
 #ifndef HOST_HMAC_H
 #define HOST_HMAC_H
@@ -34,8 +34,8 @@ static int host_hmac_sha256(const uint8_t *key, size_t key_len, const struct aeg
 			memcpy(inner + len, part[i].data, part[i].len);
 		len += part[i].len;
 	}
-	sha256(inner, len, outer + 64);
-	sha256(outer, sizeof(outer), mac);
+	aegis_sha256(inner, len, outer + 64);
+	aegis_sha256(outer, sizeof(outer), mac);
 	return 0;
 }
 

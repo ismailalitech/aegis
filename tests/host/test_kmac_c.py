@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-"""The partition's C KMAC256 (endpoints/stm32h573/tfm-aegis-partition/aegis_kmac.c), built for the PC, against
+"""The partition's C KMAC256 (sdk/src/aegis_kmac.c), built for the PC, against
 NIST's KMAC256 samples and against common/kmac.py on random inputs. Skipped without gcc."""
 import os, random, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-PART = os.path.join(ROOT, "endpoints", "stm32h573", "tfm-aegis-partition")
+PART = os.path.join(ROOT, "sdk", "src")
 sys.path.insert(0, os.path.join(ROOT, "common"))
 sys.path.insert(0, HERE)
 import kmac
@@ -18,7 +18,7 @@ class CKmac(unittest.TestCase):
         cls.tmp = tempfile.mkdtemp()
         cls.exe = os.path.join(cls.tmp, "kmac")
         subprocess.run(["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-I", PART, os.path.join(PART, "aegis_kmac.c"),
-                        os.path.join(PART, "kmac_host_check.c"), "-o", cls.exe], check=True, capture_output=True)
+                        os.path.join(ROOT, "sdk", "tests", "kmac_host_check.c"), "-o", cls.exe], check=True, capture_output=True)
 
     @classmethod
     def tearDownClass(cls):

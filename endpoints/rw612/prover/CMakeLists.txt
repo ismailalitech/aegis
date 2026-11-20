@@ -6,7 +6,9 @@ project(aegis_rw612_prover)
 
 set(MLDSA_NATIVE_DIR "$ENV{HOME}/aegis-tools/mldsa-native/mldsa" CACHE PATH "mldsa-native v2.0.0 mldsa/ directory")
 set(MLKEM_NATIVE_DIR "$ENV{HOME}/aegis-tools/mlkem-native/mlkem" CACHE PATH "mlkem-native v2.0.0 mlkem/ directory")
-# shared with the STM32 partition: the PQ library configurations, KMAC256 and the pinned gateway key
+# the Prover SDK: the protocol core, KMAC256, SHA-256 and the PQ library configurations (src/main.c is its port)
+set(SDK ${CMAKE_CURRENT_LIST_DIR}/../../../sdk)
+# the pinned gateway key (gateway_pk.h, written by tools/gen_gateway_pin.py)
 set(PART ${CMAKE_CURRENT_LIST_DIR}/../../stm32h573/tfm-aegis-partition)
 # only the ELS driver layer of NXP's els_pkc (key management, CKDF, HMAC), not the whole library
 set(ELS_PKC ${ZEPHYR_HAL_NXP_MODULE_DIR}/nxp_crypto_hal/els_pkc/src)
@@ -15,10 +17,10 @@ set(ELS ${ELS_PKC}/comps/mcuxClEls/src)
 target_sources(app PRIVATE
     src/main.c
     src/aegis_els.c
-    src/aegis_proto.c
-    src/sha256.c
-    ${PART}/aegis_kmac.c
-    ${PART}/mlkem_unit.c
+    ${SDK}/src/aegis_proto.c
+    ${SDK}/src/aegis_sha256.c
+    ${SDK}/src/aegis_kmac.c
+    ${SDK}/crypto/mlkem_unit.c
     ${MLDSA_NATIVE_DIR}/mldsa_native.c
     ${ELS}/mcuxClEls_Common.c
     ${ELS}/mcuxClEls_GlitchDetector.c
@@ -28,10 +30,12 @@ target_sources(app PRIVATE
 )
 target_include_directories(app PRIVATE
     src
+    ${SDK}/include
+    ${SDK}/src
     ${PART}
-    ${PART}/mldsa
+    ${SDK}/crypto/mldsa
     ${MLDSA_NATIVE_DIR}
-    ${PART}/mlkem
+    ${SDK}/crypto/mlkem
     ${MLKEM_NATIVE_DIR}
     ${ELS_PKC}/platforms/rw61x
     ${ELS_PKC}/platforms/rw61x/inc

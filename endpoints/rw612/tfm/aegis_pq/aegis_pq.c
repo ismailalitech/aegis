@@ -17,9 +17,13 @@
  * Service, message type AEGIS_PQ_LINE (1):
  *   in[0]  = one request line of the Aegis line protocol (PQKEY, PQCHAL, PQKEMINIT, PQKEMFIN, PQHB, PQSESSION)
  *   out[0] <- the reply line
- *   The protocol code is the one the Zephyr prover and the PC tests use (endpoints/rw612/prover/src/aegis_proto.c),
- *   so the non-secure image is only a network pipe: it never holds a key, a seed or the session, and it cannot
- *   change a measurement.
+ *   The protocol code is the Prover SDK's core (sdk/src/aegis_proto.c, the source every Aegis device and the PC
+ *   tests build), so the non-secure image is only a network pipe: it never holds a key, a seed or the session, and
+ *   it cannot change a measurement.
+ *
+ * This file is the SDK's port to the chip (struct aegis_platform, sdk/include/aegis_sdk.h): randomness from the ELS
+ * DRBG, the secure SysTick as the clock, the two measurements taken at initialisation, the status text; and the
+ * transport, which hands the core one line per PSA message.
  */
 #include <stdio.h>
 #include <string.h>
@@ -35,7 +39,7 @@
 #include <mcuxCsslFlowProtection.h>
 
 #include "aegis_els.h"
-#include "aegis_proto.h"
+#include "aegis_sdk.h"
 #include "aegis_pq_defs.h"
 #include "gateway_pk.h"
 #include "aegis_sha256.h"
@@ -46,7 +50,18 @@
 #define NS_PART_BASE 0x180A0000u /* the non-secure partition, read through the secure alias */
 #define NS_PART_SIZE 0x00300000u
 
-static const uint8_t gateway_pk[1952] = AEGIS_GATEWAY_PK;
+/* what the claims and the status text call this image; the build sets both (../aegis_s/CMakeLists.txt) */
+#ifndef AEGIS_DEVICE_FW
+#define AEGIS_DEVICE_FW "rw612"
+#endif
+#ifndef AEGIS_DEVICE_VERSION
+#define AEGIS_DEVICE_VERSION "0.1.0"
+#endif
+#define CLAIMS_MAX 1024u /* the claims with two components take about 430 bytes */
+
+static const uint8_t gateway_pk[AEGIS_PK_LEN] = AEGIS_GATEWAY_PK;
+static struct aegis_prover prover;           /* the core's context: the keys and the session live here */
+static uint8_t work[AEGIS_WORK_LEN(CLAIMS_MAX)];
 static struct aegis_measurement meas[2];
 static int ready, key_tried, key_rc;
 static uint32_t served;
@@ -203,11 +218,12 @@ static void sclk_start(void)
 }
 
 /* Seconds since sclk_start(). -1: no clock, or its configuration is no longer the one made there. */
-static int s_monotonic(uint64_t *now)
+static int s_monotonic(void *user, uint64_t *now)
 {
 	uint32_t primask, lo, hi, val;
 	int ref = (sclk_ctrl & SysTick_CTRL_CLKSOURCE_Msk) == 0u;
 
+	(void)user;
 	if (sclk_hz == 0u ||
 	    (SysTick->CTRL & (SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk)) != sclk_ctrl ||
 	    SysTick->LOAD != SCLK_PERIOD - 1u || NVIC_GetPriority(SysTick_IRQn) != SCLK_PRIO ||
@@ -245,15 +261,16 @@ static void measure_region(struct aegis_measurement *m, const char *label, uint3
 			   const char *what)
 {
 	m->label = label;
-	sha256((const uint8_t *)(uintptr_t)base, size, m->value);
+	aegis_sha256((const uint8_t *)(uintptr_t)base, size, m->value);
 	snprintf(m->desc, sizeof(m->desc), "SHA256 of the %s partition (%u bytes)", what, (unsigned)size);
 }
 
 /* Hedged ML-DSA: 32 fresh bytes from the ELS DRBG in every signature. */
-static int s_random(uint8_t *out, size_t n)
+static int s_random(void *user, uint8_t *out, size_t n)
 {
 	int ok;
 
+	(void)user;
 	if (n == 0 || n % 4 != 0) {
 		return -1;
 	}
@@ -269,16 +286,18 @@ static int s_random(uint8_t *out, size_t n)
 	return ok ? 0 : -1;
 }
 
-static size_t s_measure_all(struct aegis_measurement *m, size_t max)
+/* The measurements: as taken at initialisation, before the non-secure image ran. */
+static int s_measurements(void *user, const struct aegis_measurement **list, size_t *count)
 {
-	size_t n = max < 2 ? max : 2;
-
-	memcpy(m, meas, n * sizeof(*m));
-	return n;
+	(void)user;
+	*list = meas;
+	*count = 2;
+	return 0;
 }
 
-static int s_status(char *buf, size_t cap)
+static int s_status(void *user, char *buf, size_t cap)
 {
+	(void)user;
 	if (!stack_filled) {
 		return snprintf(buf, cap, "requests=%u;stack=na;clk=%s;fw=%s-%s", (unsigned)served, sclk_name,
 				AEGIS_DEVICE_FW, AEGIS_DEVICE_VERSION);
@@ -287,24 +306,13 @@ static int s_status(char *buf, size_t cap)
 			(unsigned)AEGIS_PQ_STACK_SIZE, sclk_name, AEGIS_DEVICE_FW, AEGIS_DEVICE_VERSION);
 }
 
-static void s_measure_unused(uint8_t out[32], size_t *len)
-{
-	memset(out, 0, 32);
-	*len = 0;
-}
-
-static uint32_t s_uptime_unused(void)
-{
-	return 0;
-}
-
-static const struct aegis_proto_platform platform = {
+static const struct aegis_platform platform = {
 	.random = s_random,
-	.measure = s_measure_unused,
-	.uptime_s = s_uptime_unused,
-	.monotonic_s = s_monotonic,
+	.clock = s_monotonic,
+	.clock_hz = 1, /* s_monotonic gives seconds */
+	.measurements = s_measurements,
 	.profile = AEGIS_TFM_PROFILE,
-	.measure_all = s_measure_all,
+	.version = AEGIS_DEVICE_VERSION,
 	.status = s_status,
 };
 
@@ -329,11 +337,22 @@ static int make_key(void)
 		rc = aegis_els_derive("aegis-rw612-provision-root-v1", root);
 	}
 #endif
-	if (rc == 0 && aegis_proto_init(&platform, seed, root, gateway_pk) != 0) {
-		rc = -10;
+	if (rc == 0) {
+		const struct aegis_config cfg = {
+			.platform = &platform,
+			.verifier_pk = gateway_pk,
+			.identity_seed = seed,
+			.exchange_root = root,
+			.work = work,
+			.work_len = sizeof(work),
+		};
+
+		if (AEGIS_PROVER_INIT(&prover, &cfg) != AEGIS_OK) {
+			rc = -10;
+		}
 	}
-	memset(seed, 0, sizeof(seed));
-	memset(root, 0, sizeof(root));
+	aegis_wipe(seed, sizeof(seed));
+	aegis_wipe(root, sizeof(root));
 	return rc;
 }
 
@@ -390,7 +409,7 @@ psa_status_t aegis_pq_service_sfn(const psa_msg_t *msg)
 	}
 	line[n] = '\0';
 	served++;
-	r = aegis_proto_handle(line, reply, sizeof(reply));
+	r = aegis_prover_handle_line(&prover, line, reply, sizeof(reply));
 	if (r < 0 || (size_t)r >= sizeof(reply)) {
 		return PSA_ERROR_GENERIC_ERROR;
 	}

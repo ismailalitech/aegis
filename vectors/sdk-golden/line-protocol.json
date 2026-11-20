@@ -1,0 +1,25 @@
+{
+ "harness": "tests/fuzz/fuzz_rw612_proto.c",
+ "kind": "line",
+ "ref": "eb82532eac12311986580df1b11a6511431ac117",
+ "seeds": {
+  "bad-credentials": "9510565bc30f830fe79842996d167a8ef624c5b933b9ae3f52c35cccea85b2bf",
+  "clock-backwards": "062eef7cff6817067a88be0ea1f43accbca665a7fa37520e4608296e38580277",
+  "clock-fails": "0baad84cbaa221c8daeb5f1dfb5a76afa65db766c80625dbdea2285cfa09aac1",
+  "exchange-heartbeats": "192e0a9cf53ec10a3b08e7d6949311f1821030768b3f3d92da20cedb4865a77d",
+  "long-status": "84c36ad9001210e235120809ab6d6eddff67bc0fb2bc39c3386e9f627ad471ec",
+  "raw-lines": "64d8064c440d38923188d3fbb622b7a9497524ff17dafa3ec0362dd5cacc4aa0",
+  "replay-after-new-init": "4d5c5dba913dab6230623ca9328d1b3a79183b22b0e0351143442d6812cf2f01",
+  "rng-fails-at-sign": "e8431635b1f6e936ff9b76f28c83b9b9477e48bdf7933c081f6f702c6f131110",
+  "session-expiry": "b49acfa2949ed36ec44fff4c0e446d942ccd113b656e67de611c46caffc316bd",
+  "transcript-bound-exchange": "878ed1604406af88917e8f91ef63858a5aee28435a52449fda0fd11e504fd576",
+  "transcript-credential-without-it": "4211beb02c354da924f3c1156ae00d4fd2dceb27f0323b01973f797280a7e584",
+  "transcript-other-quote-in-between": "b449264aba65125b6f15f0dfa747b0f5a9650e1cb7891fe64cfd03ac8d7079cc",
+  "transcript-quote-used-once": "63997fc50a741b4f3c3db4928169cd352744effb8bb5890eeb09753a54ba1853",
+  "transcript-raw-lines": "f2e4cd02d8dca44004f1c98a9954007cf9c976175b597bd60d92183eabacff99",
+  "transcript-refused-steps": "1ad9d3389c83ad7daba284d807a63276f6f9371fa8e92e7b140237ef45b14374",
+  "transcript-unbound-in-between": "7804d123c9f631612e2155525adccfd6988d22e48be312eb05a08ace06dafaf6",
+  "validity": "d4a8be6aec429be9dc786dd7a1828310152ca257ea3cfca42f1a44ccd7c0768e",
+  "validity-lifetimes": "54fbaff4fd7f9d287de0da36a231d699dc76345392c6eec0e6e23fcdad7331df"
+ }
+}

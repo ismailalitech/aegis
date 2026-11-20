@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Writes the transcript seeds of both fuzz harnesses (tests/fuzz/seeds, tests/fuzz/stm32/seeds): the sequences a
-reviewer would try by hand against "one transcript" (docs/architecture.md), as inputs the harnesses' models check.
+"""Writes the transcript seeds of both fuzz harnesses (tests/fuzz/seeds for the Prover SDK's core, in the line
+transport's first input format; tests/fuzz/stm32/seeds for the STM32H573 partition): the sequences a reviewer would
+try by hand against "one transcript" (docs/architecture.md), as inputs the harnesses' models check.
 
   tests/fuzz/make_transcript_seeds.py        (re)writes the files named transcript-*
+  tests/fuzz/merge_seeds.py                  then copies the STM32 ones into the shared corpus (seeds/stm32-*)
 
 An input is a list of operations "op | selector << 3, length (2 bytes, little-endian), payload" (the harnesses' own
 text explains each). The ones used here, the same in both harnesses unless noted:
@@ -15,7 +17,7 @@ text explains each). The ones used here, the same in both harnesses unless noted
   4  PQCHAL / QUOTE, challenge = payload
   5  PQSESSION / SESSION
   6  the next random draws fail (payload: good draws before, failing draws); STM32 only, selector 5: a reset
-  0  a raw request: a line (RW612), or a PSA message with its type and sizes (STM32)
+  0  a raw request: a line (the core's line transport), or a PSA message with its type and sizes (STM32)
 """
 import os
 import struct

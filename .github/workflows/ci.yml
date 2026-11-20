@@ -38,19 +38,22 @@ jobs:
             -DOQS_MINIMAL_BUILD="KEM_ml_kem_512;KEM_ml_kem_768;KEM_ml_kem_1024;SIG_ml_dsa_44;SIG_ml_dsa_65;SIG_ml_dsa_87"
           ninja -C ~/aegis-tools/liboqs-src/build install
 
-      - name: mldsa-native and mlkem-native v2.0.0 (the endpoints' C code, built by tests/host/test_rw612_proto.py)
+      - name: mldsa-native and mlkem-native v2.0.0 (for the Prover SDK, sdk/, built by tests/host/test_rw612_proto.py and others)
         run: |
           for r in mldsa-native mlkem-native; do
             [ -d ~/aegis-tools/$r ] || git clone -q --depth 1 --branch v2.0.0 https://github.com/pq-code-package/$r.git ~/aegis-tools/$r
           done
 
-      - name: Fuzz the protocol code the RW612 secure partition runs (libFuzzer, ASan, UBSan; seeds first, 2 minutes)
+      - name: Fuzz the Prover SDK core, the one harness for every device family (libFuzzer, ASan, UBSan; seeds first, 2 minutes)
         run: |
           sudo apt-get install -y clang libclang-rt-18-dev
           FUZZ_OUT=$RUNNER_TEMP/fuzz tests/fuzz/run.sh 120 2 || { tail -n 60 $RUNNER_TEMP/fuzz/fuzz-*.log; exit 1; }
 
-      - name: Fuzz the STM32H573 partition on PC stand-ins for TF-M (libFuzzer, ASan, UBSan; seeds first, 2 minutes)
+      - name: Fuzz the STM32H573 port of the SDK on PC stand-ins for TF-M (libFuzzer, ASan, UBSan; seeds first, 2 minutes)
         run: STM32=1 FUZZ_OUT=$RUNNER_TEMP/fuzz-stm32 tests/fuzz/run.sh 120 2 || { tail -n 60 $RUNNER_TEMP/fuzz-stm32/fuzz-*.log; exit 1; }
+
+      - name: The ZynqMP OP-TEE port of the SDK on a stand-in for OP-TEE (gcc, ASan, UBSan)
+        run: endpoints/zynqmp/optee/tests/run.sh
 
       - name: NIST ACVP vectors (checked against SHA256SUMS)
         run: |

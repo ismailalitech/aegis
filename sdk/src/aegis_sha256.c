@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0
- * SHA-256 (FIPS 180-4), small and simple: the image measurement and the key fingerprint. */
+ * SHA-256 (FIPS 180-4), small and simple, one call: the key fingerprint in the core, image measurements in the ports. */
 #include <string.h>
 #include "aegis_sha256.h"
 
@@ -40,7 +40,7 @@ static void block(uint32_t h[8], const uint8_t *p)
 	h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += k;
 }
 
-void sha256(const uint8_t *p, size_t n, uint8_t out[32])
+void aegis_sha256(const uint8_t *p, size_t n, uint8_t out[32])
 {
 	uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
 	uint8_t last[128];
