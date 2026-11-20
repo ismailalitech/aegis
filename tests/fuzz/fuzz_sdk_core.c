@@ -103,6 +103,18 @@
  *     "aegis-kem-init-v1" and nonce || ek: never the other one. Such an exchange accepts a credential only if it
  *     also names T2, and its tag and session key are the transcript's;
  *   - after every operation the core's own state (session, pending exchange, kept quote) is the model's.
+ *
+ * Standard evidence (the core's option AEGIS_EAT_COSE, docs/evidence-format.md): built with -DAEGIS_EAT_COSE=1
+ * (EAT=1 tests/fuzz/run.sh), operation 4 with the prefix and bit 0 of its selector asks for the quote as an EAT
+ * instead (PQEAT, aegis_prover_quote_eat; binary front, selector bit 1: into a buffer too small for any), and a raw
+ * PQEAT line is understood. The model's part: an EAT is answered exactly when the older quote would be and the work
+ * buffer holds AEGIS_EAT_WORK_MIN bytes; the object has the profile's fixed header with the key's thumbprint as
+ * kid and an empty unprotected header, its lengths are the shortest, the device key's signature is over the
+ * Sig_structure the harness rebuilds from it, the claims hold the challenge, the key's hash and the measurements or
+ * the platform's token as it was given; and it is a quote like the other: the transcript of an exchange that
+ * continues it hashes that Sig_structure (-DFZ_EAT_T1_CLAIMS builds a model that hashes the claims alone, to show
+ * that this check then fires). Without the option the selector means nothing, as before, so every corpus file is an
+ * input of both builds.
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -683,6 +695,143 @@ static void check_state(void)
 	if (P->session_ready && memcmp(P->session_key, M.session_key, 32)) DIE("session key");
 }
 
+#if AEGIS_EAT_COSE
+/* ---- standard evidence: the model's own reading of docs/evidence-format.md ---- */
+#define FZ_EAT_MAX 8192u
+
+/* An EAT request: refused for a work buffer that cannot hold the key's thumbprint input, before the platform or the
+ * generator is asked; otherwise as the other quote. */
+static int model_eat_result(void)
+{
+	if (C.work_len < AEGIS_EAT_WORK_MIN) return AEGIS_ERR_EVIDENCE;
+	return model_quote_result();
+}
+
+/* An answered EAT, read by hand: the COSE_Sign1's fixed shape, the Sig_structure rebuilt from it, the device key's
+ * signature over exactly that, the claims that must be in it. It is then the model's quote. */
+static void check_eat(const uint8_t ch[32], const uint8_t *o, size_t len)
+{
+	static const uint8_t head[11] = {0xd2, 0x84, 0x58, 0x3c, 0xa3, 0x01, 0x38, 0x30, 0x04, 0x58, 0x20};
+	static const uint8_t key_head[10] = {0xa3, 0x01, 0x07, 0x03, 0x38, 0x30, 0x20, 0x59, 0x07, 0xa0};
+	static const char typ[] = "\x10\x73" "application/eat+cwt";
+	static const char profile[] = "\x19\x01\x09\x78\x33" "tag:github.com,2026:ismailalitech/aegis/evidence/v1";
+	static const uint8_t ueid_head[6] = {0x19, 0x01, 0x00, 0x58, 0x21, 0x01};
+	static const uint8_t intuse[4] = {0x19, 0x01, 0x13, 0x01};
+	static uint8_t tbs[FZ_EAT_MAX], key[10 + PK_LEN];
+	const uint8_t pre[2] = {0, 0};
+	const uint8_t *pl;
+	uint8_t kid[32];
+	size_t n, hl, tn;
+
+	if (len < 68u + 3u + SIG_LEN || len > FZ_EAT_MAX) DIE("an EAT of %zu bytes", len);
+	memcpy(key, key_head, 10);
+	memcpy(key + 10, dev_pk, PK_LEN);
+	aegis_sha256(key, sizeof(key), kid);
+	if (memcmp(o, head, 11) || memcmp(o + 11, kid, 32) || memcmp(o + 43, typ, 21) || o[64] != 0xa0)
+		DIE("the EAT's protected header is not {alg -49, kid, typ}, or its unprotected header is not empty");
+	if (o[65] == 0x58 && o[66] >= 24) {
+		n = o[66]; hl = 2;
+	} else if (o[65] == 0x59 && o[66] != 0) {
+		n = (size_t)o[66] << 8 | o[67]; hl = 3;
+	} else {
+		DIE("the EAT's payload is not a byte string with the shortest head");
+	}
+	pl = o + 65 + hl;
+	if (65 + hl + n + 3 + SIG_LEN != len) DIE("the EAT's lengths: %zu claims in %zu bytes", n, len);
+	if (pl[n] != 0x59 || pl[n + 1] != (uint8_t)(SIG_LEN >> 8) || pl[n + 2] != (uint8_t)SIG_LEN) DIE("the EAT's signature head");
+	memcpy(tbs, "\x84\x6a" "Signature1", 12);
+	memcpy(tbs + 12, o + 2, 62);
+	tbs[74] = 0x40;
+	memcpy(tbs + 75, o + 65, hl + n);
+	tn = 75 + hl + n;
+	if (aegis_mldsa_verify_internal(pl + n + 3, tbs, tn, pre, 2, dev_pk, 0) != 0)
+		DIE("the EAT is not signed by the device key over its Sig_structure");
+#if defined(FZ_EAT_T1_CLAIMS)
+	model_quote(1, ch, pl, n); /* a control: a model whose transcript hashes the claims alone must disagree */
+#else
+	model_quote(1, ch, tbs, tn);
+#endif
+	if (n < 150 || pl[0] != (C.token ? 0xa5 : 0xa6) || pl[1] != 0x0a || pl[2] != 0x58 || pl[3] != 0x20 || memcmp(pl + 4, ch, 32))
+		DIE("eat_nonce is not the challenge");
+	if (memcmp(pl + 36, ueid_head, 6) || memcmp(pl + 42, dev_pk_sha256, 32)) DIE("ueid is not 0x01 and the key's hash");
+	if (memcmp(pl + 74, profile, sizeof(profile) - 1)) DIE("eat_profile");
+	if (C.token) {
+		/* submods {"platform": bstr}: tag 61, the token as the platform gave it, then intuse and nothing more */
+		const uint8_t *t = pl + n - 4 - ev_len;
+
+		if (n < 74 + sizeof(profile) - 1 + 13 + 2 + 2 + ev_len + 4 || memcmp(pl + n - 4, intuse, 4)) DIE("claims after the nested token");
+		if (t[-2] != 0xd8 || t[-1] != 0x3d || memcmp(t, "FZTOKEN", 7) || memcmp(t + 8, ch, 32))
+			DIE("the platform's token is not nested as it was given");
+		for (size_t i = 40; i < ev_len; i++)
+			if (t[i] != 0xa7) DIE("the nested token was changed at byte %zu of %zu", i, ev_len);
+		if (memcmp(pl + 74 + sizeof(profile) - 1, "\x19\x01\x0a\xa1\x68" "platform", 13)) DIE("submods");
+	} else {
+		static uint8_t spe[32], nspe[32];
+
+		memset(spe, 0x5e, 32);
+		memset(nspe, 0x95, 32);
+		if (!memmem(pl, n, spe, 32) || !memmem(pl, n, nspe, 32)) DIE("a measurement is not in the claims");
+		if (!memmem(pl, n, PROFILE, sizeof(PROFILE) - 1)) DIE("the platform profile is not in the claims");
+		if (memcmp(pl + 74 + sizeof(profile) - 1, "\x19\x01\x11\x82\x82\x19\x01\x27\x58", 9)) DIE("measurements");
+	}
+}
+
+static char *call(const uint8_t *req, size_t n);
+
+static void l_eat(const uint8_t *p, size_t n)
+{
+	static uint8_t obj[FZ_EAT_MAX];
+	uint8_t ch[32] = {0};
+	char line[6 + 64 + 1], *rep, *f[5];
+	const int want = model_eat_result();
+	unsigned len;
+
+	memcpy(ch, p, n < 32 ? n : 32);
+	memcpy(line, "PQEAT ", 6);
+	hexs(ch, 32, line + 6);
+	rep = call((const uint8_t *)line, strlen(line));
+	if (want != AEGIS_OK) {
+		if (strcmp(rep, line_of(want))) DIE("PQEAT: %.40s, the model says %s", rep, line_of(want));
+		model_quote(0, ch, NULL, 0);
+	} else {
+		if (fields(rep, f, 5) != 4 || strcmp(f[0], "PQEAT") || sscanf(f[1], "%u", &len) != 1 || len > sizeof(obj) ||
+		    unhexs(f[2], strlen(f[2]), obj, len) || strcmp(f[3], "END"))
+			DIE("PQEAT reply");
+		check_eat(ch, obj, len);
+	}
+	free(rep);
+}
+
+/* small: into a buffer that cannot hold any EAT, which is refused before anything changes */
+static void b_eat(const uint8_t ch[32], int small)
+{
+	const int want = small ? AEGIS_ERR_BUFFER : model_eat_result();
+	const size_t cap = small ? AEGIS_EAT_LEN(0) - 1u : FZ_EAT_MAX;
+	uint8_t *out = malloc(cap), *c = malloc(32);
+	size_t len = 0x5a5a;
+	int rc;
+
+	memset(out, 0xEE, cap);
+	memcpy(c, ch, 32);
+	model_sweep();
+	rc = aegis_prover_quote_eat(P, c, out, cap, &len);
+	if (rc != want) DIE("aegis_prover_quote_eat: %d, the model says %d", rc, want);
+	if (rc != AEGIS_OK) {
+		if (len != 0x5a5a) DIE("a refused EAT wrote its length");
+		for (size_t i = 0; i < cap; i++)
+			if (out[i] != 0xEE) DIE("a refused EAT wrote its output");
+		if (!small) model_quote(0, ch, NULL, 0);
+	} else {
+		if (len > cap) DIE("an EAT of %zu bytes in a buffer of %zu", len, cap);
+		for (size_t i = len; i < cap; i++)
+			if (out[i] != 0xEE) DIE("an EAT wrote past its length");
+		check_eat(ch, out, len);
+	}
+	free(c);
+	free(out);
+}
+#endif /* AEGIS_EAT_COSE */
+
 /* ================================== the line front ================================== */
 
 /* one request, as a transport makes it; returns the reply (the caller frees it) */
@@ -740,6 +889,20 @@ static void l_raw(const uint8_t *p, size_t n)
 				 unhexs(f[2], strlen(f[2]), ev, len)))
 			DIE("malformed PQTOKEN");
 		model_quote(answered, nonce, ev, len);
+#if AEGIS_EAT_COSE
+	} else if (tn == 2 && !strcmp(t[0], "PQEAT") && !unhexs(t[1], strlen(t[1]), nonce, 32)) {
+		static uint8_t obj[FZ_EAT_MAX];
+		unsigned len = 0;
+
+		if (strncmp(rep, "PQEAT ", 6)) {
+			model_quote(0, nonce, NULL, 0);
+		} else {
+			if (fields(rep, f, 8) != 4 || sscanf(f[1], "%u", &len) != 1 || len > sizeof(obj) ||
+			    unhexs(f[2], strlen(f[2]), obj, len))
+				DIE("malformed PQEAT");
+			check_eat(nonce, obj, len);
+		}
+#endif
 	} else if (tn == 3 && !strcmp(t[0], "PQKEMFIN")) {
 		if (!strncmp(rep, "PQKEMOK", 7)) DIE("a raw line was accepted as a credential");
 		if (M.pending && fz_clock_fail && strcmp(rep, "ERR clock")) DIE("PQKEMFIN without a clock: %.40s", rep);
@@ -918,7 +1081,15 @@ static void line_op(uint8_t op, uint8_t sel, const uint8_t *p, size_t n)
 	case 1: l_kem_init(p, n); break;
 	case 2: l_kem_fin(sel, p, n); break;
 	case 3: l_hb(p, n); break;
-	case 4: l_chal(p, n); break;
+	case 4:
+#if AEGIS_EAT_COSE
+		if (C.magic && (sel & 1)) {
+			l_eat(p, n);
+			break;
+		}
+#endif
+		l_chal(p, n);
+		break;
 	case 5:
 		if (C.magic && sel) {
 			if (seen.have) l_finish(seen.ct, KEM_CT_LEN, seen.cred, seen.cred_len, NULL);
@@ -1195,7 +1366,15 @@ static void binary_op(uint8_t op, uint8_t sel, const uint8_t *p, size_t n)
 	case 1: b_kem_init(v32); break;
 	case 2: b_kem_fin(sel, p, n); break;
 	case 3: b_hb_op(sel, p, n); break;
-	case 4: b_quote(v32); break;
+	case 4:
+#if AEGIS_EAT_COSE
+		if (sel & 1) {
+			b_eat(v32, (sel & 2) != 0);
+			break;
+		}
+#endif
+		b_quote(v32);
+		break;
 	case 5:
 		if (!sel) b_session();
 		else if (seen.have) b_finish(seen.ct, seen.cred, seen.cred_len, NULL, 0);

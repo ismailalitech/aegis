@@ -34,9 +34,10 @@ MLKEM = os.environ.get("MLKEM_NATIVE_DIR", os.path.join(TOOLS, "mlkem-native", "
 SDK = os.path.join(ROOT, "sdk")
 
 
-def build(out):
-    """The SDK's core behind a TCP socket, through the reference port (sdk/ports/host)."""
-    cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", "-D_GNU_SOURCE",
+def build(out, flags=()):
+    """The SDK's core behind a TCP socket, through the reference port (sdk/ports/host). flags: more compiler options
+    (tests/host/test_sdk_eat.py builds the core's options with them)."""
+    cmd = ["gcc", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", "-D_GNU_SOURCE", *flags,
            '-DMLD_CONFIG_FILE="aegis_mldsa_config.h"',
            "-I", os.path.join(SDK, "include"), "-I", os.path.join(SDK, "src"), "-I", os.path.join(SDK, "ports", "host"),
            "-I", os.path.join(SDK, "crypto", "mldsa"), "-I", MLDSA, "-I", os.path.join(SDK, "crypto", "mlkem"),

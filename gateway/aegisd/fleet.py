@@ -59,6 +59,15 @@ puts a record and its key into the policy's directory and pins the record in the
 that leaves nothing trusted if it stops half way. Without the key in the entry the pinned key is whatever was first put there (`enroll-pq`, trust on
 first use); every such endpoint is marked "trust-on-first-use" in its verdict and its journal line, with a line at
 warning priority when the loop starts.
+
+Standard evidence (docs/evidence-format.md): an entry with "evidence_format": "eat-cose-v1" is asked for an EAT in a
+COSE_Sign1 signed with ML-DSA-65 (request PQEAT) instead of the older claims and detached signature (PQCHAL), which
+stay the default: firmware in the field keeps working. The same policy rules apply to both. For the verdict of such
+an entry, or of every entry if the policy says "attestation_results": true (off by default), the loop signs an
+attestation result (an EAR in a COSE_Sign1, by this verifier's identity key) and keeps it, with the
+evidence it appraised, under STATE_DIR/attestation/<name>/; `fleet.py export-evidence POLICY NAME` copies them, the
+endorsement record and the public keys into one directory that tools/verify_evidence.py checks with third-party
+libraries only.
 """
 import argparse
 import hashlib
@@ -106,6 +115,12 @@ ENDORSED, TOFU, NOT_ENDORSED = "endorsed", "trust-on-first-use", "refused"     #
 # common/endorsement.py is_name()
 ENTRY_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}\Z")
 RENEW_WARNING_S = 30 * 86400        # `check` warns when an endorsement stops being accepted sooner than this
+EAT_COSE = "eat-cose-v1"            # policy key "evidence_format": EAT in COSE_Sign1, ML-DSA-65 (common/cose.py, eat.py)
+EVIDENCE_FORMATS = (EAT_COSE,)
+LEGACY_QUOTE = "aegis-quote-v1"     # the default: claims or a PSA token, and a detached ML-DSA-65 signature over
+#                                     "aegis-endpoint-quote-v1" || 0x00 || token
+PSA_TOKEN = "psa-token"             # kind psa: TF-M's token alone (COSE_Sign1, ES256)
+PACK_FORMAT = "aegis-evidence-pack-v1"
 TOFU_NOTE = ('trust on first use: nothing shows that the pinned key belongs to a genuine device (no "endorsement": '
              '"required" in the policy entry); weaker')
 
@@ -184,6 +199,18 @@ def request_pq(host, port, challenge, timeout):
     if len(tok) != int(p[1]) or len(sig) != int(p[3]):
         raise ValueError("PQ quote length mismatch")
     return tok, sig
+
+
+def request_eat(host, port, challenge, timeout):
+    """Standard evidence: the endpoint's EAT for this challenge, a COSE_Sign1 (docs/evidence-format.md)."""
+    line = _request(host, port, "PQEAT " + challenge.hex(), timeout)
+    p = line.split()
+    if len(p) != 4 or p[0] != "PQEAT" or p[3] != "END":
+        raise ValueError("no EAT evidence in reply: %r" % line[:40])
+    ev = bytes.fromhex(p[2])
+    if len(ev) != int(p[1]):
+        raise ValueError("EAT evidence length mismatch")
+    return ev
 
 
 def request_pq_key(host, port, timeout=10):
@@ -658,6 +685,12 @@ def policy_errors(ep):
     age = ep.get("max_endorsement_age_s")
     if age is not None and not (isinstance(age, int) and not isinstance(age, bool) and age > 0):
         errors.append("policy: max_endorsement_age_s is not a positive whole number of seconds")
+    fmt = ep.get("evidence_format")
+    if fmt is not None and fmt not in EVIDENCE_FORMATS:
+        # a value this verifier does not know must not fall back to the older format
+        errors.append("policy: unknown evidence_format %r (known: %s)" % (fmt, ", ".join(EVIDENCE_FORMATS)))
+    elif fmt is not None and kind not in PQ_KINDS:
+        errors.append("policy: evidence_format %s needs a post-quantum kind (%s)" % (fmt, ", ".join(PQ_KINDS)))
     return errors
 
 
@@ -677,7 +710,7 @@ def binding_note(ep):
     return "session %s" % UNBOUND_NOTE
 
 
-def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None):
+def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None, facts=None):
     """kind "psa": PSA token signed by the endpoint's IAK (ES256).
     kind "aegis-pq": the same token plus an ML-DSA-65 signature by the endpoint's enrolled
     post-quantum key; the ML-DSA check is mandatory, the ES256 check runs only if an
@@ -693,14 +726,29 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None):
     An entry with "endorsement": "required" is refused, without being contacted, unless device_key() finds its pinned
     key endorsed by one of endorsers (the policy's "endorsers"); its quote must then report exactly the endorsed
     components, besides passing the policy's "allowed". verdict["enrolment"] says which way the key is trusted.
+    An entry with "evidence_format": "eat-cose-v1" is asked for standard evidence (PQEAT): an EAT in a COSE_Sign1
+    signed with the same ML-DSA-65 key (common/cose.py, common/eat.py). Its claims go through the same rules; an
+    answer in the older format is then not accepted, and the other way round.
+    facts, if given, is a dict that receives what an attestation result needs and the verdict does not carry
+    (attestation_result()): "stage" (policy, endorsement, no-evidence, evidence, appraised: how far it got),
+    "format", "evidence" and "evidence_sig" (the bytes received), "signature" (False, True; absent if not checked),
+    "nonce", "ueid", "platform", "components", "components_ok".
     Never raises for anything the endpoint sends, nor for anything an endorsement record contains."""
     kind = ep.get("kind", "psa")
     verdict = {"endpoint": ep["name"], "kind": kind, "time": int(time.time()), "admitted": False, "reasons": []}
+    facts = {} if facts is None else facts
+    facts.clear()
+    facts["stage"] = "policy"
     errors = policy_errors(ep)
     if errors:
         verdict["reasons"] += errors
         return verdict
+    eat_format = ep.get("evidence_format") == EAT_COSE
+    facts["format"] = EAT_COSE if eat_format else LEGACY_QUOTE if kind in PQ_KINDS else PSA_TOKEN
+    if eat_format:
+        verdict["evidence_format"] = EAT_COSE
     pk = endorsed = None
+    facts["stage"] = "endorsement"
     if kind in PQ_KINDS and ep.get("endorsement") is not None:
         try:
             pk, endorsed = device_key(ep, base_dir, endorsers)
@@ -717,9 +765,12 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None):
         verdict["enrolment"] = TOFU
     challenge = secrets.token_bytes(32)
     t0 = time.monotonic()
-    sig = None
+    sig = ev = None
+    facts["stage"] = "no-evidence"
     try:
-        if kind in PQ_KINDS:
+        if eat_format:
+            tok = request_eat(ep["host"], int(ep["port"]), challenge, timeout)
+        elif kind in PQ_KINDS:
             tok, sig = request_pq(ep["host"], int(ep["port"]), challenge, timeout)
         else:
             tok = request_token(ep["host"], int(ep["port"]), challenge, timeout)
@@ -728,22 +779,53 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None):
         verdict["elapsed_s"] = round(time.monotonic() - t0, 3)
         return verdict
     verdict["elapsed_s"] = round(time.monotonic() - t0, 3)
+    facts.update(stage="evidence", evidence=tok, evidence_sig=sig)
     try:
         if kind in PQ_KINDS:
             import mldsa
             if pk is None:
                 pk, _ = device_key(ep, base_dir)
-            if not mldsa.verify(pk, PQ_LABEL, tok, sig):
-                verdict["reasons"].append("ML-DSA-65 quote signature invalid" + (
-                    " (the device that answered does not hold the endorsed key)" if endorsed else ""))
-                return verdict
+            not_the_key = " (the device that answered does not hold the endorsed key)" if endorsed else ""
+            if eat_format:
+                import cose
+                import eat
+                try:
+                    cose.parse(tok)                 # not an Aegis COSE_Sign1 at all: refused before any key is used
+                    facts["signature"] = False
+                    signed = cose.verify1(tok, pk)
+                except cose.Refused as e:
+                    verdict["reasons"].append("EAT evidence refused: %s%s" % (
+                        e, not_the_key if "signature" in facts else ""))
+                    return verdict
+                signed_bytes = signed.tbs           # the COSE Sig_structure: what the ML-DSA-65 signature covers
+            else:
+                facts["signature"] = False
+                if not mldsa.verify(pk, PQ_LABEL, tok, sig):
+                    verdict["reasons"].append("ML-DSA-65 quote signature invalid" + not_the_key)
+                    return verdict
+                signed_bytes = tok
+            facts["signature"] = True
             verdict["pq_signature"] = "ML-DSA-65 valid"
             verdict["device_pk_sha256"] = hashlib.sha256(pk).hexdigest()
             # the quote as signed, for the transcript a session of this cycle must continue (provision()); both
-            # values went over the network in the clear
-            verdict["quote"] = {"challenge": challenge.hex(), "token_sha3_256": _sha3(tok).hex()}
+            # values went over the network in the clear. For standard evidence the signed bytes are the COSE
+            # Sig_structure of the evidence (docs/evidence-format.md, "The transcript").
+            verdict["quote"] = {"challenge": challenge.hex(), "token_sha3_256": _sha3(signed_bytes).hex()}
+            if eat_format:
+                ev = eat.read_evidence(signed.payload, pk)
+                facts.update(ueid=ev["ueid"], dbgstat=ev["dbgstat"])
+                if (ev["components"] is None) != (kind not in PLAIN_KINDS):
+                    verdict["reasons"].append("EAT evidence refused: an endpoint of kind %s reports %s" % (kind, (
+                        "the platform's token, not measurements" if kind in PLAIN_KINDS else
+                        "measurements, not the platform's token")))
+                    return verdict
+                tok = ev["platform_token"]          # kind aegis-pq: TF-M's token, nested; None otherwise
         if kind in PLAIN_KINDS:
-            claims = psa_token.parse_plain(tok)
+            if ev is not None:
+                claims = {"profile": ev["platform"], "challenge": ev["nonce"], "instance_id": ev["ueid"],
+                          "sw_components": ev["components"]}
+            else:
+                claims = psa_token.parse_plain(tok)
             profile = claims.get("profile")
             accepted = PLAIN_KINDS[kind]
             if profile not in accepted:
@@ -759,8 +841,10 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None):
                 verdict["warning"] = ("development profile %s admitted only because allow_dev_profile is set: "
                                       "its key is the same on every chip" % profile)
         elif ep.get("iak_pub_pem"):
+            facts.setdefault("signature", False)    # kind psa: the ES256 signature is the only one
             with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
                 claims = psa_token.verify(tok, f.read(), ecdsa_verify)
+            facts["signature"] = True
         else:
             # aegis-pq without an ES256 key: the ML-DSA-65 signature over the whole token was verified above
             claims = psa_token.parse(tok)[3]
@@ -770,13 +854,24 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None):
     except Exception as e:  # noqa: BLE001 - nothing an endpoint sends may stop the fleet loop
         verdict["reasons"].append("token not usable: %s: %s" % (type(e).__name__, e))
         return verdict
+    facts["stage"] = "appraised"
     try:
-        if claims.get("challenge") != challenge:
+        # standard evidence that nests the platform's token carries the challenge twice: both must be this cycle's
+        if claims.get("challenge") != challenge or (ev is not None and ev["nonce"] != challenge):
             verdict["reasons"].append("challenge mismatch (replayed or stale token)")
-        verdict["reasons"] += check_components(claims, ep.get("allowed", []))
+        why = check_components(claims, ep.get("allowed", []))
         if endorsed:
-            verdict["reasons"] += endorsed_components(claims, endorsed["measurements"])
+            why += endorsed_components(claims, endorsed["measurements"])
+        verdict["reasons"] += why
+        facts["components_ok"] = not why
+        if isinstance(claims.get("challenge"), bytes):
+            facts["nonce"] = claims["challenge"]
+        if isinstance(claims.get("profile"), str):
+            facts["platform"] = claims["profile"]
         s = psa_token.summary(claims)
+        facts["components"] = [c for c in s["sw_components"] if isinstance(c.get("measurement_type"), str)
+                               and isinstance(c.get("measurement_value"), str)
+                               and len(c["measurement_value"]) == 64] or None
         verdict["measurements"] = {c.get("measurement_type"): c.get("measurement_value") for c in s["sw_components"]}
         verdict["instance_id"] = s.get("instance_id")
     except Exception as e:  # noqa: BLE001 - malformed but signed claims: refuse, do not crash
@@ -949,6 +1044,21 @@ def _unbound_tail(tr):
     return "" if tr else " [%s]" % UNBOUND_NOTE
 
 
+# what attest() puts into a verdict from the quote it asked for: the parts a later quote of the same cycle replaces
+QUOTE_FIELDS = ("time", "elapsed_s", "evidence_format", "enrolment", "endorsement", "pq_signature", "device_pk_sha256",
+                "quote", "trust", "warning", "measurements", "instance_id")
+
+
+def _adopt_quote(verdict, again):
+    """Make verdict speak of the quote of the verdict again (a second quote of the cycle): every QUOTE_FIELDS value
+    is again's, or absent if again has none."""
+    for k in QUOTE_FIELDS:
+        if k in again:
+            verdict[k] = again[k]
+        elif k != "time":                   # a verdict always has a time
+            verdict.pop(k, None)
+
+
 def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=False, requote=None, endorsers=None):
     """Zero trust: admitted aegis-pq endpoints with "provision": true get (or keep) a fresh
     credential; quarantined ones lose it. Endpoints that would not accept this verifier's credential
@@ -1031,7 +1141,10 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
             again = requote() if requote else None
             if again is not None and not again.get("admitted"):
                 # the endpoint was admitted at the start of this cycle and is not now: this cycle's verdict is the
-                # later one (run_once enforces it again), and a quarantined endpoint keeps no session
+                # later one (run_once enforces it again), and a quarantined endpoint keeps no session. What the
+                # verdict says of the evidence is the second quote's too, so that the verdict, the signed result and
+                # the evidence kept with it are all of one quote (run_once takes the second quote's facts)
+                _adopt_quote(verdict, again)
                 verdict["admitted"] = False
                 verdict["reasons"] = list(verdict.get("reasons", [])) + [
                     "second quote of the cycle not admitted: %s" % "; ".join(again.get("reasons", []))]
@@ -1046,7 +1159,8 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
                         "; ".join(again.get("reasons", [])) or "no quote")) from None
                 raise
             r = provision(ep, base_dir, sk, gid, verdict.get("measurements", {}), quote=again["quote"], **key)
-            verdict["quote"], second = again["quote"], True
+            _adopt_quote(verdict, again)
+            second = True
     except TranscriptRefused as e:
         # The endpoint did not show that the code appraised in this cycle holds the new session. A stored session that
         # still works (the binding the policy asks for, made from an earlier admitted quote, not expired, no failed
@@ -1078,18 +1192,201 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
             (" (heartbeat failed: %s)" % hb_error if hb_error else "") + _unbound_tail(r["transcript"]))
 
 
+# ---- attestation results and the evidence pack (docs/evidence-format.md) ---------------------------------------------
+
+def verifier_keys(state):
+    """This verifier's ML-DSA-65 identity as (secret key, public key): what signs attestation results. None without
+    an identity in state (aegisd.py init), or if its key cannot be loaded."""
+    try:
+        with open(os.path.join(state, "identity.json")) as f:
+            pk = bytes.fromhex(json.load(f)["body"]["pk"])
+        sk, _ = load_gateway_identity(state)
+    except Exception:  # noqa: BLE001 - no identity, a sealed key that does not open: no results, the loop goes on
+        return None
+    return sk, pk
+
+
+def attestation_result(verdict, facts, keys, policy_bytes, ttl=None, now=None):
+    """The signed attestation result for one verdict: an EAR (draft-ietf-rats-ear-06) in a COSE_Sign1, ML-DSA-65, by
+    this verifier's identity key (keys: verifier_keys()). facts: what attest() noted. policy_bytes: the policy file
+    the verdict was reached under; the result names its SHA-256. With ttl the result expires that many seconds
+    after it was issued (the admission's own lifetime, admit_ttl())."""
+    import cose
+    import eat
+    now = int(time.time() if now is None else now)
+    payload = eat.ear_payload(verdict, facts, eat.policy_id(policy_bytes), now, now + int(ttl) if ttl else None)
+    return cose.sign1(keys[0], keys[1], payload)
+
+
+def attestation_dir(state, name):
+    return os.path.join(state, "attestation", name)
+
+
+def _put(path, data):
+    tmp = "%s.tmp.%d" % (path, os.getpid())
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+
+def keep_attestation(state, verdict, facts, result, policy_bytes):
+    """Write this cycle's evidence (as received) and signed result for one endpoint to
+    STATE/attestation/<name>/: evidence.cbor (standard evidence) or evidence.token and evidence.sig (the older
+    format), result.cbor, and meta.json, which names each by its SHA-256, written last. What an earlier cycle left
+    and this one did not produce is removed, so the directory is always one cycle's."""
+    d = attestation_dir(state, verdict["endpoint"])
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    files = {"result.cbor": result}
+    if facts.get("evidence"):
+        files["evidence.cbor" if facts.get("format") == EAT_COSE else "evidence.token"] = facts["evidence"]
+    if facts.get("evidence_sig"):
+        files["evidence.sig"] = facts["evidence_sig"]
+    for name in ("evidence.cbor", "evidence.token", "evidence.sig"):
+        if name not in files and os.path.exists(os.path.join(d, name)):
+            os.remove(os.path.join(d, name))
+    for name, data in files.items():
+        _put(os.path.join(d, name), data)
+    meta = {"format": PACK_FORMAT, "endpoint": verdict["endpoint"], "kind": verdict.get("kind"),
+            "time": verdict.get("time"), "admitted": bool(verdict.get("admitted")),
+            "evidence_format": facts.get("format"), "policy_sha256": hashlib.sha256(policy_bytes).hexdigest(),
+            "files": {name: hashlib.sha256(data).hexdigest() for name, data in sorted(files.items())}}
+    _put(os.path.join(d, "meta.json"), (json.dumps(meta, indent=1) + "\n").encode())
+    return meta
+
+
+def issue_result(verdict, facts, keys, policy_bytes, state, ttl=None):
+    """Sign and keep the attestation result of one verdict; the verdict gets "attestation_result": {"status",
+    "sha256", "file" (where the COSE_Sign1 is kept)}. Never raises: a result that cannot be made is reported in the verdict
+    ("error"), and the verdict itself stands."""
+    try:
+        import eat
+        if not (isinstance(verdict.get("endpoint"), str) and ENTRY_NAME.match(verdict["endpoint"])):
+            raise ValueError("the entry's name is not a file name")
+        if facts.get("evidence"):
+            facts["evidence_sha256"] = hashlib.sha256(facts["evidence"]).digest()
+        result = attestation_result(verdict, facts, keys, policy_bytes, ttl)
+        keep_attestation(state, verdict, facts, result, policy_bytes)
+        verdict["attestation_result"] = {"status": eat.TIER_NAMES[eat.appraisal(verdict, facts)[0]],
+                                         "sha256": hashlib.sha256(result).hexdigest(),
+                                         "file": os.path.join(attestation_dir(state, verdict["endpoint"]),
+                                                              "result.cbor")}
+    except Exception as e:  # noqa: BLE001 - the verdict and its enforcement do not depend on the result
+        verdict["attestation_result"] = {"error": "%s: %s" % (type(e).__name__, e)}
+
+
+def export_evidence(policy, policy_bytes, base_dir, state, name, out, with_policy=False):
+    """The evidence pack of one endpoint, written to the new directory out: the last cycle's evidence and signed
+    attestation result (keep_attestation), the entry's endorsement record, the public keys as COSE_Key files and
+    manifest.json, which names every file by its SHA-256 and the policy by its hash. tools/verify_evidence.py checks
+    a pack with third-party libraries only. The keys in a pack are for convenience: whoever relies on it compares
+    their thumbprints with the keys they trust. Raises ValueError or OSError; returns the manifest."""
+    import cose
+    import eat
+    eps = [e for e in policy.get("endpoints", []) if isinstance(e, dict) and e.get("name") == name]
+    if len(eps) != 1 or not ENTRY_NAME.match(str(name)):
+        raise ValueError("the policy has %s entry named %r" % ("no" if not eps else "more than one", str(name)[:40]))
+    ep = effective_entry(policy, eps[0])
+    d = attestation_dir(state, name)
+    try:
+        with open(os.path.join(d, "meta.json")) as f:
+            meta = json.load(f)
+    except FileNotFoundError:
+        raise ValueError("no attestation of %s is kept in %s (the loop has not appraised it yet, or this verifier "
+                         "has no identity to sign results with)" % (name, d)) from None
+    files = {}
+    for fname, digest in meta["files"].items():
+        with open(os.path.join(d, os.path.basename(fname)), "rb") as f:
+            data = f.read()
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise ValueError("%s changed while it was read (the loop is writing a new cycle): run the command again"
+                             % fname)
+        files["attestation-result.cbor" if fname == "result.cbor" else fname] = data
+    keys = verifier_keys(state)
+    if keys is None:
+        raise ValueError("no verifier identity in %s" % state)
+    result = eat.read_ear(files["attestation-result.cbor"], keys[1])    # it is this verifier's, and intact
+    files["keys/verifier.cosekey"] = cbor_key(keys[1])
+    kind = ep.get("kind", "psa")
+    if kind in PQ_KINDS and ep.get("pq_pub_file"):
+        with open(_path(base_dir, ep["pq_pub_file"])) as f:
+            files["keys/device.cosekey"] = cbor_key(bytes.fromhex(f.read().strip()))
+    if ep.get("iak_pub_pem"):
+        with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
+            files["keys/device-iak.pem"] = f.read()
+    if ep.get("endorsement") is not None:
+        import endorsement
+        with open(endorsement_file(ep, base_dir), "rb") as f:
+            rec_bytes = f.read(endorsement.MAX_RECORD + 1)
+        rec = endorsement.loads(rec_bytes)
+        files["endorsement.cbor" if rec["format"] == endorsement.FORMAT_COSE else "endorsement.json"] = rec_bytes
+        for e in endorsement.trusted(policy.get("endorsers"), base_dir).values():
+            if hashlib.sha256(e["pk"]).hexdigest() == rec["body"]["endorser_pk_sha256"]:
+                files["keys/endorser.cosekey"] = cbor_key(e["pk"])
+    if with_policy:
+        files["policy.json"] = policy_bytes
+    manifest = {"format": PACK_FORMAT, "endpoint": name, "kind": kind, "exported": int(time.time()),
+                "evidence_format": meta.get("evidence_format"),
+                "policy_sha256": meta["policy_sha256"],
+                "policy_id": eat.policy_id(policy_bytes) if hashlib.sha256(policy_bytes).hexdigest() ==
+                meta["policy_sha256"] else None,
+                "policy_now_sha256": hashlib.sha256(policy_bytes).hexdigest(),
+                "result": {"status": result["status"], "admitted": result["admitted"], "iat": result["iat"],
+                           "exp": result["exp"]},
+                "key_thumbprints": {k[5:-8]: cose.key_thumbprint(cose.key_from_cose(_cbor_loads(v))).hex()
+                                    for k, v in files.items() if k.endswith(".cosekey")},
+                "files": {k: hashlib.sha256(v).hexdigest() for k, v in sorted(files.items())},
+                "verify": "tools/verify_evidence.py pack <this directory>"}
+    os.makedirs(os.path.join(out, "keys"))          # a new directory: an existing pack is never mixed with this one
+    for fname, data in files.items():
+        with open(os.path.join(out, fname), "wb") as f:
+            f.write(data)
+    with open(os.path.join(out, "manifest.json"), "w") as f:
+        json.dump(manifest, f, indent=1)
+        f.write("\n")
+    return manifest
+
+
+def _cbor_loads(data):
+    import cbor
+    return cbor.loads(data)
+
+
+def cbor_key(pk):
+    """An ML-DSA-65 public key as a COSE_Key file (AKP, RFC 9964): what a third-party tool loads."""
+    import cbor
+    import cose
+    return cbor.dumps(cose.cose_key(pk), sort=True)
+
+
+def wants_results(policy, ep):
+    """Whether the verdicts of ep get a signed attestation result: only on request, so that a policy that asks for
+    none runs as before (no signature, no key unsealed, no files written, no "attestation_result" in a verdict). The
+    policy asks with "attestation_results": true at its top level (every entry), or an entry with "evidence_format":
+    "eat-cose-v1" (that entry)."""
+    return policy.get("attestation_results") is True or (isinstance(ep, dict) and ep.get("evidence_format") == EAT_COSE)
+
+
 def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, state=GATEWAY_STATE, require_pin=False,
-             enforce_hooks=True):
-    """One cycle over every endpoint. enforce_hooks=False is observe-only: the policy's enforce_cmd is not run."""
+             enforce_hooks=True, policy_bytes=None):
+    """One cycle over every endpoint. enforce_hooks=False is observe-only: the policy's enforce_cmd is not run.
+    With policy_bytes (the policy file as read) and a verifier identity in state, the verdict of every entry that
+    asks for it (wants_results()) gets a signed attestation result, kept with its evidence under STATE/attestation/
+    (issue_result). Without such an entry the identity key is not loaded and nothing is written."""
     out = []
     ttl = admit_ttl(policy, interval)
+    signer = None
+    if policy_bytes is not None and any(wants_results(policy, ep) for ep in policy["endpoints"]):
+        signer = verifier_keys(state)       # unsealed only when some entry asks for results
     for ep in policy["endpoints"]:
+        signs = signer is not None and wants_results(policy, ep)
         ep = effective_entry(policy, ep)
+        facts, second = {}, {}
         try:
-            v = attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)), policy.get("endorsers"))
+            v = attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)), policy.get("endorsers"), facts)
         except Exception as e:  # noqa: BLE001 - one endpoint must never stop the loop for the others
             v = {"endpoint": ep.get("name", "?"), "kind": ep.get("kind", "psa"), "time": int(time.time()),
                  "admitted": False, "reasons": ["attestation error: %s: %s" % (type(e).__name__, e)]}
+            facts = {"stage": "error"}
         result = enforce(policy, v, ttl) if enforce_hooks else None
         note = record_enforcement(v, result)
         if note:
@@ -1101,11 +1398,16 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
             def requote(ep=ep):
                 import random
                 time.sleep(random.uniform(*BUSY_BACKOFF_S))   # as for a busy endpoint: do not collide again
+                second.clear()
+                second["facts"] = {}
                 try:
-                    return attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)),
-                                  policy.get("endorsers"))
+                    second["verdict"] = attest(ep, ecdsa_verify, base_dir, float(policy.get("timeout_s", 10)),
+                                               policy.get("endorsers"), second["facts"])
                 except Exception as e:  # noqa: BLE001 - as for the first quote of the cycle
-                    return {"admitted": False, "reasons": ["attestation error: %s: %s" % (type(e).__name__, e)]}
+                    second["verdict"] = {"admitted": False,
+                                         "reasons": ["attestation error: %s: %s" % (type(e).__name__, e)]}
+                    second["facts"] = {"stage": "error"}
+                return second["verdict"]
             admitted = v["admitted"]
             try:
                 cs = credential_step(ep, v, base_dir, state=state, require_pin=require_pin, requote=requote,
@@ -1125,17 +1427,28 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
                     v["enforce_note"] = note
                     log("aegis-fleet: enforcement hook failed for %s (quarantine), rc=%s:\n%s" % (
                         v["endpoint"], result["rc"], result["stderr"] or "(no output)"), LOG_ERR, file=sys.stderr)
+            again = second.get("verdict")
+            if again is not None and ((admitted and not v["admitted"]) or
+                                      (again.get("quote") is not None and v.get("quote") == again.get("quote"))):
+                facts = second["facts"]     # the cycle's verdict rests on the second quote: that is its evidence
+        if signs:
+            issue_result(v, facts, signer, policy_bytes, state, ttl)
         out.append(v)
     return out
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Aegis fleet verifier")
-    ap.add_argument("cmd", choices=["once", "watch", "enroll-pq", "enroll-endorsed", "session", "check"])
+    ap.add_argument("cmd", choices=["once", "watch", "enroll-pq", "enroll-endorsed", "session", "check",
+                                    "export-evidence"])
     ap.add_argument("--force", action="store_true",
                     help="enroll-pq, enroll-endorsed: replace keys that are already pinned")
     ap.add_argument("policy")
-    ap.add_argument("records", nargs="*", help="enroll-endorsed: endorsement records (provision/aegis_provision.py)")
+    ap.add_argument("records", nargs="*", help="enroll-endorsed: endorsement records (provision/aegis_provision.py); "
+                                               "export-evidence: the endpoint's name")
+    ap.add_argument("--out", help="export-evidence: the directory to create (default: evidence-pack-NAME-TIME)")
+    ap.add_argument("--with-policy", action="store_true",
+                    help="export-evidence: put the policy file itself into the pack, not only its hash")
     ap.add_argument("--interval", type=float, default=30)
     ap.add_argument("--platform", choices=["auto", "polarfire", "linux"], default="auto",
                     help="polarfire: the gateway; linux: an ordinary Linux host (observe-only, credentials only where "
@@ -1149,8 +1462,9 @@ def main(argv=None):
     ap.add_argument("--enforce", action="store_true",
                     help="--platform linux: run the policy's enforce_cmd (default there: observe-only)")
     a = ap.parse_args(argv)
-    with open(a.policy) as f:
-        policy = json.load(f)
+    with open(a.policy, "rb") as f:
+        policy_bytes = f.read()
+    policy = json.loads(policy_bytes.decode())
     base = os.path.dirname(os.path.abspath(a.policy))
     platform = detect_platform() if a.platform == "auto" else a.platform
     state_dir = a.state_dir or default_state_dir(platform)
@@ -1158,8 +1472,23 @@ def main(argv=None):
     on_host = platform == "linux"
     enforce_hooks = not on_host or a.enforce
     ev = psa_token.verify_with_openssl_cli if a.verifier == "openssl" else psa_token.verify_with_cryptography
-    if a.records and a.cmd != "enroll-endorsed":
+    if a.records and a.cmd not in ("enroll-endorsed", "export-evidence"):
         ap.error("only enroll-endorsed takes record files")
+    if a.cmd == "export-evidence":
+        # the evidence pack of one endpoint, for someone who checks it without Aegis code (docs/evidence-format.md)
+        if len(a.records) != 1:
+            ap.error("export-evidence needs one endpoint name")
+        out = a.out or "evidence-pack-%s-%s" % (a.records[0], time.strftime("%Y%m%d-%H%M%S"))
+        try:
+            m = export_evidence(policy, policy_bytes, base, state_dir, a.records[0], out, a.with_policy)
+        except (OSError, ValueError) as e:
+            print("export-evidence: %s" % e, file=sys.stderr)
+            return 1
+        print("evidence pack of %s in %s: %s, result %s (%s), policy sha256 %s\n  %s" % (
+            m["endpoint"], out, m["evidence_format"], m["result"]["status"],
+            "admitted" if m["result"]["admitted"] else "not admitted", m["policy_sha256"],
+            "\n  ".join("%s  %s" % (h, n) for n, h in m["files"].items())))
+        return 0
     if a.cmd == "enroll-endorsed":
         # Endorsed enrolment (docs/enrolment.md): each record is checked against this policy's trusted endorsers and
         # the entry it names, then its record and key are committed so that a failure leaves nothing trusted.
@@ -1240,11 +1569,14 @@ def main(argv=None):
         return 1 if bad else 0
     run = dict(credentials=not a.no_credentials, interval=a.interval, state=state_dir, require_pin=on_host,
                enforce_hooks=enforce_hooks)
+    if any(wants_results(policy, ep) for ep in policy.get("endpoints", [])) and verifier_keys(state_dir) is None:
+        log("aegis-fleet: no verifier identity in %s: verdicts are not signed (no attestation results)" % state_dir,
+            file=sys.stderr)
     if policy.get("enforce_cmd") and not enforce_hooks:
         log("aegis-fleet: observe-only on platform %s: enforce_cmd in the policy is not run (--enforce runs it)"
             % platform, file=sys.stderr)
     if a.cmd == "once":
-        res = run_once(policy, base, ev, **run)
+        res = run_once(policy, base, ev, policy_bytes=policy_bytes, **run)
         for v in res:
             v.pop("enforce_note", None)
         print(json.dumps(res, indent=1))
@@ -1264,11 +1596,12 @@ def main(argv=None):
             log("aegis-fleet: %s: enrolment: %s" % (ep.get("name"), TOFU_NOTE), LOG_WARNING)
     while True:
         try:  # reload every cycle, so policy updates apply without a restart
-            with open(a.policy) as f:
-                policy = json.load(f)
+            with open(a.policy, "rb") as f:
+                new_bytes = f.read()
+            policy, policy_bytes = json.loads(new_bytes.decode()), new_bytes
         except (OSError, ValueError) as e:
             print("policy reload failed, keeping the previous one: %s" % e, flush=True)
-        res = run_once(policy, base, ev, **run)
+        res = run_once(policy, base, ev, policy_bytes=policy_bytes, **run)
         lines = [journal_line(v) for v in res]
         for v in res:
             v.pop("enforce_note", None)

@@ -16,6 +16,8 @@
  *     PQHB <nonce>             -> PQHB <status> <counter> <tag> END           KMAC256 over the session; the status is
  *                                                                             the platform's text plus ";ttl=<seconds left>"
  *     PQSESSION                -> PQSESSION <session id> <credential hash> END
+ *     PQEAT <32-byte hex>      -> PQEAT <len> <COSE_Sign1> END                only with -DAEGIS_EAT_COSE=1: the same
+ *                                                                             quote as standard evidence (below)
  *   PQHB and PQSESSION answer "ERR pq no-session" before the first session and after a restart, and "ERR pq expired"
  *   once a session has ended on this side's clock, until the next one starts.
  *
@@ -58,6 +60,18 @@
  * quote are what the platform gives when the quote is asked for. Nothing is measured again for the exchange: the
  * transcript says that this boot signed exactly that quote and then made this key for it.
  *
+ * Standard evidence, an option (AEGIS_EAT_COSE, off by default; docs/evidence-format.md is the specification): the
+ * same quote as an EAT (RFC 9711) in a COSE_Sign1 (RFC 9052) signed with ML-DSA-65 (RFC 9964, algorithm -49).
+ *   claims           eat_nonce, ueid (0x01 || SHA-256 of the identity key), eat_profile, intuse and either the
+ *                    platform's measurements as measured components (RFC 10013) with the platform profile, or the
+ *                    platform's own token nested as a submodule
+ *   signature        ML-DSA-65 (pure, empty context, hedged) over the COSE Sig_structure, which is built in the work
+ *                    buffer; no label: a Sig_structure begins 0x84 0x6a "Signature1", every label here "aegis-"
+ *   T1               SHA3-256("aegis-transcript-v2/quote" || challenge || SHA3-256(Sig_structure)): the signed bytes
+ *                    again, so an exchange continues an EAT quote exactly as it continues the other kind
+ * The device answers whichever request it gets; the quote an exchange can continue is the last one signed, of either
+ * kind.
+ *
  * Stack: the deepest paths are the ML-DSA calls. What must not lie under them (hash states, the key's coins, the
  * claims' encoder) is in functions of its own that have returned by then, marked AEGIS_NOINLINE, and the two
  * operations that sign are part of their callers' frames (AEGIS_INLINE) rather than a frame more; the STM32
@@ -78,6 +92,11 @@
 
 #if !defined(AEGIS_HB_KMAC)
 #define AEGIS_HB_KMAC 1
+#endif
+/* Standard evidence (docs/evidence-format.md): an EAT in a COSE_Sign1, request PQEAT and aegis_prover_quote_eat().
+ * Off unless the core is built with -DAEGIS_EAT_COSE=1; without it this file compiles to what it was. */
+#if !defined(AEGIS_EAT_COSE)
+#define AEGIS_EAT_COSE 0
 #endif
 #if defined(__GNUC__)
 #define AEGIS_NOINLINE __attribute__((noinline))
@@ -569,6 +588,172 @@ AEGIS_INLINE int quote(struct aegis_prover *p, const uint8_t challenge[32], size
 	return AEGIS_OK;
 }
 
+#if AEGIS_EAT_COSE
+/* ---- standard evidence: an EAT in a COSE_Sign1 (docs/evidence-format.md) ---------------------- */
+
+/* The work buffer holds the COSE Sig_structure, the bytes that are signed (RFC 9052 section 4.4):
+ *   [0]   84 6a "Signature1"                                          array of 4, the context
+ *   [12]  58 3c { 1: -49, 4: kid, 16: "application/eat+cwt" }         the protected header, a byte string of 60
+ *   [74]  40                                                          external_aad, empty
+ *   [75]  the payload's head (2 or 3 bytes) and the payload: the claims
+ * The claims are made at EAT_PAYLOAD_AT, where they stand if their head is the longest, and moved down the byte or
+ * two a shorter head leaves: every length is written in its shortest form (deterministic encoding, RFC 8949
+ * section 4.2.1), and the map keys below are in that encoding's order. */
+#define EAT_PROT_AT    12u
+#define EAT_PROT_LEN   62u /* the header's bytes with their head */
+#define EAT_HEAD_LEN   75u
+#define EAT_PAYLOAD_AT AEGIS_EAT_PAYLOAD_AT
+#define EAT_MC_MAX     16u /* measured components in one EAT; a label or version text is at most 64 bytes */
+#define EAT_TEXT_MAX   64u
+/* the COSE_Sign1 is longer than the Sig_structure by: d2 84, a0, 59 0c ed and the signature, less the 13 bytes of
+ * context and external_aad */
+#define EAT_OUTER      (2u + 1u + 3u + SIG_LEN - 13u)
+
+static const char EAT_PROFILE[] = "tag:github.com,2026:ismailalitech/aegis/evidence/v1";
+static const char EAT_TYP[] = "application/eat+cwt";
+static const uint8_t EAT_CONTEXT[12] = {0x84, 0x6a, 'S', 'i', 'g', 'n', 'a', 't', 'u', 'r', 'e', '1'};
+/* {1: 7 (AKP), 3: -49 (ML-DSA-65), -1: bstr of 1952}: what the key's COSE Key Thumbprint hashes (RFC 9679) */
+static const uint8_t EAT_KEY_HEAD[AEGIS_EAT_WORK_MIN - AEGIS_PK_LEN] = {0xa3, 0x01, 0x07, 0x03, 0x38, 0x30, 0x20, 0x59, 0x07, 0xa0};
+static const uint8_t EAT_TAG_CWT[2] = {0xd8, 0x3d}; /* tag 61 before a nested token */
+
+/* n bytes from src down to dst (dst <= src; the two may overlap) */
+static void eat_move(uint8_t *dst, const uint8_t *src, size_t n)
+{
+	for (size_t i = 0; i < n; i++) dst[i] = src[i];
+}
+
+/* The Sig_structure up to the payload. The kid is the identity key's COSE Key Thumbprint; its input is laid out in
+ * the work buffer first, which is why the buffer must hold AEGIS_EAT_WORK_MIN bytes. */
+static AEGIS_NOINLINE void eat_head(struct aegis_prover *p)
+{
+	struct cbor c = {p->work, p->work + EAT_HEAD_LEN};
+	uint8_t kid[32];
+
+	memcpy(p->work, EAT_KEY_HEAD, sizeof(EAT_KEY_HEAD));
+	memcpy(p->work + sizeof(EAT_KEY_HEAD), p->pk, PK_LEN);
+	aegis_sha256(p->work, sizeof(EAT_KEY_HEAD) + PK_LEN, kid);
+	cbor_raw(&c, EAT_CONTEXT, sizeof(EAT_CONTEXT));
+	cbor_head(&c, 2, EAT_PROT_LEN - 2u);
+	cbor_head(&c, 5, 3);
+	cbor_int(&c, 1); cbor_int(&c, -49);
+	cbor_int(&c, 4); cbor_bytes(&c, kid, sizeof(kid));
+	cbor_int(&c, 16); cbor_text(&c, EAT_TYP);
+	cbor_head(&c, 2, 0);
+}
+
+static size_t eat_text_len(size_t n)
+{
+	return (n < 24u ? 1u : 2u) + n; /* n is at most EAT_TEXT_MAX */
+}
+
+/* The claims for the challenge in p->quote_ch, at most cap bytes (cap < 65536). */
+static AEGIS_NOINLINE int eat_claims(struct aegis_prover *p, uint8_t *out, size_t cap, size_t *len)
+{
+	const struct aegis_platform *pl = p->plat;
+	struct cbor c = {out, out + cap};
+	uint8_t ueid[33];
+
+	ueid[0] = 0x01; /* RAND: here the hash of the key the evidence is signed with */
+	memcpy(ueid + 1, p->pk_sha256, 32);
+	cbor_head(&c, 5, pl->evidence != NULL ? 5 : 6);
+	cbor_int(&c, 10); cbor_bytes(&c, p->quote_ch, 32);
+	cbor_int(&c, 256); cbor_bytes(&c, ueid, sizeof(ueid));
+	cbor_int(&c, 265); cbor_text(&c, EAT_PROFILE);
+	if (pl->evidence != NULL) {
+		/* submods: {"platform": the platform's token, tagged as a CWT, in a byte string}. The platform writes it
+		 * where it stands behind the longest head, with room left for the claim after it. */
+		size_t n = 0, room;
+		uint8_t *t;
+
+		cbor_int(&c, 266); cbor_head(&c, 5, 1); cbor_text(&c, "platform");
+		if (c.p == NULL || (size_t)(c.end - c.p) < 3u + sizeof(EAT_TAG_CWT) + 1u + 4u) return AEGIS_ERR_EVIDENCE;
+		t = c.p + 3u + sizeof(EAT_TAG_CWT);
+		room = (size_t)(c.end - t) - 4u;
+		/* as for the other quote: what the platform says it wrote must be what fits, or nothing is signed */
+		if (pl->evidence(pl->user, p->quote_ch, t, room, &n) != 0 || n == 0 || n > room) return AEGIS_ERR_EVIDENCE;
+		cbor_head(&c, 2, n + sizeof(EAT_TAG_CWT));
+		cbor_raw(&c, EAT_TAG_CWT, sizeof(EAT_TAG_CWT));
+		eat_move(c.p, t, n);
+		c.p += n;
+	} else {
+		/* measurements: [+ [295, bstr .cbor {1: [label, [version]], 2: [1 (sha-256), digest]}]] */
+		const struct aegis_measurement *m = NULL;
+		size_t n = 0, vl = strlen(pl->version);
+
+		if (pl->measurements(pl->user, &m, &n) != 0 || m == NULL || n == 0 || n > EAT_MC_MAX || vl > EAT_TEXT_MAX) {
+			return AEGIS_ERR_EVIDENCE;
+		}
+		cbor_int(&c, 273);
+		cbor_head(&c, 4, n);
+		for (size_t i = 0; i < n && c.p != NULL; i++) {
+			const uint8_t *start;
+			size_t ll, mc;
+
+			if (m[i].label == NULL) return AEGIS_ERR_EVIDENCE;
+			ll = strlen(m[i].label);
+			if (ll == 0 || ll > EAT_TEXT_MAX) return AEGIS_ERR_EVIDENCE;
+			mc = 3u + eat_text_len(ll) + 1u + eat_text_len(vl) + 5u + 32u;
+			cbor_head(&c, 4, 2);
+			cbor_int(&c, 295); /* application/measured-component+cbor */
+			cbor_head(&c, 2, mc);
+			start = c.p;
+			cbor_head(&c, 5, 2);
+			cbor_int(&c, 1); cbor_head(&c, 4, 2); cbor_text_n(&c, m[i].label, ll);
+			cbor_head(&c, 4, 1); cbor_text_n(&c, pl->version, vl);
+			cbor_int(&c, 2); cbor_head(&c, 4, 2); cbor_int(&c, 1); cbor_bytes(&c, m[i].value, 32);
+			if (c.p != NULL && (size_t)(c.p - start) != mc) return AEGIS_ERR_EVIDENCE; /* never a wrong length signed */
+		}
+	}
+	cbor_int(&c, 275); cbor_int(&c, 1); /* intuse: generic */
+	if (pl->evidence == NULL) {
+		cbor_int(&c, -82400); cbor_text(&c, pl->profile);
+	}
+	if (c.p == NULL) return AEGIS_ERR_EVIDENCE; /* more than fits the work buffer or the caller's reply */
+	*len = (size_t)(c.p - out);
+	return AEGIS_OK;
+}
+
+/* The longest claims whose COSE_Sign1 is at most max bytes: the claims' head is two bytes up to 255 of them, then
+ * three. */
+static size_t eat_room(size_t max)
+{
+	const size_t fixed = EAT_HEAD_LEN + EAT_OUTER;
+
+	if (max < fixed + 2u) return 0;
+	if (max - fixed - 2u <= 255u) return max - fixed - 2u;
+	return max - fixed - 3u < 256u ? 255u : max - fixed - 3u;
+}
+
+/* max: the longest COSE_Sign1 the caller can take. *tbs_len: the Sig_structure's length in the work buffer; the
+ * object is EAT_OUTER bytes longer. */
+AEGIS_INLINE int quote_eat(struct aegis_prover *p, const uint8_t challenge[32], size_t max, size_t *tbs_len)
+{
+	uint8_t *w = p->work;
+	struct cbor head = {w + EAT_HEAD_LEN, w + EAT_PAYLOAD_AT};
+	size_t cap, n = 0;
+	int rc;
+
+	p->quote_ready = 0; /* as for the other quote: only the last one signed can be continued */
+	memcpy(p->quote_ch, challenge, 32);
+	AEGIS_TEST_INPUTS_TAKEN();
+	if (p->work_len < AEGIS_EAT_WORK_MIN) return AEGIS_ERR_EVIDENCE;
+	cap = p->work_len - EAT_PAYLOAD_AT;
+	if (cap > eat_room(max)) cap = eat_room(max);
+	if (cap > 0xFFFFu) cap = 0xFFFFu; /* the payload's head is at most three bytes */
+	eat_head(p);
+	rc = eat_claims(p, w + EAT_PAYLOAD_AT, cap, &n);
+	if (rc != AEGIS_OK) return rc;
+	cbor_head(&head, 2, n);
+	eat_move(head.p, w + EAT_PAYLOAD_AT, n);
+	n += (size_t)(head.p - w);
+	rc = sign_work(p, n);
+	if (rc != AEGIS_OK) return rc;
+	quote_keep(p, w, n); /* T1 hashes the bytes that were signed */
+	*tbs_len = n;
+	return AEGIS_OK;
+}
+#endif /* AEGIS_EAT_COSE */
+
 /* ---- the exchange ----------------------------------------------------------------------------- */
 
 /* The coins of an exchange's ML-KEM key pair.
@@ -908,6 +1093,35 @@ int aegis_prover_quote(struct aegis_prover *p, const uint8_t challenge[AEGIS_CHA
 	return rc;
 }
 
+#if AEGIS_EAT_COSE
+static const uint8_t EAT_OPEN[2] = {0xd2, 0x84};        /* tag 18, array of 4 */
+static const uint8_t EAT_UNPROTECTED[1] = {0xa0};       /* the empty map */
+static const uint8_t EAT_SIG_HEAD[3] = {0x59, (uint8_t)(SIG_LEN >> 8), (uint8_t)SIG_LEN};
+
+int aegis_prover_quote_eat(struct aegis_prover *p, const uint8_t challenge[AEGIS_CHALLENGE_LEN], uint8_t *out,
+			   size_t cap, size_t *len)
+{
+	size_t n = 0;
+	uint8_t *o = out;
+	int rc;
+
+	if (!READY(p)) return AEGIS_ERR_IDENTITY;
+	if (challenge == NULL || out == NULL || len == NULL) return AEGIS_ERR_ARGUMENT;
+	sweep(p);
+	if (cap < AEGIS_EAT_LEN(0)) return AEGIS_ERR_BUFFER;
+	rc = quote_eat(p, challenge, cap, &n);
+	if (rc != AEGIS_OK) return rc;
+	memcpy(o, EAT_OPEN, sizeof(EAT_OPEN)); o += sizeof(EAT_OPEN);
+	memcpy(o, p->work + EAT_PROT_AT, EAT_PROT_LEN); o += EAT_PROT_LEN;
+	memcpy(o, EAT_UNPROTECTED, sizeof(EAT_UNPROTECTED)); o += sizeof(EAT_UNPROTECTED);
+	memcpy(o, p->work + EAT_HEAD_LEN, n - EAT_HEAD_LEN); o += n - EAT_HEAD_LEN;
+	memcpy(o, EAT_SIG_HEAD, sizeof(EAT_SIG_HEAD)); o += sizeof(EAT_SIG_HEAD);
+	memcpy(o, p->sig, SIG_LEN);
+	*len = n + EAT_OUTER;
+	return AEGIS_OK;
+}
+#endif
+
 int aegis_prover_kem_init(struct aegis_prover *p, const uint8_t nonce[AEGIS_CHALLENGE_LEN], const uint8_t **ek,
 			  const uint8_t **sig)
 {
@@ -1060,6 +1274,26 @@ int aegis_prover_handle_line(struct aegis_prover *p, char *line, char *out, size
 		if (rc != AEGIS_OK) return reply_error(out, rc);
 		return reply_signed(out, "PQTOKEN ", evidence, len, p->sig);
 	}
+#if AEGIS_EAT_COSE
+	if (!strcmp(tok[0], "PQEAT") && n == 2) {
+		uint8_t ch[32];
+		size_t tl = 0;
+
+		if (get_hex(tok[1], ch, sizeof(ch)) != 32) return reply(out, "ERR bad-request");
+		rc = quote_eat(p, ch, (cap - 32u) / 2u, &tl); /* no more than the reply can carry */
+		if (rc != AEGIS_OK) return reply_error(out, rc);
+		/* the COSE_Sign1, from its parts: the protected header and the payload as they stand in the Sig_structure */
+		o = put_uint(put_str(out, "PQEAT "), (uint32_t)(tl + EAT_OUTER));
+		*o++ = ' ';
+		o = put_hex(o, EAT_OPEN, sizeof(EAT_OPEN));
+		o = put_hex(o, p->work + EAT_PROT_AT, EAT_PROT_LEN);
+		o = put_hex(o, EAT_UNPROTECTED, sizeof(EAT_UNPROTECTED));
+		o = put_hex(o, p->work + EAT_HEAD_LEN, tl - EAT_HEAD_LEN);
+		o = put_hex(o, EAT_SIG_HEAD, sizeof(EAT_SIG_HEAD));
+		o = put_hex(o, p->sig, SIG_LEN);
+		return (int)(o - out) + reply(o, " END");
+	}
+#endif
 	if (!strcmp(tok[0], "PQKEMINIT") && n == 2) {
 		uint8_t nonce[32];
 

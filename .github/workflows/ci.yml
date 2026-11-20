@@ -18,6 +18,10 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/pip install -q cryptography pytest requests pyyaml pillow pycryptodome tpm2-pytss
+          # the standalone evidence checker's libraries (tools/verify_evidence.py, docs/evidence-format.md); pycose
+          # 1.1.0 does not work with cbor2 6. Without them its tests would be skipped, so their presence is checked.
+          .venv/bin/pip install -q pycose==1.1.0 'cbor2<6'
+          .venv/bin/python -c "import pycose, cbor2; from cryptography.hazmat.primitives.asymmetric import mldsa"
 
       - name: Cache liboqs 0.16.0
         id: liboqs
@@ -52,6 +56,9 @@ jobs:
       - name: Fuzz the STM32H573 port of the SDK on PC stand-ins for TF-M (libFuzzer, ASan, UBSan; seeds first, 2 minutes)
         run: STM32=1 FUZZ_OUT=$RUNNER_TEMP/fuzz-stm32 tests/fuzz/run.sh 120 2 || { tail -n 60 $RUNNER_TEMP/fuzz-stm32/fuzz-*.log; exit 1; }
 
+      - name: Fuzz the Prover SDK core with its option for standard evidence, EAT in COSE_Sign1 (libFuzzer, ASan, UBSan; seeds first, 2 minutes)
+        run: EAT=1 FUZZ_OUT=$RUNNER_TEMP/fuzz-eat tests/fuzz/run.sh 120 2 || { tail -n 60 $RUNNER_TEMP/fuzz-eat/fuzz-*.log; exit 1; }
+
       - name: The ZynqMP OP-TEE port of the SDK on a stand-in for OP-TEE (gcc, ASan, UBSan)
         run: endpoints/zynqmp/optee/tests/run.sh
 
@@ -63,6 +70,12 @@ jobs:
 
       - name: Host regression (unit tests, red team, RTL simulation, ACVP)
         run: tools/regression.sh
+
+      - name: Standalone evidence checker on a pack the verifier exports (third-party libraries only; no skips)
+        run: |
+          .venv/bin/python -m unittest -v tests.host.test_evidence_format.Pack tests.host.test_sdk_eat > $RUNNER_TEMP/evidence.log 2>&1 || { cat $RUNNER_TEMP/evidence.log; exit 1; }
+          tail -n 4 $RUNNER_TEMP/evidence.log
+          if grep -q skipped $RUNNER_TEMP/evidence.log; then echo "a test of the standalone checker was skipped"; exit 1; fi
 
       - name: Enforcement ruleset (three network namespaces, real hook and ruleset)
         run: sudo tests/host/test_enforcement.sh

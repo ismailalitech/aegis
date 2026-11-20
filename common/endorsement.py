@@ -39,6 +39,22 @@ verifier refuses a body with a key it does not know, so a later version cannot a
 would silently ignore. The body is a flat claims set on purpose: an EAT (CBOR claims in a COSE_Sign1 signed with
 ML-DSA-65) can carry the same claims one for one; docs/enrolment.md has the intended mapping.
 
+The standard form of the same record (docs/evidence-format.md, "The endorsement"): format
+"aegis-endorsement-cose-v1", one COSE_Sign1 (common/cose.py: ML-DSA-65, kid = the endorser key's COSE Key
+Thumbprint) whose payload is an EAT with the body's claims, one for one:
+
+  1 iss = endorser            2 sub = device          6 iat = issued          4 exp = expires
+  8 cnf = {1: COSE_Key}       the device's public key itself (AKP, ML-DSA-65), here under the signature
+  10 eat_nonce = evidence.challenge                   265 eat_profile = the endorsement profile
+  256 ueid = instance_id, if it is a UEID (0x01 and 16, 24 or 32 bytes); otherwise private claim -82406
+  273 measurements = measured components (RFC 10013): name = type, SHA-256 digest, authorities = [signer_id]
+  private: -82400 profile, -82401 kind, -82402 serial, -82403 device_state, -82404 evidence.token_sha3_256,
+           -82405 notes, -82407 v, -82408 endorser_pk_sha256
+
+loads() reads either form and gives the same record shape with the same body, so every rule below applies to both;
+sign_cose() makes the standard one. A third party checks it with any COSE library and the endorser's public key
+(tools/verify_evidence.py).
+
 Standard library only, and ML-DSA through common/mldsa.py: the gateway's Python has no other packages.
 """
 import hashlib
@@ -51,6 +67,8 @@ import mldsa
 import wire
 
 FORMAT = "aegis-endorsement-v1"
+FORMAT_COSE = "aegis-endorsement-cose-v1"   # the same claims as an EAT in a COSE_Sign1
+P_ENDORSER_KEY = -82408                     # bstr .size 32: SHA-256 of the endorser's public key (the policy's name for it)
 LABEL = b"aegis-endorsement-v1"
 ENDORSER_LABEL = b"aegis-endorser-v1"       # the endorser's own record of its key (endorser.json)
 PK_ALG = "ML-DSA-65"
@@ -153,7 +171,121 @@ def sign(body, endorser_sk, device_pk):
 
 
 def dumps(record):
+    if record.get("format") == FORMAT_COSE:
+        return record["cose"]
     return (json.dumps(record, indent=1, sort_keys=True) + "\n").encode()
+
+
+# ---- the standard form: an EAT in a COSE_Sign1 -----------------------------------------------------------------------
+
+def _claims(body, device_pk):
+    import cose
+    import eat
+    c = {eat.ISS: body["endorser"], eat.SUB: body["device"], eat.IAT: body["issued"],
+         eat.CNF: {eat.CNF_COSE_KEY: cose.cose_key(device_pk)},
+         eat.NONCE: bytes.fromhex(body["evidence"]["challenge"]), eat.PROFILE: eat.ENDORSEMENT_PROFILE,
+         eat.MEASUREMENTS: eat.measurements_claim([{"measurement_type": m["type"],
+                                                    "measurement_value": m["measurement_value"],
+                                                    "signer_id": m.get("signer_id")} for m in body["measurements"]]),
+         eat.P_KIND: body["kind"], eat.P_DEVICE_STATE: body["device_state"],
+         eat.P_EVIDENCE_HASH: bytes.fromhex(body["evidence"]["token_sha3_256"]), eat.P_FORMAT: body["v"],
+         P_ENDORSER_KEY: bytes.fromhex(body["endorser_pk_sha256"])}
+    for key, claim in (("expires", eat.EXP), ("profile", eat.P_PLATFORM), ("serial", eat.P_SERIAL),
+                       ("notes", eat.P_NOTES)):
+        if key in body:
+            c[claim] = body[key]
+    if "instance_id" in body:
+        inst = bytes.fromhex(body["instance_id"])
+        c[eat.UEID if _is_ueid(inst) else eat.P_INSTANCE] = inst
+    return c
+
+
+def _is_ueid(b):
+    return len(b) in (17, 25, 33) and b[0] == 0x01      # RFC 9711 section 4.2.1: type RAND, 128, 192 or 256 bits
+
+
+def _body(c):
+    """The version 1 body and the device key that an endorsement's EAT claims say; Refused for any other claims."""
+    import cose
+    import eat
+    known = {eat.ISS, eat.SUB, eat.EXP, eat.IAT, eat.CNF, eat.NONCE, eat.UEID, eat.PROFILE, eat.MEASUREMENTS,
+             eat.P_PLATFORM, eat.P_KIND, eat.P_SERIAL, eat.P_DEVICE_STATE, eat.P_EVIDENCE_HASH, eat.P_NOTES,
+             eat.P_INSTANCE, eat.P_FORMAT, P_ENDORSER_KEY}
+    unknown = set(c) - known
+    if unknown:
+        raise Refused("the record has claims this verifier does not know: %s"
+                      % ", ".join(sorted(repr(k)[:16] for k in unknown)))
+    need = {eat.ISS, eat.SUB, eat.IAT, eat.CNF, eat.NONCE, eat.PROFILE, eat.MEASUREMENTS, eat.P_KIND,
+            eat.P_DEVICE_STATE, eat.P_EVIDENCE_HASH, eat.P_FORMAT, P_ENDORSER_KEY}
+    if need - set(c):
+        raise Refused("the record lacks claim %s" % ", ".join(str(k) for k in sorted(need - set(c))))
+    if c[eat.PROFILE] != eat.ENDORSEMENT_PROFILE:
+        raise Refused("eat_profile is not %s" % eat.ENDORSEMENT_PROFILE)
+    if eat.UEID in c and eat.P_INSTANCE in c:
+        raise Refused("two instance IDs")
+    cnf = c[eat.CNF]
+    if not (isinstance(cnf, dict) and set(cnf) == {eat.CNF_COSE_KEY}):
+        raise Refused("cnf is not {COSE_Key}")
+    device_pk = cose.key_from_cose(cnf[eat.CNF_COSE_KEY])
+    for k in (eat.NONCE, eat.P_EVIDENCE_HASH, P_ENDORSER_KEY):
+        if not (isinstance(c[k], bytes) and len(c[k]) == 32):
+            raise Refused("claim %d is not 32 bytes" % k)
+    inst = c.get(eat.UEID, c.get(eat.P_INSTANCE))
+    if inst is not None and not (isinstance(inst, bytes) and 0 < len(inst) <= 64
+                                 and (eat.UEID in c) == _is_ueid(inst)):
+        raise Refused("the instance ID is not a byte string in the claim for its form")
+    body = {"v": c[eat.P_FORMAT], "type": "endorsement", "device": c[eat.SUB], "kind": c[eat.P_KIND],
+            "device_pk_alg": PK_ALG, "device_pk_sha256": pk_sha256(device_pk),
+            "measurements": [dict({"type": m["measurement_type"], "measurement_value": m["measurement_value"].hex()},
+                                  **({"signer_id": m["signer_id"].hex()} if "signer_id" in m else {}))
+                             for m in eat.components(c[eat.MEASUREMENTS])],
+            "evidence": {"challenge": c[eat.NONCE].hex(), "token_sha3_256": c[eat.P_EVIDENCE_HASH].hex()},
+            "device_state": c[eat.P_DEVICE_STATE], "endorser": c[eat.ISS],
+            "endorser_pk_sha256": c[P_ENDORSER_KEY].hex(), "issued": c[eat.IAT]}
+    for key, claim in (("expires", eat.EXP), ("profile", eat.P_PLATFORM), ("serial", eat.P_SERIAL),
+                       ("notes", eat.P_NOTES)):
+        if claim in c:
+            body[key] = c[claim]
+    if inst is not None:
+        body["instance_id"] = inst.hex()
+    if any(isinstance(v, bool) for v in body.values()):
+        raise Refused("a claim is a boolean")
+    return check_body(body), device_pk
+
+
+def _open_cose(data, endorser_pk=None):
+    """The record of a COSE endorsement; with endorser_pk its signature and kid are checked first, without it nothing
+    in the result is authenticated. Refused only."""
+    import cose
+    import eat
+    try:
+        s = cose.verify1(data, endorser_pk) if endorser_pk is not None else cose.parse(data)
+        body, device_pk = _body(eat.claims_map(s.payload, "endorsement claims"))
+    except Refused:
+        raise
+    except Exception as e:  # noqa: BLE001 - cose.Refused, eat.Refused, and whatever hostile claims provoke
+        raise Refused("%s" % e if isinstance(e, ValueError) else "the record is not usable: %s: %s"
+                      % (type(e).__name__, e)) from None
+    return {"format": FORMAT_COSE, "body": body, "device_pk": device_pk.hex(), "cose": bytes(data),
+            "kid": s.kid.hex()}
+
+
+def sign_cose(body, endorser_sk, endorser_pk, device_pk):
+    """The record for body in the standard form, as bytes: an EAT in a COSE_Sign1 by the endorser's key. The caller
+    checks it with check(loads(...)) before it lets anyone trust it."""
+    import cbor
+    import cose
+    check_body(body)
+    if pk_sha256(device_pk) != body["device_pk_sha256"]:
+        raise Refused("the body names another device key")
+    if pk_sha256(endorser_pk) != body["endorser_pk_sha256"]:
+        raise Refused("the body names another endorser key")
+    if any(len(m["measurement_value"]) != 64 for m in body["measurements"]):
+        raise Refused("the standard form carries SHA-256 measurements only")
+    data = cose.sign1(endorser_sk, endorser_pk, cbor.dumps(_claims(body, device_pk), sort=True))
+    if _open_cose(data)["body"] != body:
+        raise Refused("the body does not survive the standard form")    # a claim the EAT cannot carry as it is
+    return data
 
 
 def _no_duplicates(pairs):
@@ -175,6 +307,8 @@ def loads(data):
     not checked here."""
     if len(data) > MAX_RECORD:
         raise Refused("the record is larger than %d bytes" % MAX_RECORD)
+    if data[:1] == b"\xd2":         # CBOR tag 18: the standard form (a JSON record starts with "{")
+        return _open_cose(data)
     try:
         rec = json.loads(data.decode("utf-8"), object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
     except (ValueError, RecursionError) as e:
@@ -208,7 +342,10 @@ def load(path):
 
 def record_sha256(record):
     """Names one record: SHA-256 over the signed body and the signature (signatures are randomised, so two records for
-    the same body have different names)."""
+    the same body have different names). For the standard form: SHA-256 of the COSE_Sign1 itself, which has one
+    encoding."""
+    if record.get("format") == FORMAT_COSE:
+        return hashlib.sha256(record["cose"]).hexdigest()
     return wire.digest({"body": record["body"], "sig": record["sig"]})
 
 
@@ -248,20 +385,28 @@ def check(record, trust, device, kind, profile, device_pk, now):
     trust is trusted()'s result; device, kind and profile are the policy entry's (profile None for a kind without
     one); now is this verifier's Unix time. In order: an endorser the policy trusts and has not revoked signed exactly
     this body; the body names this device, this family and this key; it has not expired."""
-    body = check_body(record.get("body"))
+    cose_form = record.get("format") == FORMAT_COSE
+    # the standard form: the body is read again from the signed bytes, whatever the record's "body" says
+    body = _open_cose(record.get("cose"))["body"] if cose_form else check_body(record.get("body"))
     who = trust.get(body["endorser_pk_sha256"])
     if who is None:
         raise Refused("signed by a key that is not a trusted endorser of this policy (%s..., calls itself %r)"
                       % (body["endorser_pk_sha256"][:16], body["endorser"][:40]))
     if who["revoked"]:
         raise Refused("endorser %s is revoked in this policy" % who["name"])
-    try:
-        sig = bytes.fromhex(record.get("sig", ""))
-    except (TypeError, ValueError):
-        raise Refused("sig is not hex") from None
-    if not mldsa.verify(who["pk"], LABEL, wire.canonical(body), sig):
-        raise Refused("the signature of endorser %s does not verify (record altered, or not signed by that key)"
-                      % who["name"])
+    if cose_form:
+        try:
+            _open_cose(record["cose"], who["pk"])   # alg, kid and the ML-DSA-65 signature over the Sig_structure
+        except Refused as e:
+            raise Refused("the record of endorser %s does not verify (%s)" % (who["name"], e)) from None
+    else:
+        try:
+            sig = bytes.fromhex(record.get("sig", ""))
+        except (TypeError, ValueError):
+            raise Refused("sig is not hex") from None
+        if not mldsa.verify(who["pk"], LABEL, wire.canonical(body), sig):
+            raise Refused("the signature of endorser %s does not verify (record altered, or not signed by that key)"
+                          % who["name"])
     if body["device"] != device:
         raise Refused("the record endorses device %r, not %r" % (body["device"][:40], device))
     if body["kind"] != kind or body.get("profile") != profile:

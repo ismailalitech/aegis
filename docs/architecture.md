@@ -127,8 +127,10 @@ exchange may continue live in the context, which `aegis_prover_init` wipes at ev
 **What it does not change.** The protocol, the limits of the transcript above (an image that holds the key and
 lies; a key that depends on the measured code is the remedy, and belongs in the platform's identity functions),
 and the trust each endpoint claims. Endorsed enrolment needed nothing from the core (it uses `PQKEY` and `PQCHAL`;
-[enrolment.md](enrolment.md)); an endorsement carried by the device and an EAT/COSE encoding are later work, and
-`sdk/README.md` names the functions they attach to.
+[enrolment.md](enrolment.md)); an endorsement carried by the device is later work, and `sdk/README.md` names the
+functions it attaches to. Evidence as an EAT in a COSE_Sign1 is an option of the core that is off by default
+([evidence-format.md](evidence-format.md), which also defines what T1 hashes for it, the verifier's signed
+attestation result and the evidence pack).
 
 What was built from this source (after the review of 20 November 2026; the builds before its fixes were `-sdk`,
 SPE b876213a, and RW612 0.3.1, SPE b48d2ecf):

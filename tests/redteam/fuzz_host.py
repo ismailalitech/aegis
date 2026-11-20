@@ -19,6 +19,16 @@
      device, family, key or an expiry in the past, another key pinned, the endorser's own record for this device and
      key that is not the one the entry pins with endorsement_sha256, random JSON) never makes a key trusted:
      device_key() raises endorsement.Refused and nothing else, attest() refuses without contacting the endpoint.
+  6. standard evidence (policy "evidence_format": "eat-cose-v1", docs/evidence-format.md): EAT, EAR and the
+     endorsement as COSE_Sign1 objects signed with ML-DSA-65. Bytes that are not exactly a signed object (mutated,
+     truncated, extended, random) are never accepted by the decoders (common/cose.py, common/eat.py,
+     common/endorsement.py), which raise their Refused and nothing else. An object whose signature is valid but
+     whose header is not the profile's (another algorithm, a header outside the signature, an unknown or critical
+     parameter, another kid or typ, a second encoding), or whose claims are not the profile's or not this cycle's
+     (a claim removed, replaced or added, another measurement, random CBOR), is never admitted, and attest() never
+     raises. A COSE record that is not the one the entry pins never makes a key trusted. The standalone checker
+     (tools/verify_evidence.py; skipped without pycose, cbor2 and ML-DSA in cryptography) never reports any of
+     these as verified, and never verifies evidence the verifier's own decoder refuses.
 
   fuzz_host.py [iterations]     prints a JSON summary, exit 0 only if no property broke
 """
@@ -498,8 +508,283 @@ endorsement_result = {"records_that_are_not_the_endorsement": end_tried, "kinds"
 if end_admitted or end_contacted:
     broken.append("endorsement: an endpoint without a valid endorsement was admitted or contacted")
 
+# ---- 6. standard evidence: EAT, EAR and the endorsement in COSE_Sign1 with ML-DSA-65 ----
+import hashlib  # noqa: E402
+
+import cose  # noqa: E402
+import eat  # noqa: E402
+
+sys.path.insert(0, os.path.abspath(os.path.join(ROOT, "tools")))
+try:
+    import verify_evidence as checker       # third-party libraries only; a second reading of the document
+except Exception:  # noqa: BLE001
+    checker = None
+
+std_dir = tempfile.mkdtemp()
+with open(os.path.join(std_dir, "dev.pub"), "w") as f:
+    f.write(pq_pk.hex())
+v_pk, v_sk = mldsa.keypair()            # the verifier that signs results
+STD_MEAS = [("SPE", tf.GOOD_S), ("NSPE", tf.GOOD_NS)]
+std_ep = {"name": "dev", "kind": "aegis-tee", "host": "127.0.0.1", "pq_pub_file": "dev.pub",
+          "profile": fleet.TEE_PROFILE, "evidence_format": "eat-cose-v1",
+          "allowed": [{"type": n, "measurement_value": d} for n, d in STD_MEAS]}
+
+
+def std_claims(ch):
+    return {10: ch, 256: b"\x01" + hashlib.sha256(pq_pk).digest(), 265: eat.EVIDENCE_PROFILE, 275: 1,
+            -82400: fleet.TEE_PROFILE, 273: [eat.measured_component(n, bytes.fromhex(d)) for n, d in STD_MEAS]}
+
+
+def std_sign(sk, protected, payload, unprotected=None, tag=18):
+    sig = mldsa.sign_raw(sk, cbor.dumps(["Signature1", protected, b"", payload]))
+    body = [protected, unprotected or {}, payload, sig]
+    return cbor.dumps(cbor.Tag(tag, body) if tag is not None else body)
+
+
+def hostile_header(pk, sk, payload):
+    """A valid signature over a header that is not the profile's, or around it."""
+    hdr = {1: -49, 4: cose.key_thumbprint(pk), 16: cose.TYP_EAT_CWT}
+    kw = {}
+    which = R.randrange(11)
+    if which == 0:
+        hdr[1] = R.choice([-48, -50, -7, -8, -35, -257, 0, "ML-DSA-65", None])
+    elif which == 1:
+        del hdr[R.choice([1, 4, 16])]
+    elif which == 2:
+        hdr[R.choice([2, 3, 5, 6, 15, 33, -1, "x"])] = rand_cbor(2)
+    elif which == 3:
+        hdr[4] = R.choice([cose.key_thumbprint(r_pk), hdr[4][:16], hdr[4] + b"\x00", hdr[4].hex(), b""])
+    elif which == 4:
+        hdr[16] = R.choice(["application/cwt", "application/eat+cwt ", 61, "", "application/eat+jwt"])
+    elif which == 5:
+        kw["unprotected"] = {R.choice([1, 4, 16, 33, "x"]): rand_cbor(2)}
+    elif which == 6:
+        kw["tag"] = R.choice([None, 16, 17, 61, 98, 0])
+    elif which == 7:
+        return std_sign(sk, cbor.dumps(dict(reversed(sorted(hdr.items())))), payload)    # another order of the map
+    elif which == 8:
+        good = std_sign(sk, cbor.dumps(hdr, sort=True), payload)
+        return good[:2] + b"\x59\x00\x3c" + good[4:]                                  # a longer head, the same items
+    elif which == 9:
+        return std_sign(sk, cbor.dumps(hdr, sort=True), payload) + bytes(R.randrange(256) for _ in range(R.randrange(1, 4)))
+    else:
+        return std_sign(r_sk, cbor.dumps(hdr, sort=True), payload)                     # this kid, another key's signature
+    return std_sign(sk, cbor.dumps(hdr, sort=True), payload, **kw)
+
+
+def hostile_claims(c):
+    """Claims that are not the profile's, or not what the policy allows, from good ones. None: the edit changed
+    nothing."""
+    before = cbor.dumps(c, sort=True)
+    which = R.randrange(8)
+    if which == 0:
+        del c[R.choice(list(c))]
+    elif which == 1:
+        c[R.choice(list(c))] = rand_cbor(1)
+    elif which == 2:
+        k = R.choice([R.randrange(-90000, 3000), "x", 266, 1, 2, 4, 6, 8, -82401, -82408, 1000])
+        if k == 263:
+            return None                         # dbgstat is a claim of the profile
+        c[k] = rand_cbor(1)
+    elif which == 3:
+        n, d = R.choice(STD_MEAS)
+        other = bytearray(bytes.fromhex(d))
+        other[R.randrange(32)] ^= 1 << R.randrange(8)
+        c[273] = [eat.measured_component(n, bytes(other))] + [m for m in c[273] if cbor.loads(m[1])[1][0] != n]
+    elif which == 4:
+        c[273] = c[273] + [eat.measured_component(R.choice(["EXTRA", "SPE", "BL2"]), bytes(R.randrange(256) for _ in range(32)))]
+    elif which == 5:
+        c[273] = R.choice([[], c[273][:1] * 2, [[294, c[273][0][1]]], [[295, cbor.dumps(rand_cbor(1))]],
+                           [[295, cbor.dumps({2: [1, bytes(32)], 1: ["SPE"]})]], [c[273][0] + [1]], c[273][0]])
+    elif which == 6:
+        c[10] = bytes(R.randrange(256) for _ in range(R.choice([32, 32, 31, 33, 0])))
+    else:
+        return cbor.dumps(rand_cbor())
+    after = cbor.dumps(c, sort=True)
+    return None if after == before else after
+
+
+class Responder(threading.Thread):
+    """Answers one PQEAT with what make(challenge) returns."""
+
+    def __init__(self, make):
+        super().__init__(daemon=True)
+        self.make = make
+        self.srv = socket.socket()
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(2)
+        self.port = self.srv.getsockname()[1]
+        self.start()
+
+    def run(self):
+        c, _ = self.srv.accept()
+        try:
+            line = c.recv(4096).split()
+            ev = self.make(bytes.fromhex(line[1].decode()))
+            c.sendall(b"PQEAT %d %s END\r\n" % (len(ev), ev.hex().encode()))
+        finally:
+            c.close()
+            self.srv.close()
+
+
+std = {"decoder_objects": 0, "decoder_accepted": 0, "decoder_raised": 0, "attests": 0, "admitted": 0, "raised": 0,
+       "control_admitted": 0, "records": 0, "record_trusted": 0, "record_raised": 0,
+       "checker": "tools/verify_evidence.py" if checker else "skipped (needs pycose, cbor2, ML-DSA in cryptography)",
+       "checker_objects": 0, "checker_verified": 0, "checker_verified_what_the_verifier_refuses": 0}
+
+
+def std_broken(text):
+    if len(broken) < 20:
+        broken.append("standard evidence: " + text)
+
+
+def checker_says(fn, data, pk):
+    """True if the standalone checker reports the object as verified (its main() prints every exception as 'not
+    verified')."""
+    if checker is None:
+        return None
+    std["checker_objects"] += 1
+    try:
+        fn(data, pk)
+    except Exception:  # noqa: BLE001
+        return False
+    std["checker_verified"] += 1
+    return True
+
+
+# the control: the good objects are accepted by everything, so the refusals below are not refusals of everything
+good_ch = bytes(R.randrange(256) for _ in range(32))
+good_ev = cose.sign1(pq_sk, pq_pk, cbor.dumps(std_claims(good_ch), sort=True))
+good_ear = cose.sign1(v_sk, v_pk, eat.ear_payload(
+    {"endpoint": "dev", "kind": "aegis-tee", "admitted": True, "reasons": [], "trust": "trustzone", "enrolment": "endorsed",
+     "device_pk_sha256": hashlib.sha256(pq_pk).hexdigest(),
+     "endorsement": {"endorser_name": "bench", "record_sha256": "00" * 32, "device_pk_sha256": "11" * 32,
+                     "device_state": "development", "issued": 5}},
+    {"stage": "appraised", "signature": True, "components_ok": True, "format": "eat-cose-v1", "nonce": good_ch,
+     "ueid": b"\x01" + hashlib.sha256(pq_pk).digest(), "platform": fleet.TEE_PROFILE,
+     "components": [{"measurement_type": n, "measurement_value": d} for n, d in STD_MEAS]},
+    eat.policy_id(b"{}"), 1000, 2000))
+good_cose = endorsement.sign_cose(good_body, e_sk, e_pk, pq_pk)
+if eat.read_evidence(cose.verify1(good_ev, pq_pk).payload, pq_pk)["nonce"] != good_ch \
+        or eat.read_ear(good_ear, v_pk)["status"] != "affirming" or endorsement.loads(good_cose)["body"] != good_body:
+    std_broken("a good object was not read as signed")
+if checker and not (checker_says(checker.check_evidence, good_ev, pq_pk) and checker_says(checker.check_result, good_ear, v_pk)
+                    and checker_says(checker.check_endorsement, good_cose, e_pk)):
+    std_broken("the standalone checker does not verify a good object")
+std["checker_objects"] = std["checker_verified"] = 0
+for _ in range(3):
+    h = Responder(lambda ch: cose.sign1(pq_sk, pq_pk, cbor.dumps(std_claims(ch), sort=True)))
+    std["control_admitted"] += fleet.attest(dict(std_ep, port=h.port), None, std_dir, 2)["admitted"]
+if std["control_admitted"] != 3:
+    std_broken("the control (good evidence) was not admitted")
+
+# 6a. bytes that are not exactly the signed object
+for i in range(N):
+    what, good, pk = (("evidence", good_ev, pq_pk), ("result", good_ear, v_pk), ("endorsement", good_cose, e_pk))[i % 3]
+    data = mutate(good)
+    if data == good:
+        continue
+    std["decoder_objects"] += 1
+    try:
+        if what == "evidence":
+            eat.read_evidence(cose.verify1(data, pk).payload, pk)
+        elif what == "result":
+            eat.read_ear(data, pk)
+        else:
+            endorsement.check(endorsement.loads(data), endorsement.trusted(trusted_list, end_dir), "dev", "aegis-pq",
+                              None, pq_pk, time.time())
+        std["decoder_accepted"] += 1
+        std_broken("a mutated %s was accepted" % what)
+    except (cose.Refused, eat.Refused, endorsement.Refused):
+        pass
+    except Exception as e:  # noqa: BLE001
+        std["decoder_raised"] += 1
+        std_broken("the %s decoder raised %r" % (what, e))
+    fn = checker and {"evidence": checker.check_evidence, "result": checker.check_result,
+                      "endorsement": checker.check_endorsement}[what]
+    if checker_says(fn, data, pk):
+        std_broken("the standalone checker verified a mutated %s" % what)
+
+# 6b. valid signatures over a header or claims that are not the profile's or not this cycle's: the verifier's loop
+for i in range(min(N, 600)):
+    made = {}
+
+    def make(ch, i=i, made=made):
+        if i % 2:
+            data = hostile_header(pq_pk, pq_sk, cbor.dumps(std_claims(ch), sort=True))
+        else:
+            payload = None
+            while payload is None:
+                payload = hostile_claims(std_claims(ch))
+            data = cose.sign1(pq_sk, pq_pk, payload)
+        made["data"] = data
+        return data
+    h = Responder(make)
+    std["attests"] += 1
+    try:
+        v = fleet.attest(dict(std_ep, port=h.port), None, std_dir, 2)
+        if v["admitted"]:
+            std["admitted"] += 1
+            std_broken("hostile %s admitted: %s..." % ("header" if i % 2 else "claims", made.get("data", b"").hex()[:160]))
+    except Exception as e:  # noqa: BLE001
+        std["raised"] += 1
+        std_broken("attest() raised %r" % (e,))
+    data = made.get("data")
+    if data is not None and checker_says(checker and checker.check_evidence, data, pq_pk):
+        # the checker has no policy and no challenge; it must still not verify what the verifier's decoder refuses
+        try:
+            eat.read_evidence(cose.verify1(data, pq_pk).payload, pq_pk)
+        except (cose.Refused, eat.Refused) as e:
+            std["checker_verified_what_the_verifier_refuses"] += 1
+            std_broken("the standalone checker verified evidence the verifier refuses (%s): %s..." % (e, data.hex()[:160]))
+
+# 6c. a COSE record that is not the pinned one: other bytes, the trusted endorser's signature over other claims, an
+# untrusted endorser's over these
+cose_ep = dict(end_ep, endorsement_sha256=hashlib.sha256(good_cose).hexdigest())
+with open(os.path.join(end_dir, "dev.pub"), "w") as f:
+    f.write(pq_pk.hex())
+with open(rec_file, "wb") as f:
+    f.write(good_cose)
+if fleet.device_key(cose_ep, end_dir, trusted_list)[1]["record_sha256"] != cose_ep["endorsement_sha256"]:
+    std_broken("the good COSE record was not accepted")
+good_claims = cbor.loads(cose.parse(good_cose).payload)
+for i in range(min(N, 900)):
+    kind = i % 3
+    if kind == 0:
+        data = mutate(good_cose)
+    else:
+        c = dict(good_claims)
+        which = R.randrange(4)
+        if which == 0:
+            del c[R.choice(list(c))]
+        elif which == 1:
+            c[R.choice(list(c))] = rand_cbor(1)
+        elif which == 2:
+            c[R.choice([R.randrange(-90000, 3000), "x", 263, 266, 275, 1000])] = rand_cbor(1)
+        signer = (e_sk, e_pk) if kind == 1 else (r_sk, r_pk)
+        data = hostile_header(signer[1], signer[0], cbor.dumps(c, sort=True)) if R.random() < 0.3 else \
+            cose.sign1(signer[0], signer[1], cbor.dumps(c, sort=True))
+    if data == good_cose:
+        continue
+    with open(rec_file, "wb") as f:
+        f.write(data)
+    std["records"] += 1
+    try:
+        fleet.device_key(cose_ep, end_dir, trusted_list)
+        std["record_trusted"] += 1
+        std_broken("a COSE record that is not the pinned one made a key trusted")
+    except endorsement.Refused:
+        pass
+    except Exception as e:  # noqa: BLE001
+        std["record_raised"] += 1
+        std_broken("device_key() raised %r on a COSE record" % (e,))
+    if kind == 0 and checker_says(checker and checker.check_endorsement, data, e_pk):
+        std_broken("the standalone checker verified a mutated endorsement")
+    if kind == 2 and checker_says(checker and checker.check_endorsement, data, e_pk):
+        std_broken("the standalone checker verified an endorsement signed by another key")
+
 print(json.dumps({"token_parser": token_result, "aegisd_service": service_result,
                   "hostile_endpoint": endpoint_result, "one_transcript": transcript_result,
-                  "endorsed_enrolment": endorsement_result, "broken": broken},
+                  "endorsed_enrolment": endorsement_result, "standard_evidence": std, "broken": broken},
                  indent=1))
 sys.exit(1 if broken else 0)

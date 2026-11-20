@@ -6,6 +6,9 @@
 #                                                   seeds/); default 600 s, 8
 #   STM32=1 tests/fuzz/run.sh [seconds] [workers]   the STM32H573 port of it, the TF-M partition, on PC stand-ins
 #                                                   (stm32/: the PSA messages, the session clock's hardware)
+#   EAT=1 tests/fuzz/run.sh [seconds] [workers]     the core with its option for standard evidence
+#                                                   (-DAEGIS_EAT_COSE=1, docs/evidence-format.md): the same harness
+#                                                   and corpus, PQEAT and aegis_prover_quote_eat reachable
 # Needs clang (with libFuzzer) and the mldsa-native / mlkem-native v2.0.0 trees (MLDSA_NATIVE_DIR, MLKEM_NATIVE_DIR).
 # Work files go to $FUZZ_OUT (default: a temporary directory); a crash is saved there as crash-<hash>.
 set -eu
@@ -22,7 +25,9 @@ WORKERS=${2:-8}
 mkdir -p "$OUT/corpus"
 SAN="-fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
 INC="-I$SDK/include -I$SDK/src -I$SDK/ports/host -I$SDK/crypto/mldsa -I$MLDSA -I$SDK/crypto/mlkem -I$MLKEM"
-cc() { clang -g -D_GNU_SOURCE -DMLD_CONFIG_FILE='"aegis_mldsa_config.h"' $INC "$@"; }
+OPT=
+[ "${EAT:-0}" = 1 ] && OPT=-DAEGIS_EAT_COSE=1
+cc() { clang -g -D_GNU_SOURCE $OPT -DMLD_CONFIG_FILE='"aegis_mldsa_config.h"' $INC "$@"; }
 # the code under test (the core is compiled into the harness) with the sanitizers and coverage; the crypto libraries
 # with the sanitizers only (faster)
 cc -O1 $SAN -c "$SDK/src/aegis_sha256.c" -o "$OUT/sha256.o"
