@@ -1481,14 +1481,16 @@ def policy_line(info):
 
 # ---- the audit log (docs/audit-and-policy.md, common/audit.py) --------------------------------------------------------
 
-AUDIT_SETTINGS = {"checkpoint_s": 3600, "min_interval_s": 0, "segment_bytes": 1 << 20}
+# min_interval_s: a flapping endpoint makes at most one batch (about 3.5 kB, most of it the signature) per 300 s, about
+# 1 MB a day, not one per cycle (about 10 MB a day at 30 s). max_segments 0: every segment is kept (docs/audit-and-policy.md)
+AUDIT_SETTINGS = {"checkpoint_s": 3600, "min_interval_s": 300, "segment_bytes": 1 << 20, "max_segments": 0}
 RENEWAL_WINDOW_S = 300      # credential_step issues a new session when the stored one has less than this left
 
 
 def audit_settings(policy):
     """None: no audit log, the default; a policy without the key runs as before (no key opened, nothing written).
     The policy asks with "audit_log": true at its top level, or with {"checkpoint_s", "min_interval_s",
-    "segment_bytes"} to set what true leaves at AUDIT_SETTINGS. ValueError for any other value: someone meant to
+    "segment_bytes", "max_segments"} to set what true leaves at AUDIT_SETTINGS. ValueError for any other value: someone meant to
     have a log, and must not find later that none was kept."""
     v = policy.get("audit_log")
     if v is None or v is False:
@@ -1497,10 +1499,10 @@ def audit_settings(policy):
         return dict(AUDIT_SETTINGS)
     if (isinstance(v, dict) and not set(v) - set(AUDIT_SETTINGS)
             and all(type(x) is int and 0 <= x < 1 << 31 for x in v.values())
-            and v.get("segment_bytes", 1 << 20) >= 1 << 16):
+            and v.get("segment_bytes", 1 << 20) >= 1 << 16 and v.get("max_segments", 0) != 1):
         return dict(AUDIT_SETTINGS, **v)
-    raise ValueError('"audit_log" is neither true nor {checkpoint_s, min_interval_s, segment_bytes (65536 or more)} '
-                     "in whole seconds and bytes")
+    raise ValueError('"audit_log" is neither true nor {checkpoint_s, min_interval_s, segment_bytes (65536 or more), '
+                     "max_segments (0: keep all, or 2 or more)} in whole seconds, bytes and files")
 
 
 def _digest(v, n=32):
@@ -1699,7 +1701,7 @@ def _hand_over(old, new):
     were carried over and how many did not fit in memory)."""
     import audit
     old.flush(final=True)
-    held = [e for e in old.log.pending if e[audit.E_EVENT] != "log-start"]     # new begins its own log if need be
+    held = [e for e in old.log.pending if e[audit.E_EVENT] not in ("log-start", "pruned")]     # new plans its own
     lost = old.log.dropped
     if not held and not lost:
         return
@@ -2051,7 +2053,9 @@ def main(argv=None):
                 settings = audit_settings(policy)
                 print("audit log: %s" % ("off" if settings is None else "in %s, a batch at least every %d s%s%s" % (
                     os.path.join(state_dir, "audit"), settings["checkpoint_s"],
-                    ", at most every %d s" % settings["min_interval_s"] if settings["min_interval_s"] else "",
+                    (", at most every %d s" % settings["min_interval_s"] if settings["min_interval_s"] else "") +
+                    (", at most %d segments of %d bytes" % (settings["max_segments"], settings["segment_bytes"])
+                     if settings["max_segments"] else ", every segment kept"),
                     "" if verifier_pk_sha256(state_dir) else "; NO verifier identity to sign it with: none is kept")))
                 bad += settings is not None and not verifier_pk_sha256(state_dir)
             except ValueError as e:

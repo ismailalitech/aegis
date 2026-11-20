@@ -106,28 +106,42 @@ the other way round:
 | Situation | Written |
 |---|---|
 | a cycle in which no decision, session or policy changed | **nothing**: no byte, no signature, the identity key is not opened |
-| a cycle in which something changed | one batch: 3.5 kB plus the entries, one `write` and one `fsync`, one ML-DSA-65 signature |
+| a cycle in which something changed | one batch: 3.5 kB plus the entries, one `write` and one `fsync`, one ML-DSA-65 signature; at most one per `min_interval_s` (300 s), later changes wait for it |
 | nothing changed for `checkpoint_s` (default 3600 s) | one empty batch of about 3.5 kB, so that the log says "still here, nothing to report" |
 | the loop starts | one batch with `start`, `policy` and every endpoint's decision: 6.1 kB for the bench's four endpoints |
 | a one-hour session is renewed | `expiry` and `issue` in one batch: 3.7 kB per provisioned endpoint and hour |
 
 For the bench (three provisioned endpoints, 30 s cycle) that is about 0.3 MB a day, where results for the same
-fleet write about 90 MB. The worst an endpoint can provoke by changing its answer every cycle is one batch per
-cycle, however many endpoints do it; `"min_interval_s"` bounds that too: entries then wait in memory until that long
-after the last batch (they keep their own times; they are lost if the process dies meanwhile, which is why the
-default is 0).
+fleet write about 90 MB. An endpoint that changes its answer every cycle would cost one batch per cycle, however
+many endpoints do it: at a 30 s cycle about 2,900 batches, **about 10 MB a day**. `"min_interval_s"` (default 300)
+bounds that: entries made after a batch wait in memory until 300 s after it, then go out together, so the worst is
+288 batches a day, **about 1 to 1.5 MB a day** (3.5 kB each plus the entries), and a steady fleet costs the 24
+checkpoints, about 85 kB a day. The first batch of a run, `stop`, `once` and the enrolment commands do not wait.
+Entries keep their own times; those waiting are lost if the process dies meanwhile (limit 4). `"min_interval_s": 0`
+writes every change in the cycle it happens.
+
+Segments are kept for ever by default: at 1 to 1.5 MB a day a flapping fleet fills about 0.5 GB a year.
+`"max_segments": N` (0: keep all, the default; otherwise 2 or more) bounds the directory to about N files of
+`segment_bytes`: a batch that finds more deletes the oldest down to N (never the one being written), and carries a
+signed **`pruned`** entry naming the segments, the log, the last batch they held and its hash, so that what an
+anchor from before covered is accounted for, not silently gone. The files are deleted only after that batch is on
+disk. The log then begins at a later batch: read it with `--allow-pruned`. Copy segments away first if they may be
+needed.
 
     "audit_log": true
-    "audit_log": { "checkpoint_s": 3600, "min_interval_s": 0, "segment_bytes": 1048576 }
+    "audit_log": { "checkpoint_s": 3600, "min_interval_s": 300, "segment_bytes": 1048576, "max_segments": 0 }
 
 Only the JSON value `true`, or an object with those keys (whole numbers; `segment_bytes` 65536 or more;
-`checkpoint_s` 0 for no empty batches and no promise), turns the log on (`fleet.py`, `audit_settings`). Any other
+`max_segments` 0 or 2 or more; `checkpoint_s` 0 for no empty batches and no promise), turns the log on
+(`fleet.py`, `audit_settings`). Any other
 value is an error said once at error priority, and by `fleet.py check` with exit status 1: someone meant to have a
 log and must not find out later that none was kept. The same if the verifier has no identity to sign with.
 
 The verdict and its enforcement never wait for the log. If a batch cannot be written (no key, a full disk) the loop
 goes on, says so once at error priority, and keeps up to 512 entries in memory for the next cycle; what did not fit
-is counted and the count becomes a `gap` entry.
+is counted and the count becomes a `gap` entry. If the policy changes the log's settings while it cannot be
+written, what the old settings' writer held goes to the new one, followed by a `gap` entry that says how many
+entries were carried over and how many did not fit.
 
 ### What a reader can tell
 
@@ -142,6 +156,8 @@ before it (number, `prev`, `first`); nothing follows the last record.
 | the beginning removed (old segments deleted) | the log does not begin at batch 1 | any reader, unless `--allow-pruned` |
 | **the end cut off** between two batches | **the rest is a whole, signed, shorter log** | a reader with an **anchor** or a **head** from after the cut, or reading after the last batch's **`due`** |
 | the whole directory deleted | the verifier begins a new log (another `log` id) | a reader with an anchor; the gap in time |
+
+**Without anchors kept off the gateway (or the journal's `--head` lines), cutting the log off at a record boundary is undetectable**: the writer and the reader check only that the last record is a whole, signed batch, and the batches written by `once`, the enrolment commands and `stop` carry no `due` time, so a log that ends after one of them is never stale.
 
 And with the verifier's key (root on the gateway, limitation 3 of the threat model):
 
@@ -178,7 +194,7 @@ standing one unchanged and drop one that has lapsed.
 **Rotation.** A new segment is begun when the current one would pass `segment_bytes` (1 MiB: three to four days on
 the bench). The chain runs through the segments, so a segment that was copied away and checked can be deleted: the
 remaining log then begins at a later batch, which the checker accepts only with `--allow-pruned`, and says so. The
-verifier itself never deletes a segment.
+verifier itself deletes segments only with `"max_segments"`, and then says so in the log (`pruned`, above).
 
 ### The writer
 
@@ -192,7 +208,10 @@ verifier itself never deletes a segment.
   the directory, onto the log as it is on disk then (`test_two_writers_make_one_chain`).
 - **Another identity.** A verifier whose identity was made again (`aegisd.py init`) cannot continue the old log. It
   begins a new one, in a new segment, whose `log-start` names the old log's last batch and its hash. A reader given
-  both keys checks both and the join; given only the new log it says that what came before is missing.
+  both keys checks both and the join; given only the new log it says that what came before is missing. If the
+  identity is made again **while the loop runs**, the loop still holds the old public key and would sign with the
+  new secret key: every batch is checked against the log's key before it is appended, and one that does not verify
+  is not written (`KeyMismatch`, said once at error priority; the entries wait in memory). Restart the loop.
 - **Damage.** The writer checks the record it continues from (the last one), not the whole log. If that is not a
   batch record signed by its key, it leaves the segment alone and begins a new log that says so
   (`damaged_segment`). Damage further back is found by a reader.
@@ -339,7 +358,7 @@ from backup, an operator's mistake, a file-write flaw in something that runs bes
 | an older signed policy is put back (an endpoint that was removed, a measurement that was withdrawn) | the version counter | deleting the counter with the same access |
 | a key file beside a signed policy is replaced | `pq_pub_sha256`, `endorsement_sha256`, `pk_sha256` | entries without the pin; `iak_pub_pem` |
 | a policy signed for another fleet is copied here | `audience` | verifiers without one |
-| a flapping or hostile endpoint makes the verifier write | entries only on change; one batch per cycle at most; `min_interval_s` | |
+| a flapping or hostile endpoint makes the verifier write | entries only on change; at most one batch per `min_interval_s` (300 s); `max_segments` | without `max_segments` the directory grows for ever (about 1 to 1.5 MB a day at worst) |
 | hostile verdict content breaks the log | everything bounded and encoded before it is queued; fuzzed | |
 | **root on the gateway** | an anchor kept elsewhere shows a log written again; the policy-signing key is not on the gateway, so a new *signed* policy cannot be made there | root can replace the signers file, delete the counter, stop the log, or sign a log that leaves things out as they happen. As before, root on the gateway is outside what Aegis defends against |
 
@@ -380,7 +399,9 @@ libraries.
    can write a log from scratch; an anchor kept elsewhere shows that it is not the log that was anchored, and
    nothing shows an entry that was never written.
 2. **Cutting off the end needs someone who looked.** Without an anchor or a journal line from after the cut, and
-   before the promise lapses, a shorter log is a valid log. Nothing takes anchors off the gateway by itself yet:
+   before the promise lapses, a shorter log is a valid log. Without anchors kept off the gateway (or the journal's
+   `--head` lines), truncation at a record boundary is undetectable: only the last record is checked, and batches
+   from `once`, the enrolment commands and `stop` carry no `due` time. Nothing takes anchors off the gateway by itself yet:
    the PC verifier could fetch one with each gateway quote, and an attestation result could name the log's head.
    Neither is done.
 3. **The verifier's clock** is the only one. Times in the log are what the gateway thought the time was; a reader

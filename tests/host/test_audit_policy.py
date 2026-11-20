@@ -59,6 +59,7 @@ AUDIT_FORMAT = "tag:github.com,2026:ismailalitech/aegis/audit/v1"
 POLICY_TYP = "application/vnd.aegis.fleet-policy+cbor"
 POLICY_FORMAT = "tag:github.com,2026:ismailalitech/aegis/policy/v1"
 T0 = 1_800_000_000
+DEFAULT_AUDIT = dict(fleet.AUDIT_SETTINGS)     # before Fleet.setUp lets every change be written at once
 
 
 def run(main, argv):
@@ -474,6 +475,54 @@ class Log(unittest.TestCase):
         lg.add("stop", None, {}, T0 + 301)
         self.assertEqual(len(lg.flush(T0 + 301, force=True)), 1)    # the last word does not wait
 
+    def test_the_default_interval_bounds_a_flapping_endpoint(self):
+        """An hour of 30 s cycles in which an endpoint changes its mind every cycle: with the policy's defaults one
+        batch per 300 s (and the first at once), not one per cycle; every entry is there."""
+        lg = self.log(**DEFAULT_AUDIT)
+        n = 0
+        for i, t in enumerate(range(T0, T0 + 3600, 30)):
+            lg.add("admit" if i % 2 else "refuse", "dev", {}, t)
+            n += len(lg.flush(t))
+        self.assertLessEqual(n, 13)
+        lg.flush(T0 + 3600, force=True)
+        ev = audit.verify(self.d, [VPK], with_entries=True)["entries"]
+        self.assertEqual(len([e for e in ev if e["event"] in ("admit", "refuse")]), 120)
+        self.assertLess(sum(os.path.getsize(p) for _, p in audit.segments(self.d)), 14 * 4500)
+
+    def test_old_segments_are_deleted_past_max_segments_and_the_log_says_which(self):
+        lg = self.log(segment_bytes=20000, max_segments=3, checkpoint_s=0)
+        heads = {}
+        for i in range(40):
+            lg.add("admit", "dev%d" % i, {"i": i}, T0 + i)
+            b, = [x for x in lg.flush(T0 + i)]
+            heads[b.batch] = b.head
+            self.assertLessEqual(len(audit.segments(self.d)), 4)     # max_segments, and the one this flush began
+        self.assertEqual(audit.segments(self.d)[-1][0], len(audit.segments(self.d)) + audit.segments(self.d)[0][0] - 1)
+        self.refused("what came before is missing")
+        rep = audit.verify(self.d, [VPK], allow_pruned=True, with_entries=True)
+        self.assertTrue(rep["pruned"])
+        pruned = [e for e in rep["entries"] if e["event"] == "pruned"]
+        self.assertTrue(pruned)
+        # each names the segments it deleted and the last batch they held, by number and hash: an anchor from
+        # before is accounted for, not silently gone
+        last = pruned[-1]["details"]
+        self.assertEqual(last["last_head"], heads[last["last_batch"]])
+        self.assertEqual(last["max_segments"], 3)
+        self.assertLess(last["last_batch"], rep["logs"][0]["first_batch"])
+        self.assertEqual(rep["logs"][0]["first_batch"], last["last_batch"] + 1)
+        nums = [p["details"]["segments"] for p in pruned]
+        self.assertEqual([a for a, _ in nums[1:]], [b + 1 for _, b in nums[:-1]])     # every segment, once
+        with self.assertRaises(ValueError):
+            self.log(max_segments=1)
+        # 0, the default: nothing is ever deleted
+        self.d = os.path.join(tempfile.mkdtemp(), "audit")
+        lg = self.log(segment_bytes=20000, checkpoint_s=0)
+        for i in range(40):
+            lg.add("admit", "dev", {}, T0 + i)
+            lg.flush(T0 + i)
+        self.assertGreater(len(audit.segments(self.d)), 4)
+        self.assertNotIn("pruned", [e for e, _ in events(self.d)])
+
     def test_a_batch_is_not_an_attestation_result_nor_the_other_way(self):
         """One key signs both; the typ in the protected header, under the signature, says which it is."""
         lg = self.log()
@@ -506,6 +555,11 @@ class Fleet(unittest.TestCase):
         cls.iak = ec.generate_private_key(ec.SECP256R1())
 
     def setUp(self):
+        # these tests cycle in milliseconds and look at each cycle's batch: no waiting for min_interval_s (its
+        # default is tested by itself)
+        patch = mock.patch.dict(fleet.AUDIT_SETTINGS, min_interval_s=0)
+        patch.start()
+        self.addCleanup(patch.stop)
         self.d, self.state = tempfile.mkdtemp(), make_state()
         with open(os.path.join(self.d, "iak.pem"), "wb") as f:
             f.write(self.iak.public_key().public_bytes(serialization.Encoding.PEM,
@@ -582,13 +636,14 @@ class Trail(Fleet):
         # only the JSON value true, or the settings, turn it on
         for off in (False, None):
             self.assertIsNone(fleet.audit_settings({"audit_log": off}))
-        self.assertEqual(fleet.audit_settings({"audit_log": True}),
-                         {"checkpoint_s": 3600, "min_interval_s": 0, "segment_bytes": 1 << 20})
+        self.assertEqual(DEFAULT_AUDIT, {"checkpoint_s": 3600, "min_interval_s": 300, "segment_bytes": 1 << 20,
+                                         "max_segments": 0})
+        self.assertEqual(fleet.audit_settings({"audit_log": True}), fleet.AUDIT_SETTINGS)
         self.assertEqual(fleet.audit_settings({"audit_log": {"min_interval_s": 300}})["min_interval_s"], 300)
 
     def test_a_setting_this_verifier_does_not_know_is_no_log_and_said_loudly(self):
         for bad in ("true", 1, "yes", [], {"checkpoint": 60}, {"checkpoint_s": -1}, {"checkpoint_s": 1.5},
-                    {"segment_bytes": 100}, {"min_interval_s": True}):
+                    {"segment_bytes": 100}, {"min_interval_s": True}, {"max_segments": 1}, {"max_segments": -2}):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 fleet.audit_settings({"audit_log": bad})
         self.policy["audit_log"] = "yes"

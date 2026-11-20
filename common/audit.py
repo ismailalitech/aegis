@@ -383,17 +383,24 @@ class Log:
     is written at least this often even with nothing to say, and every batch promises the next one within
     checkpoint_s + grace_s ("due"); 0: no promise, no empty batches. min_interval_s: entries wait in memory until
     this long after the last batch (a bound on what a flapping endpoint can make the verifier write). segment_bytes:
-    a new segment file is begun when the current one would grow past it.
+    a new segment file is begun when the current one would grow past it. max_segments: 0 (the default) keeps every
+    segment; otherwise a flush that finds more segment files than this deletes the oldest down to that number (never
+    the one being written), and the batch it writes carries a signed "pruned" entry naming them and the last batch
+    they held (its number and hash): what was deleted is said, not lost silently. A pruned log is read with
+    allow_pruned.
 
     Several processes may write one log (the loop, and an enrolment command beside it): every append is made under a
     lock on the directory, on the log as it is on disk at that moment."""
 
     def __init__(self, directory, pk, load_sk, checkpoint_s=3600, grace_s=120, min_interval_s=0,
-                 segment_bytes=1 << 20):
+                 segment_bytes=1 << 20, max_segments=0):
         self.dir, self.pk, self._load_sk = directory, bytes(pk), load_sk
         self.kid = cose.key_thumbprint(self.pk)
         self.checkpoint_s, self.grace_s = int(checkpoint_s), int(grace_s)
         self.min_interval_s, self.segment_bytes = int(min_interval_s), int(segment_bytes)
+        self.max_segments = int(max_segments)
+        if self.max_segments and self.max_segments < 2:
+            raise ValueError("max_segments is 0 (keep all) or 2 or more")
         self.pending = []
         self.dropped, self.dropped_from, self.dropped_to = 0, None, None
         self._seen = None           # (segment number, size) of the tail this object last saw
@@ -537,6 +544,7 @@ class Log:
                                                                "not be written"}, now))
                 self.dropped = 0
             sk = self._load_sk()
+            gone = self._plan_prune(now)
             written = []
             while True:
                 take, size = [], 0
@@ -568,9 +576,43 @@ class Log:
                 if not self.pending:
                     break
             self._last_write = now
+            self._prune(gone)
             return written
         finally:
             os.close(fd)                        # closing the descriptor releases the lock
+
+    def _plan_prune(self, now):
+        """The oldest segments past max_segments, as [path]; the "pruned" entry that names them is queued, so it is in
+        the batch about to be written. They are deleted only once that batch is (_prune)."""
+        self.pending = [e for e in self.pending if e[E_EVENT] != "pruned"]     # planned before, never written
+        if not self.max_segments:
+            return []
+        segs = [(n, p) for n, p in segments(self.dir) if n < self._segment]
+        gone = segs[:max(0, len(segs) + 1 - self.max_segments)]
+        if not gone:
+            return []
+        d = {"segments": [gone[0][0], gone[-1][0]], "max_segments": self.max_segments}
+        try:
+            with open(gone[-1][1], "rb") as f:
+                b = open_batch(split(f.read())[-1][1])
+            d.update(log=b.log, last_batch=b.batch, last_head=b.head, last_entry=b.next_entry - 1)
+        except Exception as e:  # noqa: BLE001 - empty, torn, damaged: deleted all the same, and said
+            d["unreadable"] = "%s: %s" % (type(e).__name__, str(e)[:80])
+        self.pending.append(entry("pruned", None, d, now))
+        return [p for _, p in gone]
+
+    def _prune(self, paths):
+        for p in paths:
+            try:
+                os.unlink(p)
+            except FileNotFoundError:
+                pass
+        if paths:
+            dfd = os.open(self.dir, os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
 
     def head(self):
         """The log's last batch record as it is on disk now (a Batch; its .raw is an anchor), or None."""
