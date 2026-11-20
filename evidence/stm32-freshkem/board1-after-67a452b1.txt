@@ -1,0 +1,32 @@
+[39;49m[0m[39;49m[0m{
+ "endpoint": "stm32h573-dk",
+ "R_session": "4132ed1d0cfc841a",
+ "R_heartbeat": "uptime_s=12;link=1;fw=0.6.0;sstack=18888/26624;ttl=63",
+ "R_first_exchange_since_reset": true,
+ "R_session_before": "ERR pq -137",
+ "file": "/tmp/aegis-reset-replay-stm32h573-dk.json",
+ "next": "reset the endpoint, then: replay"
+}
+record rc=0
+[39;49m[0m[39;49m[0m{
+ "endpoint": "stm32h573-dk",
+ "recorded_s_ago": 3,
+ "A_session_after_reset": "ERR pq -137",
+ "B_keys_signed_by_the_endpoint": true,
+ "B_recorded_key_issued_again": false,
+ "B_keys_all_different": true,
+ "C_recorded_finish": [
+  "ERR pq -149",
+  "ERR pq -149",
+  "ERR pq -149",
+  "ERR pq -149"
+ ],
+ "C_refused_every_time": true,
+ "D_session": "ERR pq -137",
+ "D_heartbeat": "ERR pq -137",
+ "E_new_session": "7526ea6b703fb871",
+ "E_heartbeat": "uptime_s=12;link=1;fw=0.6.0;sstack=18888/26624;ttl=63",
+ "E_recorded_finish_again": "ERR pq -137",
+ "E_new_session_kept": true
+}
+replay rc=0
