@@ -39,7 +39,8 @@ The soak **passes** only if all of the following hold:
 
 1. it ran to its end;
 2. the regression (`tools/regression.sh --board --with-expiry`) passed at the start, at the middle (12 h) and at the
-   end, and every extra expiry round passed;
+   end, and every extra expiry round passed. A regression still running after 45 min (an expiry round after 20 min;
+   `--regression-timeout-min`, `--expiry-timeout-min`) is stopped and fails;
 3. no failure below happened outside a planned window.
 
 **Fail** (any one is enough):
@@ -58,7 +59,8 @@ The soak **passes** only if all of the following hold:
   6 % fast. The STM32's LSI was measured at 0.941.
 - A secure stack high-water mark at 90 % of its size or more.
 - The gateway's clock stepping by more than 120 s against the PC's.
-- A kernel line or console line from the fatal list, or a fleet error line.
+- A kernel line or console line from the fatal list, or a fleet error line. A fleet error line that names an endpoint
+  is that endpoint's: on an absent endpoint it is INFO, and a planned window for that endpoint excuses it.
 - Projected growth over 14 days, over one-process runs of at least an hour that add up to at least 6 h, above these
   bounds:
 
@@ -82,9 +84,16 @@ figure.
 - A renewal of each session when it has less than 300 s left: every 55 min at the normal lifetime, about every 5 min
   at 600 s. Each renewal also writes an `issue` and an `expiry` entry to the audit log, if the policy keeps one.
 - The QUARANTINED lines of the absent endpoints (`stm32h573-dk`, `arduino-uno`).
-- During a regression run, and for 5 min after it: aegis-fleet stopped and started by the `endpoint-expiry` stage (a new
-  process), sessions ended by the expiry check and issued again, and verdict gaps of about 3 minutes. The red-team
-  stage sends malformed requests to `stm32h573-dk-2`.
+- During a regression run, and for 5 min after it, only what its stages do: aegis-fleet stopped and started by the
+  `endpoint-expiry` stage (a new process), sessions of the soak's endpoints replaced, and their quarantine and
+  readmission by the expiry check. The gaps the stop leaves (aegis-fleet inactive, its journal quiet, its state file
+  stale, an endpoint silent, without a session, with its counter stopped or its renewal overdue) are excused for at
+  most 600 s each (`--bound regression_gap_s=...`: the stage's 3 min stop and its 240 s readmission). Longer, they
+  fail. An SSH hang, aegisd, systemd restarting aegis-fleet and fleet error lines are never excused by a regression.
+  The red-team stage sends malformed requests to `stm32h573-dk-2`.
+- Under the soak (`AEGIS_SOAK=1`, set by the runner) the regression's `fleet-session` and `fleet-heartbeat` stages
+  run once more, 20 s later, after a failure: at the 600 s lifetime a renewal can rewrite the session key while the
+  check reads it. Outside the soak they run once, as before.
 - The kernel message `mpfs_rtc: timed out uploading time to rtc` (seen before the November hang and at other times; on
   its own it is not a failure).
 - Single SSH failures (WARN). A second one in a row is a failure.
@@ -97,7 +106,9 @@ first:
 
     tools/soak.py plan --out logs/soak/<run> --minutes 10 --item frdm-rw612 --reason "cable pulled for link-loss recovery"
 
-During the window, that item's failures are logged as EXPECTED. A condition that is still there when the window ends,
+During the window, that item's failures are logged as EXPECTED. A failure is judged when a sample sees it, up to one
+sampling interval after it happened, so every window (a regression's included) lasts one `--interval-min` longer than
+announced. A condition that is still there when the window ends,
 for example an endpoint not ADMITTED again, is logged again as FAIL. The window is in `<run>/planned.txt`, one line
 per window: `<epoch from> <epoch to> <item or *> <reason>`.
 
@@ -132,7 +143,8 @@ endpoint goes through about 26 sessions a day, about 367 in 14 days. Two existin
    - More audit entries: the audit log writes at most one batch per 300 s (`AUDIT_SETTINGS`), about 1 MB a day. The
      soak's `/var/lib/aegis` trend shows it.
 2. **Extra expiry rounds.** `--expiry-every-h 4` runs `tools/regression.sh --expiry-only` every 4 hours, in addition
-   to the expiry stage of the three regressions: 8 expiry checks in total on each endpoint. Each round stops
+   to the expiry stage of the three regressions. In 24 h the rounds fall at 4, 8, 16 and 20 h (the one at 12 h is left
+out: the middle regression runs then), so 4 rounds and 3 regressions make 7 expiry checks on each endpoint. Each round stops
    aegis-fleet for about 3 minutes, under the stage's restart trap and the 15-minute guard timer on the gateway. On
    each endpoint it checks a 32 s credential end to end: accepted, `ttl` falling at the right rate, `ERR pq expired`
    after the end, attestation still answering.
@@ -208,7 +220,11 @@ them), for example the main checkout after this branch is merged. In this order:
    `bench.env`'s `STM32` (board 1). `EXPIRY_ENDPOINTS` is set to the soak's endpoints.
 6. **While it runs:** `tail -f logs/soak/<run>/events.log`. Announce any deliberate disturbance with `soak.py plan`. If the
    PC or the runner stops, `tools/soak.py run --resume logs/soak/<run>` continues: the stored settings are kept, the
-   journal since the last sample is read (at most 6 h back), and a regression that was interrupted runs again.
+   journal since the last sample is read (at most 6 h back), and a regression that was interrupted runs again. The
+   regression runs in a process group of its own; stopping the runner (SIGTERM, SIGHUP, Ctrl-C) sends SIGTERM to the
+   whole group, so the expiry stage's restart trap runs, and SIGKILL after 180 s. If the runner was killed and its
+   regression is still running, the resumed runner waits for that process group to end (at most the timeout) before
+   it runs the stage again, so two regressions never overlap.
 7. **At the end:** `logs/soak/<run>/report.md` gives the verdict, every failure with its first time and count, the
    regressions, a table per endpoint (renewals, last counter, clock rate, resets, stack) and the gateway trends.
    Restore the lifetime. Copy `report.md`, `samples.csv` and `events.log` (and any `raw/` and bench_watch `evidence/`
