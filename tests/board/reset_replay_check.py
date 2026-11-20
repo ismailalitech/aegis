@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Reset and replay on a real endpoint: an exchange recorded on the network, sent again after a reset of the
 endpoint, must not give the endpoint its old session back.
 

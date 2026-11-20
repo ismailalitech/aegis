@@ -69,7 +69,14 @@ namespaces only ([`tests/host/test_enforcement.sh`](tests/host/test_enforcement.
 
 ## Running it
 
-Copy `bench.env.example` to `bench.env` and set your addresses. Then:
+The documentation is indexed in [`docs/README.md`](docs/README.md).
+
+Without any hardware: [`container/`](container/README.md) runs the verifier, a simulated device built on the Prover
+SDK, the standalone evidence and audit checkers and the host test suite from one command; or on the PC itself,
+`sdk/examples/simulated-device/run.sh` attests a simulated device end to end. A device maker starts from
+[`docs/sdk-porting-guide.md`](docs/sdk-porting-guide.md).
+
+With the boards, copy `bench.env.example` to `bench.env` and set your addresses. Then:
 
     tools/setup_host.sh        # Python environment and liboqs
     tools/regression.sh        # host stages; add --board for the real boards

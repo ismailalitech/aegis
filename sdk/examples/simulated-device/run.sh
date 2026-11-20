@@ -103,21 +103,23 @@ cat > "$W/policy.json" <<EOF
  ]
 }
 EOF
-FLEET="$PY gateway/aegisd/fleet.py"
-ST="--platform linux --state-dir $W/verifier"
+fleet() {   # the verifier on this PC: fleet.py CMD POLICY ARGS..., with its state in WORKDIR/verifier
+    c=$1; shift
+    "$PY" gateway/aegisd/fleet.py "$c" "$W/policy.json" "$@" --platform linux --state-dir "$W/verifier"
+}
 
 step "enrol the device key (fleet.py enroll-pq)"
-$FLEET enroll-pq "$W/policy.json" $ST > "$W/log/enroll.txt" 2>&1 || fail "enroll-pq, see $W/log/enroll.txt"
+fleet enroll-pq > "$W/log/enroll.txt" 2>&1 || fail "enroll-pq, see $W/log/enroll.txt"
 grep -q "sha256 $FP" "$W/log/enroll.txt" || fail "the enrolled key is not the device's, see $W/log/enroll.txt"
 ok
 
 step "policy check (fleet.py check)"
-$FLEET check "$W/policy.json" $ST > "$W/log/check.txt" 2>&1 || fail "check, see $W/log/check.txt"
+fleet check > "$W/log/check.txt" 2>&1 || fail "check, see $W/log/check.txt"
 grep -q "credentials: issued by this verifier" "$W/log/check.txt" || fail "this verifier would not issue, see $W/log/check.txt"
 ok
 
 step "attest and provision (fleet.py once)"
-$FLEET once "$W/policy.json" $ST > "$W/log/once.json" 2>"$W/log/once.err" || fail "once, see $W/log/once.err"
+fleet once > "$W/log/once.json" 2>"$W/log/once.err" || fail "once, see $W/log/once.err"
 [ "$(json 'd[0]["admitted"]' "$W/log/once.json")" = True ] \
     || fail "not admitted: $(json 'd[0]["reasons"]' "$W/log/once.json")"
 TRUST=$(json 'd[0].get("trust")' "$W/log/once.json")
@@ -127,7 +129,7 @@ case $CRED in "issued session "*" bound to quote "*) ;; *) fail "no session boun
 ok "ADMITTED, trust $TRUST, session bound to the quote, $(json 'd[0].get("evidence_format") or "aegis claims"' "$W/log/once.json")"
 
 step "same session on both sides (fleet.py session)"
-$FLEET session "$W/policy.json" $ST > "$W/log/session.json" 2>&1 || fail "session, see $W/log/session.json"
+fleet session > "$W/log/session.json" 2>&1 || fail "session, see $W/log/session.json"
 [ "$(json 'd["same_session"] and d["same_credential"]' "$W/log/session.json")" = True ] \
     || fail "the device holds another session, see $W/log/session.json"
 ok
@@ -146,7 +148,7 @@ ok "$(cut -c1-48 "$W/log/heartbeat.txt")"
 
 if [ "$EAT" = 1 ]; then
     step "evidence pack: tools/verify_evidence.py"
-    $FLEET export-evidence "$W/policy.json" sim-device-1 --out "$W/pack" $ST > "$W/log/export.txt" 2>&1 \
+    fleet export-evidence sim-device-1 --out "$W/pack" > "$W/log/export.txt" 2>&1 \
         || fail "export-evidence, see $W/log/export.txt"
     "$PY" -I tools/verify_evidence.py pack "$W/pack" > "$W/log/verify_evidence.json" 2>&1 \
         || fail "verify_evidence.py, see $W/log/verify_evidence.json"
@@ -160,7 +162,7 @@ step "changed image: quarantined"
 stop_device
 "$PY" -c "import sys; f=open(sys.argv[1],'r+b'); b=f.read(1); f.seek(0); f.write(bytes([b[0]^1]))" "$W/firmware.bin"
 start_device "$W/firmware.bin"
-$FLEET once "$W/policy.json" $ST > "$W/log/once-changed.json" 2>"$W/log/once-changed.err" \
+fleet once > "$W/log/once-changed.json" 2>"$W/log/once-changed.err" \
     || fail "once, see $W/log/once-changed.err"
 [ "$(json 'd[0]["admitted"]' "$W/log/once-changed.json")" = False ] || fail "a changed image was admitted"
 ok "$(json '"; ".join(d[0]["reasons"])[:60]' "$W/log/once-changed.json")"
@@ -168,7 +170,7 @@ ok "$(json '"; ".join(d[0]["reasons"])[:60]' "$W/log/once-changed.json")"
 stop_device
 
 step "audit log: tools/verify_audit.py"
-$FLEET audit "$W/policy.json" $ST > "$W/log/audit.json" 2>&1 || fail "fleet.py audit, see $W/log/audit.json"
+fleet audit > "$W/log/audit.json" 2>&1 || fail "fleet.py audit, see $W/log/audit.json"
 "$PY" -I tools/verify_audit.py log "$W/verifier/audit" --key "$W/verifier/identity.json" \
     > "$W/log/verify_audit.json" 2>&1 || fail "verify_audit.py, see $W/log/verify_audit.json"
 ok "$(json '"%d entries in %d signed batches" % (d["logs"][-1]["entries"], d["logs"][-1]["last_batch"])' "$W/log/verify_audit.json")"

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Accelerator v2 figures (docs/accelerator-v2.md, site lab 54). wave-sponge-dma.yaml comes from hw/tb/make_wave_dma.sh.
 
 - id: accel-data-path

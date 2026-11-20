@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """The fleet loop on an ordinary Linux host (fleet.py --platform linux, docs/pc-verifier.md), with simulated endpoints.
 
   - two verifiers on one endpoint: the provers serve one connection at a time and reset a second one; read-only

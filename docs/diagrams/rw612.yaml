@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # The NXP FRDM-RW612 endpoint (endpoints/rw612/README.md; site lab 57 and the ELS-slot problem page).
 
 - id: rw612-key-derivation

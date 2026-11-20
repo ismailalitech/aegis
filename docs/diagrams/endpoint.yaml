@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Endpoint hardening and the two-chip check (docs/endpoint-hardening.md, docs/second-board.md; site labs 55 and 56).
 
 - id: hardening-rollout

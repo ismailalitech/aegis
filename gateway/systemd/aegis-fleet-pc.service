@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Aegis fleet verifier on an ordinary Linux host (a PC or server), as a systemd USER unit: attests every endpoint in
 # the policy every 30 s, observe-only (no enforce_cmd is run), credentials only for endpoints whose image pins this
 # host's key (policy "verifier_pin_sha256"). See docs/pc-verifier.md.
