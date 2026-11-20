@@ -272,6 +272,12 @@ class Fleet(unittest.TestCase):
         with self.assertRaises(ValueError):
             fleet.provision(conf, self.dir, gw_sk, "gid", {}, timeout=5)
 
+    def admitted(self, conf):
+        """An admitted verdict as attest() makes it: by the pinned key (a stored session is kept only for that key)."""
+        with open(os.path.join(self.dir, conf["pq_pub_file"])) as f:
+            pk = bytes.fromhex(f.read().strip())
+        return {"admitted": True, "measurements": {}, "device_pk_sha256": hashlib.sha256(pk).hexdigest()}
+
     def test_credential_issued_then_revoked(self):
         import wire
         ep, conf, gw_pk, gw_sk = self.provision_ep("kem-good")
@@ -281,10 +287,10 @@ class Fleet(unittest.TestCase):
             json.dump({"body": body}, f)
         with open(os.path.join(state, "identity.sk"), "wb") as f:
             f.write(gw_sk)
-        st = fleet.credential_step(conf, {"admitted": True, "measurements": {}}, self.dir, state=state)
+        st = fleet.credential_step(conf, self.admitted(conf), self.dir, state=state)
         self.assertTrue(st.startswith("issued"), st)
-        self.assertTrue(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state).startswith("valid, heartbeat 1"))
-        self.assertTrue(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state).startswith("valid, heartbeat 2"))
+        self.assertTrue(fleet.credential_step(conf, self.admitted(conf), self.dir, state=state).startswith("valid, heartbeat 1"))
+        self.assertTrue(fleet.credential_step(conf, self.admitted(conf), self.dir, state=state).startswith("valid, heartbeat 2"))
         self.assertEqual(fleet.credential_step(conf, {"admitted": False}, self.dir, state=state), "revoked")
         self.assertFalse(os.path.exists(os.path.join(state, "credentials", "kem-good.session")))
 
@@ -297,14 +303,14 @@ class Fleet(unittest.TestCase):
             json.dump({"body": {"v": 1, "type": "identity", "pk": gw_pk.hex()}}, f)
         with open(os.path.join(state, "identity.sk"), "wb") as f:
             f.write(gw_sk)
-        first = fleet.credential_step(conf, {"admitted": True, "measurements": {}}, self.dir, state=state)
+        first = fleet.credential_step(conf, self.admitted(conf), self.dir, state=state)
         self.assertTrue(first.startswith("issued session "), first)
-        self.assertTrue(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state).startswith("valid, heartbeat 1"))
+        self.assertTrue(fleet.credential_step(conf, self.admitted(conf), self.dir, state=state).startswith("valid, heartbeat 1"))
         ep.expired = True
-        again = fleet.credential_step(conf, {"admitted": True, "measurements": {}}, self.dir, state=state)
+        again = fleet.credential_step(conf, self.admitted(conf), self.dir, state=state)
         self.assertTrue(again.startswith("issued session "), again)
         self.assertNotEqual(again, first)
-        self.assertTrue(fleet.credential_step(conf, {"admitted": True}, self.dir, state=state).startswith("valid, heartbeat "))
+        self.assertTrue(fleet.credential_step(conf, self.admitted(conf), self.dir, state=state).startswith("valid, heartbeat "))
 
     def test_heartbeat_kmac256(self):
         ep, conf, _, gw_sk = self.provision_ep("kem-good")

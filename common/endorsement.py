@@ -44,6 +44,8 @@ Standard library only, and ML-DSA through common/mldsa.py: the gateway's Python 
 import hashlib
 import json
 import os
+import re
+import secrets
 
 import mldsa
 import wire
@@ -59,6 +61,7 @@ _BODY_KEYS = {"v", "type", "device", "serial", "kind", "profile", "device_pk_alg
               "instance_id", "evidence", "device_state", "endorser", "endorser_pk_sha256", "issued", "expires", "notes"}
 _REQUIRED = _BODY_KEYS - {"serial", "profile", "instance_id", "expires", "notes"}
 _RECORD_KEYS = {"format", "body", "sig", "device_pk"}
+_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}\Z")
 
 
 class Refused(ValueError):
@@ -76,6 +79,13 @@ def _is_hex(v, digits=None):
 
 def _is_text(v, limit=256):
     return isinstance(v, str) and 0 < len(v) <= limit
+
+
+def is_name(v):
+    """A device or entry name: it becomes part of file names (endorsements/<name>.json, the endorser's <name>.json,
+    the gateway's credentials/<name>.json), so only letters, digits, ".", "_" and "-", at most 64, not starting with a
+    dot."""
+    return isinstance(v, str) and _NAME.match(v) is not None
 
 
 def _is_time(v):
@@ -97,6 +107,8 @@ def check_body(body):
     for k in ("device", "kind", "endorser"):
         if not _is_text(body[k]):
             raise Refused("%s is not a short text" % k)
+    if not is_name(body["device"]):
+        raise Refused("device is not a name (letters, digits, '.', '_', '-'; no leading dot)")
     for k, limit in (("serial", 256), ("profile", 256), ("notes", 1024)):
         if k in body and not _is_text(body[k], limit):
             raise Refused("%s is not a short text" % k)
@@ -144,13 +156,27 @@ def dumps(record):
     return (json.dumps(record, indent=1, sort_keys=True) + "\n").encode()
 
 
+def _no_duplicates(pairs):
+    """Two values for one key: which one a reader takes depends on the reader, so neither is taken."""
+    out = {}
+    for k, v in pairs:
+        if k in out:
+            raise ValueError("duplicate key %r" % k[:40])
+        out[k] = v
+    return out
+
+
+def _no_constant(name):
+    raise ValueError("%s is not JSON" % name)
+
+
 def loads(data):
     """A record from bytes. Refused for anything that is not one JSON object of the known shape; the signature is
     not checked here."""
     if len(data) > MAX_RECORD:
         raise Refused("the record is larger than %d bytes" % MAX_RECORD)
     try:
-        rec = json.loads(data.decode("utf-8"))
+        rec = json.loads(data.decode("utf-8"), object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
     except (ValueError, RecursionError) as e:
         raise Refused("the record is not JSON: %s" % type(e).__name__) from None
     if not isinstance(rec, dict):
@@ -293,8 +319,8 @@ def stage(path, data, mode=0o644):
     """Write data next to path (same directory, so the rename is atomic) and return the temporary name."""
     d = os.path.dirname(os.path.abspath(path))
     os.makedirs(d, exist_ok=True)
-    tmp = "%s.tmp.%d" % (path, os.getpid())
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), mode)
+    tmp = "%s.tmp.%d.%s" % (path, os.getpid(), secrets.token_hex(4))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), mode)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)

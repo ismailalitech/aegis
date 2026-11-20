@@ -497,6 +497,125 @@ class Refused(Bench):
         self.assertIn("enrolment: endorsement REFUSED: no endorsement record", out)
 
 
+class Review(Bench):
+    """Findings of the review of step 8, each with the test that would have caught it."""
+
+    def test_names_that_reach_outside_their_directory_are_refused(self):
+        self.enrol()
+        with open(self.record_path()) as f:
+            rec = json.load(f)
+        import wire
+        outside = os.path.join(os.path.dirname(self.d), "escaped.json")
+        there = os.path.exists(outside) and os.stat(outside).st_mtime_ns
+        for bad in ("../escaped", ".hidden", "a/b", "a\\b", "", "x" * 65, "dev a", "..", "dev\n"):
+            body = dict(rec["body"], device=bad)
+            with self.assertRaises(endorsement.Refused, msg=bad):
+                endorsement.check_body(body)
+            signed = dict(rec, body=body, sig=mldsa.sign(self.endorser.sk, endorsement.LABEL,
+                                                          wire.canonical(body)).hex())
+            path = os.path.join(self.out, "bad.json")
+            with open(path, "w") as f:
+                json.dump(signed, f)
+            with self.assertRaises(endorsement.Refused):          # signed by the trusted endorser, still refused
+                fleet.install_endorsement(self.policy, self.d, path)
+            self.assertIn("is not a name", " ".join(fleet.policy_errors(dict(self.ep(), name=bad))), bad)
+        self.assertEqual(there, os.path.exists(outside) and os.stat(outside).st_mtime_ns)
+        for good in ("dev-a", "stm32h573-dk-2", "frdm-rw612", "a.b_c", "x" * 64):
+            self.assertTrue(endorsement.is_name(good), good)
+            self.assertEqual(fleet.policy_errors(dict(self.ep(), name=good)), [], good)
+        # a policy entry named so: refused, and the credential step touches no file of that name
+        state = tempfile.mkdtemp()
+        v = fleet.attest(dict(self.ep(), name="../escaped"), VERIFY, self.d, 5, self.policy["endorsers"])
+        self.assertRefused(v, "is not a name")
+        cs = fleet.credential_step(dict(self.ep(), name="../escaped", provision=True), v, self.d, state=state)
+        self.assertIn("not a file name", cs)
+
+    def test_duplicate_keys_and_non_numbers_are_not_json(self):
+        self.enrol()
+        with open(self.record_path(), "rb") as f:
+            good = f.read()
+        endorsement.loads(good)
+        dup = good.replace(b'"format":', b'"format": "aegis-endorsement-v1", "format":', 1)
+        self.assertNotEqual(dup, good)
+        body_dup = good.replace(b'"device":', b'"device": "dev-b", "device":', 1)
+        for data in (dup, body_dup, good.replace(b'"issued": ', b'"issued": NaN, "x": ', 1),
+                     good.replace(b'"issued": ', b'"issued": Infinity, "y": ', 1), b'{"a": -Infinity}'):
+            with self.assertRaises(endorsement.Refused) as c:
+                endorsement.loads(data)
+            self.assertIn("not JSON", str(c.exception))
+            with open(self.record_path(), "wb") as f:
+                f.write(data)
+            self.assertRefused(self.attest(), "not JSON")
+
+    def test_a_record_of_the_same_kind_but_another_profile_is_refused(self):
+        dev = PlainDevice(fleet.DEVICE_PROFILE)
+        e = {"name": "rw", "kind": "aegis-device", "profile": fleet.DEVICE_PROFILE, "host": "127.0.0.1",
+             "port": dev.port, "pq_pub_file": "keys/rw.pub", "endorsement": "required",
+             "allowed": [{"type": "BOOTCHAIN", "measurement_value": th.MEAS}]}
+        self.policy["endpoints"].append(e)
+        self.enrol("rw")
+        self.assertTrue(self.attest("rw")["admitted"])
+        asked = dev.asked
+        v = self.attest("rw", profile=fleet.DEVICE_TFM_PROFILE)           # the kind is the same
+        self.assertRefused(v, "the record endorses family aegis-device/%s, the policy entry is aegis-device/%s"
+                           % (fleet.DEVICE_PROFILE, fleet.DEVICE_TFM_PROFILE))
+        self.assertEqual(dev.asked, asked)
+
+    def test_a_signer_the_policy_allows_but_the_record_does_not_name_is_refused(self):
+        signer_a, signer_b = "a1" * 32, "b2" * 32
+        dev = PlainDevice(fleet.TEE_PROFILE, lambda c: c[2399][0].update({5: bytes.fromhex(signer_a)}))
+        e = {"name": "zynq", "kind": "aegis-tee", "profile": fleet.TEE_PROFILE, "host": "127.0.0.1",
+             "port": dev.port, "pq_pub_file": "keys/zynq.pub", "endorsement": "required",
+             "allowed": [{"type": "BOOTCHAIN", "measurement_value": th.MEAS, "signer_id": signer_a}]}
+        self.policy["endpoints"].append(e)
+        res = self.enrol("zynq")
+        self.assertEqual(res["measurements"][0]["signer_id"], signer_a)
+        self.assertTrue(self.attest("zynq")["admitted"])
+        # the same measurement under another signer, which the policy has been made to allow
+        dev.claims_edit = lambda c: c[2399][0].update({5: bytes.fromhex(signer_b)})
+        e["allowed"].append({"type": "BOOTCHAIN", "measurement_value": th.MEAS, "signer_id": signer_b})
+        v = self.attest("zynq")
+        self.assertRefused(v, "endorsement: component BOOTCHAIN is not the endorsed one")
+        self.assertEqual(len(v["reasons"]), 1)          # the policy's own list would have admitted it
+
+    def test_a_component_that_is_not_a_map_is_refused_not_dropped(self):
+        endorsed = [{"type": "BOOTCHAIN", "measurement_value": th.MEAS}]
+        good = {"measurement_type": "BOOTCHAIN", "measurement_value": bytes.fromhex(th.MEAS)}
+        self.assertEqual(fleet.endorsed_components({"sw_components": [good]}, endorsed), [])
+        for junk in ("x", 1, None, [good]):
+            reasons = fleet.endorsed_components({"sw_components": [good, junk]}, endorsed)
+            self.assertEqual(reasons, ["endorsement: a software component is not a map"], junk)
+
+    def test_a_stored_session_made_for_another_key_is_dropped(self):
+        """A session issued before the key was endorsed (trust on first use, or before a --force re-enrolment) is not
+        kept alive by heartbeats once the cycle's quote is by another key."""
+        self.dev_a.mode = "kem-good"
+        self.enrol()
+        self.ep()["provision"] = True
+        gw_pk, gw_sk = mldsa.keypair()
+        state = tempfile.mkdtemp()
+        with open(os.path.join(state, "identity.json"), "w") as f:
+            json.dump({"body": {"v": 1, "type": "identity", "pk": gw_pk.hex()}}, f)
+        with open(os.path.join(state, "identity.sk"), "wb") as f:
+            f.write(gw_sk)
+        pol = dict(self.policy, endpoints=[self.ep()])
+        v, = fleet.run_once(pol, self.d, VERIFY, state=state)
+        self.assertTrue(v["credential"].startswith("issued session"), v["credential"])
+        v, = fleet.run_once(pol, self.d, VERIFY, state=state)
+        self.assertTrue(v["credential"].startswith("valid, heartbeat"), v["credential"])
+        meta = os.path.join(state, "credentials", "dev-a.json")
+        with open(meta) as f:
+            m = json.load(f)
+        m["body"]["endpoint_pq_pk_sha256"] = endorsement.pk_sha256(tf.PQ_KEYS[1][0])
+        with open(meta, "w") as f:
+            json.dump(m, f)
+        v, = fleet.run_once(pol, self.d, VERIFY, state=state)
+        self.assertTrue(v["credential"].startswith("issued session"), v["credential"])
+        self.assertIn("stored session was made for device key", v["credential"])
+        with open(meta) as f:
+            self.assertEqual(json.load(f)["body"]["endpoint_pq_pk_sha256"], v["device_pk_sha256"])
+
+
 class Enrolment(Bench):
     """Partial or failed enrolment leaves no trusted entry."""
 

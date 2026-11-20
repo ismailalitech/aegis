@@ -60,8 +60,10 @@ first use); every such endpoint is marked "trust-on-first-use" in its verdict an
 warning priority when the loop starts.
 """
 import argparse
+import hashlib
 import json
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -99,6 +101,9 @@ UNBOUND_NOTE = ('unbound: the session is not tied to the attestation (no "transc
                 "weaker")
 ENDORSEMENTS = ("required",)        # policy key "endorsement": the pinned key must be endorsed (common/endorsement.py)
 ENDORSED, TOFU, NOT_ENDORSED = "endorsed", "trust-on-first-use", "refused"     # verdict["enrolment"]
+# an entry's name becomes part of file names (keys, endorsements/<name>.json, credentials/<name>.json): the same rule as
+# common/endorsement.py is_name()
+ENTRY_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}\Z")
 TOFU_NOTE = ('trust on first use: nothing shows that the pinned key belongs to a genuine device (no "endorsement": '
              '"required" in the policy entry); weaker')
 
@@ -240,7 +245,7 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
     if bound and ep["transcript"] not in TRANSCRIPTS:
         raise ValueError("unknown transcript %r" % (ep["transcript"],))
     pk, _ = device_key(ep, base_dir, endorsers)
-    if expect_pk_sha256 is not None and __import__("hashlib").sha256(pk).hexdigest() != expect_pk_sha256:
+    if expect_pk_sha256 is not None and hashlib.sha256(pk).hexdigest() != expect_pk_sha256:
         raise ValueError("the pinned key changed since this cycle's quote was verified")
     if bound:
         try:
@@ -275,7 +280,7 @@ def provision(ep, base_dir, gw_sk, gw_identity_sha256, measurements, timeout=30.
     ct, k = mlkem.encaps(ek)
     now = int(time.time())
     body = {"v": 1, "type": "credential", "endpoint": ep["name"],
-            "endpoint_pq_pk_sha256": __import__("hashlib").sha256(pk).hexdigest(),
+            "endpoint_pq_pk_sha256": hashlib.sha256(pk).hexdigest(),
             "measurements": measurements, "kem": "ML-KEM-768", "kem_ct_sha3_256": _sha3(ct).hex(), "kem_ek_sha3_256": _sha3(ek).hex(),
             "issued": now, "expires": now + CRED_LIFETIME_S, "gateway_identity_sha256": gw_identity_sha256}
     if bound:
@@ -391,8 +396,10 @@ def endorsed_components(claims, endorsed):
     comps = claims.get("sw_components", [])
     if not isinstance(comps, list):
         return ["endorsement: sw_components is not a list"]
+    if not all(isinstance(c, dict) for c in comps):
+        return ["endorsement: a software component is not a map"]
     reported = [(c.get("measurement_type"), text(c.get("measurement_value")),
-                 text(c["signer_id"]) if "signer_id" in c else None) for c in comps if isinstance(c, dict)]
+                 text(c["signer_id"]) if "signer_id" in c else None) for c in comps]
     return ["endorsement: %s" % r for r in endorsement.measurement_reasons(reported, endorsed)]
 
 
@@ -488,7 +495,7 @@ def install_endorsement(policy, base_dir, record_path, force=False):
     if not trust:
         raise endorsement.Refused('the policy lists no trusted endorsers ("endorsers")')
     kind, profile = _endorsed_family(ep)
-    endorsement.check(rec, trust, name, kind, profile, pk, time.time())
+    body = endorsement.check(rec, trust, name, kind, profile, pk, time.time())
     key_path, rec_path = _path(base_dir, ep["pq_pub_file"]), endorsement_file(ep, base_dir)
 
     def previous(path):
@@ -505,10 +512,6 @@ def install_endorsement(policy, base_dir, record_path, force=False):
     try:
         tmp_rec = endorsement.stage(rec_path, endorsement.dumps(rec))
         tmp_key = endorsement.stage(key_path, rec["device_pk"].encode() + b"\n")
-        # what is on the disk now is what the loop will read: check that, not the copy in memory
-        with open(tmp_key) as f:
-            staged_pk = bytes.fromhex(f.read().strip())
-        body = endorsement.check(endorsement.load(tmp_rec), trust, name, kind, profile, staged_pk, time.time())
         endorsement.commit(tmp_rec, rec_path)
         done.append((rec_path, old_rec))
         endorsement.commit(tmp_key, key_path)
@@ -534,6 +537,10 @@ def policy_errors(ep):
     """Reasons an endpoint entry is refused before the endpoint is even asked (strict profiles). Empty if the entry
     is acceptable."""
     kind = ep.get("kind", "psa")
+    if not (isinstance(ep.get("name"), str) and ENTRY_NAME.match(ep["name"])):
+        # it becomes part of file names: "../x" must not reach outside the policy's and the state's directories
+        return ["policy: the entry's name %r is not a name (letters, digits, '.', '_', '-', at most 64, no leading "
+                "dot)" % (str(ep.get("name"))[:40],)]
     if kind not in KNOWN_KINDS:
         return ["policy: unknown kind %r" % kind]
     errors = []
@@ -651,7 +658,7 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None):
                     " (the device that answered does not hold the endorsed key)" if endorsed else ""))
                 return verdict
             verdict["pq_signature"] = "ML-DSA-65 valid"
-            verdict["device_pk_sha256"] = __import__("hashlib").sha256(pk).hexdigest()
+            verdict["device_pk_sha256"] = hashlib.sha256(pk).hexdigest()
             # the quote as signed, for the transcript a session of this cycle must continue (provision()); both
             # values went over the network in the clear
             verdict["quote"] = {"challenge": challenge.hex(), "token_sha3_256": _sha3(tok).hex()}
@@ -880,6 +887,8 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
     Sets verdict["session_binding"] to "transcript-v2" or "unbound" for a session issued or kept."""
     if not ep.get("provision"):
         return None
+    if not (isinstance(ep.get("name"), str) and ENTRY_NAME.match(ep["name"])):
+        return "refused: the entry's name is not a file name"      # policy_errors() says so in the verdict
     refusal = issuer_refusal(ep, state, require_pin)
     if refusal:
         return refusal
@@ -898,7 +907,17 @@ def credential_step(ep, verdict, base_dir, state=GATEWAY_STATE, require_pin=Fals
     if os.path.exists(meta):
         with open(meta) as f:
             m = json.load(f)
-        if m.get("transcript") != want:
+        made_for = m.get("body", {}).get("endpoint_pq_pk_sha256")
+        if made_for != verdict.get("device_pk_sha256"):
+            # made for another key than the one this cycle's quote was verified with (a session from before a
+            # re-enrolment, or from trust on first use before the entry required an endorsement): the endpoint that
+            # holds it is not the one just appraised, so it is not kept alive, and not kept as a fallback either
+            hb_error = "stored session was made for device key %s..., this cycle's quote is by %s..." % (
+                str(made_for)[:16], str(verdict.get("device_pk_sha256"))[:16])
+            for f in (meta, keyf):
+                if os.path.exists(f):
+                    os.remove(f)
+        elif m.get("transcript") != want:
             # the policy now asks for another exchange than the one that made this session (the unbound one, when
             # "transcript" was added to the entry): heartbeats would keep a session alive that the policy refuses
             hb_error = "stored session is %s, the policy asks for %s" % (_binding(m.get("transcript")), _binding(want))
@@ -1098,7 +1117,7 @@ def main(argv=None):
             with open(path, "w") as f:
                 f.write(pk.hex() + "\n")
             print("enrolled %s by trust on first use: ML-DSA-65 key sha256 %s -> %s"
-                  % (ep["name"], __import__("hashlib").sha256(pk).hexdigest(), path))
+                  % (ep["name"], hashlib.sha256(pk).hexdigest(), path))
         return 0
     if a.cmd == "session":
         # compare this verifier's stored credential/session with what the endpoint's secure side reports
