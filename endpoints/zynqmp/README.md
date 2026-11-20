@@ -36,6 +36,8 @@ it `zynqmp-te0808`, from before the module was identified; it is a TE0807.) File
   profile's key is the same on every chip, so the gateway refuses it unless the policy entry pins it and says
   `"allow_dev_profile": true`; it is then admitted as "development-shared-key" trust (before: "trustzone-devkey")
   with a WARNING line in the journal. Evidence: `evidence/zynqmp/optee-phase-a.txt`.
+  Since TA 0.2.0 the TA runs the Prover SDK's core (transcript v2, endorsement); its build, the boot image it needs
+  and the gateway steps are in `docs/zynqmp-sdk-port.md`.
 
 - Phase B (`evidence/zynqmp/puf-phase-b.txt`): `fsbl/` (the FSBL hook: seed under the device key, partition
   measurements, hand-off page), `handoff/` (its layout), `optee/os-patches` + `build_optee.sh` (OP-TEE takes the
