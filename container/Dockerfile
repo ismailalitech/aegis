@@ -44,7 +44,7 @@ RUN fetch() { \
     fetch https://github.com/open-quantum-safe/liboqs.git 0.16.0 liboqs-src "$LIBOQS_COMMIT"
 # liboqs with ML-KEM and ML-DSA only, as CI builds it (.github/workflows/ci.yml); some host tests cross-check with it
 RUN cmake -S liboqs-src -B liboqs-src/build -GNinja -DCMAKE_INSTALL_PREFIX=/opt/aegis-tools/liboqs \
-        -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_SHARED_LIBS=ON -DOQS_BUILD_ONLY_LIB=ON \
+        -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_SHARED_LIBS=ON -DOQS_BUILD_ONLY_LIB=ON -DOQS_USE_OPENSSL=OFF \
         -DOQS_MINIMAL_BUILD="KEM_ml_kem_512;KEM_ml_kem_768;KEM_ml_kem_1024;SIG_ml_dsa_44;SIG_ml_dsa_65;SIG_ml_dsa_87"; \
     ninja -C liboqs-src/build install > /dev/null; \
     rm -rf liboqs-src/build
