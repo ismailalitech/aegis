@@ -20,15 +20,33 @@ No firmware changed for this. The tool uses two commands every endpoint image ha
 Read this before relying on one.
 
 **What the endorser does.** It connects to an address, asks for the identity key, sends a fresh 32-byte challenge and
-gets a quote. It checks that the quote is signed by that key for that challenge, that it is of the entry's kind and
-profile, and that every component it reports is in the reference list. Then it signs: *this key answered for this
-device at this time and reported these components*. Before it hands the record out it asks for a second quote and
-runs the verifier's own attestation with that record required.
+gets a quote. It checks that the quote is signed by that key for that challenge, that it is of the device's kind and
+profile, and that every component it reports is in the reference list. It shows the operator the address, the key's
+SHA-256 and the components and waits for a typed `yes`. Then it signs: *this key answered for this device at this
+time and reported these components*. Before it hands the record out it asks for a second quote and runs the
+verifier's own attestation with that record required.
+
+**Where the endorser gets the address and the reference from.** From its own reference file
+(`--reference`, default `~/.local/state/aegis-endorser/reference.json`), never from a verifier's policy. A record says
+"this key is device X"; whatever decides which board is asked as X and which measurements X must report decides what
+the record says. If that came from the gateway's `fleet.json`, anyone who can edit that file (or the copy on the PC)
+could point `stm32h573-dk`'s port at the other board, and the endorser would sign the other board's key as
+`stm32h573-dk`: the review of step 8 did exactly that. So the reference is a separate file that only the endorser's
+user can write (it lives in the endorser's 0700 state directory), it is reviewed once by the operator, and an address
+not in it must be typed on the command line (`--host HOST:PORT`): the address of the board on the operator's cable,
+as the operator knows it. The confirmation prompt shows where the address came from (`--host` or the reference) and
+the device key's hash; `--expect-key-sha256` refuses any other key, for a board whose key the operator already knows
+(from an earlier record, or the board's console). `--yes` skips the prompt for a script, and then the reference and
+`--host` are all that stand between a typo and a wrong record.
 
 **What follows from that.** Whatever answered at that address holds the private key (it signed a challenge nobody
 could have known) and reported the reference firmware. If the only thing that could answer there was the board on the
-operator's desk, the key is that board's key. The verifier then refuses any other key under that device's name: a key
-file that was replaced, a record made for another device, a record nobody it trusts signed.
+operator's desk, the key is that board's key. The verifier then refuses any key under that device's name that no
+record of a trusted endorser names for that name and family: a key file that was replaced on its own, a record made
+for another device, a record nobody it trusts signed. A key file replaced **together with** a record that a trusted
+endorser did sign for that name and that key (an older record, say, from before a re-enrolment) is refused only if
+the entry pins its record (`"endorsement_sha256"`, which `enroll-endorsed` writes) or the record is older than
+`"max_endorsement_age_s"`; without either it is admitted.
 
 **What does not follow.**
 
@@ -51,12 +69,24 @@ file that was replaced, a record made for another device, a record nobody it tru
   it; but the quote is the device's own word, with the limits above.
 - **Anything against someone who can edit the verifier's policy.** The policy file decides which endorsers are
   trusted and which entries require an endorsement. Root on the gateway can add an endorser or delete the
-  requirement. An endorsement protects the key files and the records, the network path at enrolment (as far as the
-  cable goes), and the operator from mixing up files. It moves the trust from "whatever was in `keys/`" to "whoever
+  requirement. An endorsement protects the key files and (with the pin) the records, the network path at enrolment (as
+  far as the cable goes), and the operator from mixing up files. It moves the trust from "whatever was in `keys/`" to "whoever
   holds the endorser's key or can write the policy".
 - **That the endorser's key is safe.** Whoever can use it can make any key a trusted device key at every verifier
-  that lists it. It is sealed to the bench PC's TPM when one is usable (`common/keystore.py`: useless off that
-  machine, usable by root on it), else a 0600 file.
+  that lists it. It is sealed to the bench PC's TPM when one is usable (`common/keystore.py`), else a 0600 file.
+  The seal has an empty authorization value and no PCR policy unless `init --tpm-pcrs` was given: it keeps the key
+  useless **off** that machine, not away from users **on** it. The endorser's own user can unseal it at any time,
+  and so can root and anyone else who can open `/dev/tpmrm0` (group `tss`) and read the state directory. While
+  `endorse` runs, the key is in the process's memory in the clear.
+- **That the device is the board with that serial number.** `serial` and `instance_id` are recorded, not checked:
+  no verifier compares them with anything, and the endorser takes `serial` from the operator's command line.
+- **Which verifier a record is for.** The device name in a record is the name of a policy entry, and names are local
+  to each verifier: a record is valid at every verifier that trusts its endorser and has an entry of that name and
+  family, whatever that entry's address. Two sites that both trust the bench endorser and both call a device
+  `stm32h573-dk` accept each other's records for it.
+- **That the ledger controls anything.** `issued.jsonl` in the endorser's state directory lists the records the tool
+  signed, for audit. Nothing reads it to decide anything: a record not in it (signed by another program with the
+  key) is accepted by verifiers all the same, and deleting a line revokes nothing.
 
 ## The record
 
@@ -135,7 +165,16 @@ that refuses every endorsement (one bad entry must not leave the rest looking li
 `"revoked": true` on an entry refuses every record that endorser signed.
 
 Per endpoint: `"endorsement": "required"`. Optional `"endorsement_file"`; the default is
-`endorsements/<name>.json` beside the policy.
+`endorsements/<name>.json` beside the policy. Optional `"endorsement_sha256"`: the one record this entry accepts,
+named by its `record_sha256`, SHA-256 over the canonical JSON (`common/wire.py`) of `{"body": ..., "sig": ...}`,
+the name the endorser prints, the verdicts carry and `fleet.py enroll-endorsed` writes into the entry. It does not
+depend on the file's white space or on the `device_pk` copy beside the signature, and since ML-DSA signatures are
+randomised, two records for the same body have different names. Entry names (and so record names) are letters,
+digits, `.`, `_` and `-`, at most 64, not starting with a dot: they become file names.
+
+At the top level, optional `"max_endorsement_age_s"`: a record issued longer ago than that, on the verifier's clock,
+is refused (an entry may set its own). A value that is not a positive whole number refuses the entries; it never
+means "no limit".
 
 With `"endorsement": "required"`, an endpoint is admitted only if all of this holds, and the first six are decided
 **before the endpoint is contacted**:
@@ -148,7 +187,8 @@ With `"endorsement": "required"`, an endpoint is admitted only if all of this ho
 4. the record names this entry's `name`, its kind and (for kinds that have one) its pinned profile;
 5. the record names exactly the pinned key: SHA-256 of the key file equals `device_pk_sha256`. A key file that was
    replaced is refused here (`substituted key`);
-6. the record has not expired on this verifier's clock;
+6. the record has not expired on this verifier's clock, is the one the entry pins (`endorsement_sha256`, if set) and
+   is not older than `max_endorsement_age_s` (if set);
 7. the quote is signed by that key for this cycle's challenge (as before);
 8. every component of the quote is in the policy's `allowed` list (as before), **and** the quote's components are
    exactly the endorsed ones: each reported component is an endorsed one, by the endorsed signer where the record
@@ -170,37 +210,50 @@ Rule 8 means new firmware needs a new endorsement (and a new reference in `allow
 The other way to build this, a signed list of reference values kept apart from the per-device record, is an open
 question (see the end).
 
-Limits of the rules: the verifier's clock decides expiry, so a gateway whose clock is behind accepts a record
-longer; `issued` is not checked against the clock at all (a gateway that boots with a clock in the past must not
-lock its fleet out). Revocation is per endorser; to drop one device, delete its record or its entry.
+Limits of the rules: the verifier's clock decides expiry and age, so a gateway whose clock is behind accepts a record
+longer; `issued` is not checked against the clock otherwise (a gateway that boots with a clock in the past must not
+lock its fleet out). Revocation is per endorser; to drop one device, delete its record or its entry. Without
+`endorsement_sha256` an older record of a trusted endorser for the same name, family and key is as good as the newest
+(a rollback for whoever can write `endorsements/` and the key file): pin the record. Whoever can write the policy can
+change the pin as well (limitation 11). `fleet.py check` says for each entry whether its record is pinned, and warns
+30 days before a record expires or reaches the maximum age.
+
+A session stored by the gateway for an entry is kept only while the cycle's quote is by the key the session was made
+for: a session from before the entry required an endorsement, or from before a `--force` re-enrolment, is dropped and
+a new one is provisioned to the endorsed key.
 
 ## Atomic enrolment
 
 A partial or failed enrolment leaves no trusted entry. There are two places where something is written.
 
-**The endorser** (`aegis_provision.py endorse`) writes one file per device and nothing else. The record is built and
-signed in memory and checked the way a verifier will check it: the bytes that will be written, parsed again,
+**The endorser** (`aegis_provision.py endorse`) writes one file per device and nothing else. Nothing is signed
+before the operator has confirmed the address and the key. The record is built and signed in memory and checked the way a verifier will check it: the bytes that will be written, parsed again,
 against the endorser's own public key and the device key just read; then the whole of it, with a second quote from
 the device attested by the verifier's code with the record required. Only then is it logged in the endorser's
 ledger, written under a temporary name in the destination directory, flushed, and renamed. A device that does not
 answer, a quote that is not admitted, a record that fails its own check or would not admit the device it was made
 from, a disk that is full: no file.
 
-**The verifier** (`fleet.py enroll-endorsed POLICY RECORD...`) has two files per device, the record and the key.
+**The verifier** (`fleet.py enroll-endorsed POLICY RECORD...`) writes three files per device: the record, the key and
+the policy, whose entry for the device gets `"endorsement_sha256"` (the previous policy is kept as `POLICY.bak`).
 It checks the record against the policy's trusted endorsers and the entry it names, refuses if another key is
-already pinned for that entry (`--force` replaces it), writes both files under temporary names, reads those back and
-checks them once more, and renames the record first and the key last. The order is the point:
+already pinned for that entry or the installed record was issued later than this one (`--force` overrides both), and
+refuses if the entry in the policy file changed since it was read. Then it writes all three under temporary names
+(exclusive, random names in the same directory) and renames the record first, the key next and the policy last. The
+order is the point:
 
 | Stopped | On disk | Trusted |
 |---|---|---|
 | before the first rename | nothing new | nothing new |
-| between the renames, by an error | the record is removed again (or the previous record put back) | what was trusted before |
-| between the renames, by a crash or power cut | the new record, and no key or the old key | nothing new: a required endorsement finds no key, or a key the record does not name; an entry without the requirement finds no key, or the key it had |
-| after the second rename | record and key | the endorsed key |
+| after a rename, by an error | each file already renamed is put back as it was (or removed) | what was trusted before |
+| between record and key, by a crash or power cut | the new record, and no key or the old key | nothing new: a required endorsement finds no key, or a key the record does not name; an entry without the requirement finds no key, or the key it had |
+| between key and policy, by a crash | the new record and key, the old pin (or none) | an entry that pinned another record: nothing (fail closed until the command is run again); one without a pin: the new, fully checked record |
+| after the last rename | record, key, pin | the endorsed key, this record only |
 
-The key file is what an entry without `"endorsement": "required"` trusts, so it goes in last, after everything has
-been checked. Run the command again to finish an interrupted enrolment (with `--force` if it stopped a
-re-enrolment half way).
+The key file is what an entry without `"endorsement": "required"` trusts, so it goes in after the record has been
+checked; the pin goes in last. Run the command again to finish an interrupted enrolment (with `--force` if it
+stopped a re-enrolment half way). The policy file is rewritten as JSON with an indent of one; nothing else in it
+changes.
 
 ## Procedure for the bench operator
 
@@ -217,27 +270,37 @@ no hierarchy auth is touched.
 Per device:
 
 1. Put the device where only it can answer at its address: a direct cable, or the bench LAN with nothing unknown on
-   it. Note the board's serial number.
-2. Have a policy file with an entry for the device: its address, kind, profile and the reference measurements in
-   `allowed`. The gateway's policy is the natural one; the tool only reads it.
+   it. Note the board's serial number and its address, as you know them (not as a policy says).
+2. The endorser's reference, once per firmware release: the device's name (the verifier's entry name), kind,
+   profile and reference measurements. Draft it from a policy and review it:
+
+       .venv/bin/python provision/aegis_provision.py reference POLICY.json DEVICE [DEVICE...]
+
+   It writes `~/.local/state/aegis-endorser/reference.json` (`--reference FILE` for another place; `--force` to
+   replace one) and prints it. No address is copied. Review every measurement against the build that produced the
+   firmware: the endorser holds devices to these values, and a value that came from a policy someone else can edit
+   is only as good as that policy. Add `"host"` and `"port"` to a device here if its address is fixed, or give
+   `--host` at each endorsement.
 3. Endorse:
 
-       .venv/bin/python provision/aegis_provision.py endorse POLICY.json DEVICE --out records/ \
-           --serial "<board serial>" --notes "<where and how it was connected>"
+       .venv/bin/python provision/aegis_provision.py endorse DEVICE --host ADDRESS:PORT --out records/ \
+           --serial "<board serial>" --notes "<where and how it was connected>" [--expect-key-sha256 HEX]
 
-   It prints one JSON object. `"endorsed": true` with the key's hash, the family, the components and `elapsed_s`,
+   It shows the address, the device key's SHA-256 and the components, and asks for `yes`. Check the address is the
+   cable you mean and, for a board endorsed before, that the key is the one in its earlier record. It prints one
+   JSON object: `"endorsed": true` with the address, the key's hash, the family, the components and `elapsed_s`,
    or `"endorsed": false` with the reasons and no file. `--valid-days N` makes the record expire;
    `--device-state closed` is for a device whose debug port and boot chain have been closed (none here).
 4. Give the record to each verifier and let it enrol:
 
        python3 fleet.py enroll-endorsed POLICY.json records/DEVICE.json
 
-   `enrolled DEVICE: ...` or `REFUSED ...: <why> (nothing was enrolled from it)`. If it says another key is
-   already pinned, stop: the device shows another key than the one this verifier has been trusting. Find out why
-   before `--force`.
+   `enrolled DEVICE: ... POLICY.json pins record <record_sha256>` or `REFUSED ...: <why> (nothing was enrolled from
+   it)`. If it says another key is already pinned, stop: the device shows another key than the one this verifier
+   has been trusting. Find out why before `--force`.
 5. Add `"endorsement": "required"` to the entry (once the verifier's policy lists the endorser), and look at
-   `fleet.py check POLICY.json`: `enrolment: endorsed by bench-pc (record ..., device key ..., device state
-   development)`.
+   `fleet.py check POLICY.json`: `enrolment: endorsed by bench-pc (record ..., pinned by endorsement_sha256, device
+   key ..., device state development, issued ...)`.
 
 A whole enrolment is three requests to the device (its key and two quotes) and a handful of signature checks: about
 15 ms against the SDK's core on the PC, and the device's own time for two ML-DSA-65 signatures on a board. The tool reports `elapsed_s` per
@@ -246,29 +309,40 @@ device; the target is under a minute including the operator's typing.
 ## Runbook: this bench (two STM32H573I-DK, FRDM-RW612, PolarFire gateway)
 
 Run from the checkout on the bench PC. Addresses come from `bench.env` (git-ignored: a fresh worktree has none, so
-source the one of the main checkout); only `GATEWAY` is used, the endpoints' addresses are the ones in the gateway's
-policy. Nothing here touches a board's flash, a programmer or a device's lifecycle; every step on the gateway has its undo at the end. The entries are assumed to be
+source the one of the main checkout); only `GATEWAY` is used. The endpoints' addresses are **not** taken from the
+gateway's policy: the operator sets `DK1`, `DK2` and `RW` to the address and port of each board as the operator knows
+it (its console, the switch port, the DHCP lease of that MAC), and the endorser shows what answered there. Nothing here touches a board's flash, a programmer or a device's lifecycle; every step on the gateway has its undo at the end. The entries are assumed to be
 named as in `gateway/policy/fleet.pc.example.json`: `stm32h573-dk`, `stm32h573-dk-2`, `frdm-rw612`.
 
-**1. The endorser, and the gateway's policy as the reference.**
+**1. The endorser, and its reference drafted from the gateway's policy, then reviewed.**
 
     set -a; . ./bench.env; set +a
     PY=.venv/bin/python; W=~/.local/state/aegis-endorser/bench; GW=root@$GATEWAY; GP=/root/aegis/gateway/policy
     BK=/root/aegis-backup-endorsement-$(date +%Y%m%d-%H%M%S); IN=/root/aegis-incoming/endorsement; echo $BK
-    $PY provision/aegis_provision.py init --name bench-pc
+    DK1=<address>:7444; DK2=<address>:7444; RW=<address>:7444      # as the operator knows them, not from a policy
+    $PY provision/aegis_provision.py init --name bench-pc               # once; it refuses if the key exists
     $PY provision/aegis_provision.py show
     mkdir -p $W/keys && scp -o BatchMode=yes $GW:$GP/fleet.json $W/fleet.json
     scp -o BatchMode=yes $GW:$GP/keys/tfm-dev-iak.pub.pem $W/keys/
+    $PY provision/aegis_provision.py reference $W/fleet.json stm32h573-dk stm32h573-dk-2 frdm-rw612 \
+        --reference $W/reference.json
 
-**2. Endorse the three devices** (the fleet service may keep running: the tool asks for a key and two quotes; if a
-request meets the service's, it is retried, and `"busy"` in the reasons means run the line again):
+Review `$W/reference.json` before going on: the STM32s' `SPE` and `NSPE` values against the TF-M build and the
+evidence of the last flash (`docs/board-changes.md`), the RW612's against its build. The file has no addresses.
 
-    for n in stm32h573-dk stm32h573-dk-2 frdm-rw612; do
-        $PY provision/aegis_provision.py endorse $W/fleet.json $n --out $W/records --notes "bench LAN"
-    done
+**2. Endorse the three devices**, one at a time, each confirmed at the prompt (the fleet service may keep running:
+the tool asks for a key and two quotes; if a request meets the service's, it is retried, and `"busy"` in the
+reasons means run the line again). For a board endorsed before, add `--expect-key-sha256` with the
+`device_pk_sha256` of its earlier record.
 
-Three objects with `"endorsed": true` and `elapsed_s`; three files in `$W/records`. Add `--serial` per board if the
-serials should be in the records (they stay on the bench: do not publish them).
+    $PY provision/aegis_provision.py endorse stm32h573-dk   --reference $W/reference.json --host $DK1 --out $W/records --notes "bench LAN"
+    $PY provision/aegis_provision.py endorse stm32h573-dk-2 --reference $W/reference.json --host $DK2 --out $W/records --notes "bench LAN"
+    $PY provision/aegis_provision.py endorse frdm-rw612     --reference $W/reference.json --host $RW  --out $W/records --notes "bench LAN"
+
+Each prompt shows the address, the key's SHA-256 and the components; type `yes` only if the address is the board
+meant and, for the two STM32s, the two keys differ. Three objects with `"endorsed": true` and `elapsed_s`; three files
+in `$W/records`. Add `--serial` per board if the serials should be in the records (they stay on the bench: do not
+publish them).
 
 **3. The new verifier code on the gateway, old files kept.** The first line shows whether the gateway runs the
 `fleet.py` of `main` (the two hashes are equal) or something newer that this would overwrite; the backup is taken
@@ -292,7 +366,9 @@ put in place on the gateway by a rename, because the loop reads it every cycle.
     ssh -o BatchMode=yes $GW "cd /root/aegis/gateway/aegisd && python3 fleet.py enroll-endorsed ../policy/fleet.json $IN/records/*.json"
     ssh -o BatchMode=yes $GW "systemctl restart aegis-fleet && sleep 75 && journalctl -u aegis-fleet -o cat --no-pager -n 14"
 
-Expected: three `enrolled ...` lines, none needing `--force` (the key each device showed at the bench is the key the
+Expected: three `enrolled ... pins record <record_sha256>` lines, none needing `--force`; the gateway's
+`fleet.json` now has `"endorsement_sha256"` in each of the three entries, and the policy before that is in
+`fleet.json.bak` (the key each device showed at the bench is the key the
 gateway has pinned all along; if one is refused with `another key is already pinned`, stop here and find out why).
 After the restart there is one warning line per endpoint (`enrolment: trust on first use: ...`), and the three
 endpoints are `ADMITTED ... [credential: valid, heartbeat N ...] [trust on first use]`: their sessions were kept.
@@ -305,15 +381,18 @@ quote requests and changes nothing (the head of the file lists what it does).
 
 Both exit 0 with `"ok": true`. In the first, `E9_control_trust_on_first_use` is `"admitted": true`: board 2 under
 board 1's name with board 2's key is admitted when the key is only pinned, and refused at E3 to E5 when it must be
-endorsed. In the second E9 is not applicable (two families).
+endorsed. In the second E9 is not applicable (two families). E11 (`"admitted": false`, `is not the one the policy
+pins`) shows the pin is checked; `E1_record_pinned` is the pin the entry has.
 
-**6. The switch.**
+**6. The switch.** The policy is fetched again first: `enroll-endorsed` wrote the pins into it.
 
+    scp -o BatchMode=yes $GW:$GP/fleet.json $W/fleet.gw.json
     $PY -c 'import json,sys; f=sys.argv[1]; p=json.load(open(f)); [e.update(endorsement="required") for e in p["endpoints"] if e["name"] in sys.argv[2:]]; json.dump(p,open(f,"w"),indent=1)' $W/fleet.gw.json stm32h573-dk stm32h573-dk-2 frdm-rw612
     scp -o BatchMode=yes $W/fleet.gw.json $GW:$GP/fleet.json.new && ssh -o BatchMode=yes $GW "mv $GP/fleet.json.new $GP/fleet.json"
     ssh -o BatchMode=yes $GW "cd /root/aegis/gateway/aegisd && python3 fleet.py check ../policy/fleet.json; sleep 75; journalctl -u aegis-fleet -o cat --no-pager -n 10"
 
-`check` prints `enrolment: endorsed by bench-pc (...)` under each of the three and exits 0; the journal's next cycle
+`check` prints `enrolment: endorsed by bench-pc (record ..., pinned by endorsement_sha256, ...)` under each of the
+three and exits 0; the journal's next cycle
 has `ADMITTED ... [credential: valid, heartbeat N ...] [endorsed by bench-pc]` for each: the sessions are kept.
 
 **7. A substituted key and a missing record, through the running service.** Optional, and it costs board 2 its
@@ -352,6 +431,8 @@ printed. `endorsements/`, `endorsers/` and `$IN` can stay or be deleted. No devi
 |---|---|
 | endorsed accepted; unendorsed, substituted, another device's record, another family, untrusted or revoked endorser, tampered, wrong label, unknown claim, expired, other or missing components: refused; the same substitution admitted under trust on first use | `tests/host/test_endorsement.py` (`Accepted`, `Refused`) |
 | partial enrolment: failed appraisal, silent device, unwritable record, a record that fails its own check or would not admit its own device, an install that fails or dies between its two files, a failed re-enrolment | `tests/host/test_endorsement.py` (`Enrolment`) |
+| an older record copied back refused once pinned; the pin written with the record and key, put back on failure; an older record not installed over a newer one; `max_endorsement_age_s` and `check`'s warning | `tests/host/test_endorsement.py` (`Superseded`) |
+| the endorser's reference: a policy refused as one, no address copied from a policy, `--host`, the operator's confirmation, `--expect-key-sha256`, names that are not file names | `tests/host/test_endorsement.py` (`Reference`, `Review`) |
 | the SDK's core as built, enrolled with the commands it has, then a session bound by the transcript | `tests/host/test_endorsement.py` (`SdkCore`) |
 | the endorser's key: a 0600 file, or sealed to a TPM (swtpm) | `tests/host/test_endorsement.py` (`EndorserKey`) |
 | 2000 hostile record files (mutated bytes, edited claims, a key the policy does not list, the endorser's signature under other labels or for another device, family or key, random JSON): none makes a key trusted, nothing but `Refused` is raised, the endpoint is never contacted | `tests/redteam/fuzz_host.py`, section 5 |
@@ -363,12 +444,13 @@ printed. `endorsements/`, `endorsers/` and `$IN` can stay or be deleted. No devi
    firmware means endorsing each device again. A signed reference manifest per firmware release, with the device
    record naming only key and family, would separate the two roles (RATS calls them endorser and reference value
    provider) at the price of a second signed format.
-2. **Expiry by default.** Records do not expire unless the operator asks. A default lifetime would bound a stolen
-   endorser key's reach in time, and would make an unattended fleet fail closed on a date.
+2. **Expiry by default.** Records do not expire unless the operator asks (`--valid-days`), and a verifier bounds
+   their age only if its policy says `max_endorsement_age_s`. A default lifetime would bound a stolen endorser key's
+   reach in time, and would make an unattended fleet fail closed on a date.
 3. **Revoking one device, and old records.** There is no signed revocation: a device is dropped by removing its
-   record or entry at each verifier. Nor is there a sequence number: an older record by the same endorser for the
-   same device and key is as valid as the newest one, so whoever can write the verifier's `endorsements/` can put
-   an earlier record back (earlier firmware, which the policy's `allowed` list then has to refuse on its own).
+   record or entry at each verifier. Old records are superseded only per verifier, by the pin in its policy
+   (`endorsement_sha256`): there is no sequence number in the record, so a verifier whose entry has no pin accepts
+   an older record by the same endorser for the same device and key as readily as the newest one.
 4. **The policy file is not signed.** Whoever can write it decides everything (above). A policy signed by the
    endorser, or by a second key, would be the next step.
 5. **Rooting the device key in the manufacturer's identity** (ST's device certificate, NXP's, the ZynqMP's device
