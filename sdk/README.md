@@ -236,7 +236,7 @@ Nothing of these is in version 1; the seams are marked in `src/aegis_proto.c`.
 | What | Where |
 |---|---|
 | The gateway's code against the core on the PC | `tests/host/test_rw612_proto.py` and the tests that import it |
-| The same answers as before the SDK, byte for byte, for a fixed generator | `tests/host/test_sdk_golden.py`, `tools/sdk_golden.py` (records from the commit before the SDK, and compares whole fuzz corpora) |
+| The same answers as before the SDK, byte for byte, for a fixed generator | `tests/host/test_sdk_golden.py` against `vectors/sdk-golden/`; `tools/sdk_golden.py` records them from the commit before the SDK and compares whole fuzz corpora (`evidence/sdk-core/summary.txt`) |
 | One fuzz harness on the core, both transports, every configuration, with an independent model of the protocol | `tests/fuzz/fuzz_sdk_core.c`, `tests/fuzz/run.sh`; seeds of all families in `tests/fuzz/seeds` |
 | The STM32 port's own code (PSA messages, the RTC, the stack mark) on PC stand-ins | `tests/fuzz/stm32`, `STM32=1 tests/fuzz/run.sh`, `tests/host/test_stm32_partition.py` |
 | The OP-TEE port on a stand-in for OP-TEE | `endpoints/zynqmp/optee/tests/run.sh` |

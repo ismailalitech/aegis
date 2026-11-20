@@ -1,0 +1,64 @@
+# Prover SDK (WP9): what was run on the build PC, 20 November 2026. No board, programmer or gateway was used.
+# Source: this commit (sdk/, the ports under endpoints/, tests/fuzz). Reference for "before": commit eb82532
+# (the STM32 partition's own protocol code, SPE 3183f74a on both boards; the RW612's aegis_proto.c).
+
+## Host tests
+.venv/bin/python -m unittest discover -s tests/host      220 tests, OK (3 skipped: pycryptodome not installed; two need this machine's TPM)
+.venv/bin/python tests/redteam/fuzz_host.py 2000         "broken": []
+endpoints/zynqmp/optee/tests/run.sh                      Aegis TA on the PC: all checks passed
+
+## The same answers as before, byte for byte (tools/sdk_golden.py; a fixed random generator)
+seeds, STM32 partition   30 of 30 traces equal (vectors/sdk-golden/stm32-partition.json)
+seeds, line protocol     18 of 18 traces equal (vectors/sdk-golden/line-protocol.json)
+tools/sdk_golden.py diff --kind stm32 --corpus <fuzz corpus>   stm32: 704 inputs through eb82532 and today's code, 0 differ
+tools/sdk_golden.py diff --kind line  --corpus <fuzz corpus>   line: 478 inputs through eb82532 and today's code, 0 differ
+(the line comparison takes the corpus files in the first input format; the old harness does not know the others)
+
+## Fuzzing (libFuzzer, ASan, UBSan, clang 18; 200 s, 4 workers each; the oracle is the harness's own model)
+tests/fuzz/run.sh 200 4            the SDK's core, both transports, every configuration   57395 runs, corpus 1009, no finding
+STM32=1 tests/fuzz/run.sh 200 4    the STM32 port on stand-ins for TF-M                   55298 runs, corpus 704, no finding
+
+## STM32H573 secure image (endpoints/stm32h573/tfm-aegis-partition/build_tfm.sh, OUT=~/aegis-tools/tfm-aegis-build-sdk)
+tfm_s_signed.bin sha256 0659154dce122f50065b3b7ae485ec14acd1ff38997cc592f63104f7dbc4ada4
+tfm_s_signed.hex sha256 3f023b7c0a3f92f735335a7997a68f488228f98015cf698ba78f73ba737f442c
+"version": "2.3.0",
+"measurement_value": "b876213a373511d04f6045d42c1d7402eecf25b94fe9f4cb87448af7667bba8e",
+"signer_id": "e30466f6b8470c1f29070b17f1e2d3e94d445e3f608087fdc711e4382bb538b6"
+the commit before, rebuilt the same way in another directory: measurement 3183f74a02e5f7bedb20fa38d22a556a2ce6c57afa928c1d4f4c3bebe5c5ece4 (the image on the boards: the build is reproducible)
+
+## Stack (tools/stack_estimate.py: GCC -fstack-usage frames along the image's call graph)
+before (eb82532): deepest path 18712 bytes; the boards report sstack=18880/26624
+aegis_pq_service_sfn: 18728 bytes
+      40  aegis_pq_service_sfn
+      56  aegis_prover_quote
+      80  sign_work
+    1480  aegis_mldsa_signature_internal
+   15520  mld_attempt_signature_generation
+     128  aegis_mldsa_polyvec_matrix_pointwise_montgomery_yvec_lazy
+    1096  aegis_mldsa_poly_uniform
+      16  aegis_mldsa_shake128_absorb
+      32  keccak_absorb
+     280  mld_keccakf1600_permute_c
+
+aegis_pq_init: 16368 bytes
+      40  aegis_pq_init   [static,ignoring_inline_asm]
+      24  aegis_prover_init
+   11584  aegis_mldsa_keypair_internal
+    3176~  mld_compute_pack_t0_t1.isra.0
+     120  aegis_mldsa_polyvec_matrix_pointwise_montgomery_row_lazy
+    1096  aegis_mldsa_poly_uniform
+      16  aegis_mldsa_shake128_absorb
+      32  keccak_absorb
+     280  mld_keccakf1600_permute_c
+
+
+sizes (text data bss), before and now:
+165752 220 111924
+168888 220 111444
+
+## RW612 TF-M images (west build --sysbuild endpoints/rw612/tfm/prover_ns, into ~/aegis-tools/rw-tfm/prover-sdk; 0 warnings)
+aegis_s.bin   sha256 ce6e5121bef6a3a4a5bd10df24ba06f64072e3d1954703b1d791779b4b031081   (0.3.1)
+prover_ns.bin sha256 9af83bab97f8dfcf4a16491a36d218a306ccaef83d93a593491885ed84dd58b5   (byte for byte 0.2.2's)
+SPE   b48d2ecf2f36e52f9f708e6b7b65a5b85b35ce0fdbc12f0f23c9e191ecfa486f
+NSPE  24979a1f03fa24d4c038de11f8da9e7dd0e5b656683783b072b140fd8925694c
+secure RAM 161796 B of 192 KB (176924 B for 0.3.0)

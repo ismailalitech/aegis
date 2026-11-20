@@ -19,8 +19,8 @@ What the disassembly cannot show is added by hand:
 
 The figure is the partition's own frames. The boards report a little more in the heartbeat status (sstack=): the
 service is entered through TF-M's secure function wrapper, and psa_call, psa_read and psa_write run on this stack
-as far as TF-M's thread-mode veneers. The difference was 176 bytes for the image before the SDK (18712 against the
-18888 the boards report): add it to compare a new figure with the stack's size (0x6800 = 26624).
+as far as TF-M's thread-mode veneers. For the image before the SDK the difference was 168 bytes (18712 here against
+the 18880 the boards report): add it to compare a new figure with the stack's size (0x6800 = 26624).
 """
 import argparse
 import collections

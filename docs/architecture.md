@@ -63,16 +63,71 @@ flowchart LR
 | `gateway/policy/fleet.json` | PolarFire | endpoints, enrolled keys, allowed measurements, pinned claims profiles |
 | `hw/rtl` | PolarFire fabric, FIC3 APB slot 14 | version 2: the SHA-3 sponge kept in the fabric, squeezed blocks by DMA into DDR, and the FIPS 203/204 NTT (`docs/accelerator-v2.md`) |
 | `gateway/pqc` | PolarFire Linux | user-space driver, self-test, liboqs SHA-3 provider (`AEGIS_PQC_SPONGE=hw`; the services do not set it) |
-| `endpoints/stm32h573/tfm-aegis-partition` | STM32 secure world | device key, quotes, ML-KEM provisioning, mutual authentication, KMAC heartbeats |
+| `sdk/` | every endpoint's secure side, and the PC | the Prover SDK: the protocol core all devices build (`sdk/src/aegis_proto.c`), its platform interface, a reference port for the PC and a prover for Linux user space (below, and `sdk/README.md`) |
+| `endpoints/stm32h573/tfm-aegis-partition` | STM32 secure world | the SDK's port: device key from the DHUK, TF-M's token as evidence, the RTC as session clock, the service's PSA messages; the core does quotes, ML-KEM provisioning, mutual authentication, KMAC heartbeats |
 | `endpoints/stm32h573/prover-ns` | STM32 non-secure world | Ethernet (lwIP, LAN8742A) and the line protocol; holds no keys |
-| `endpoints/rw612/tfm` | RW612: TF-M partition `aegis_pq` and the non-secure `prover_ns` | the partition runs the protocol code (`endpoints/rw612/prover/src/aegis_proto.c`) on every line; the non-secure side only carries the network |
+| `endpoints/rw612/tfm` | RW612: TF-M partition `aegis_pq` and the non-secure `prover_ns` | the partition runs the SDK's core on every line (`aegis_pq/aegis_pq.c` is its port: ELS key and DRBG, secure SysTick, the two measurements); the non-secure side only carries the network |
 | `endpoints/rw612/prover` | RW612, Zephyr (the first, single-image prover) | same protocol code; it measures itself, labelled device-key trust; superseded on the bench by the TF-M version |
 | `endpoints/arduino-uno` | Arduino Uno, through `host/serial_bridge.py` | a node with no keys and no measured boot: always quarantined |
 | `endpoints/zybo` | the Linux prover, first written for a Zybo Z7-10; that board is retired and the Zynq UltraScale+ endpoint replaces it | the same protocol in Python; key in a file, measurements by the running Linux, labelled software trust; it ran on the ZynqMP for the software-trust step (`evidence/zynqmp/software-trust.txt`) |
 | `endpoints/zynqmp` | Trenz TE0807 (XCZU4EG), Debian 12 on the A53s, boot chain built here (Vitis 2025.2 FSBL, TF-A, U-Boot) | first the Linux prover (software trust); since 18 November 2026 the Aegis TA in OP-TEE on the A53s, Linux only carrying the lines; admitted as `zynqmp-te0808`; since 19 November with the key bound to the chip's PUF (encrypted, boot-header-authenticated boot, no eFUSE) and trustzone trust (`docs/zynqmp-key-design.md`) |
 | `host/` | PC or any Linux host | gateway verifier, console tools, the Arduino relay |
 | `common/` | gateway and host | wire formats (a CBOR decoder that refuses maps with non-scalar or repeated keys, `tests/host/test_cbor_keys.py`), KMAC, and ML-DSA/ML-KEM through OpenSSL 3.5+ or liboqs (`AEGIS_PQ_BACKEND`) |
-| `tests/fuzz` | PC and CI | libFuzzer harnesses for both endpoint partitions, with a model of the protocol |
+| `tests/fuzz` | PC and CI | libFuzzer harnesses with a model of the protocol: one on the SDK's core for both transports and every configuration, one on the STM32 port's own code (PSA messages, the RTC, the stack mark) |
+
+## The Prover SDK: one protocol source, a platform layer per chip
+
+Since 20 November 2026 every device builds the same protocol source, `sdk/src/aegis_proto.c`, the core of the
+Prover SDK (`sdk/README.md` is the guide for a device maker, `sdk/include/aegis_sdk.h` the interface). Until then
+the STM32 partition carried 1100 lines of its own for the same protocol. A device is now three parts:
+
+- **the core**: quote, exchange, credential check, transcript, heartbeat and the session's end. It allocates
+  nothing, includes nothing of TF-M, Zephyr, OP-TEE or a vendor HAL, and keeps its state in a context and one work
+  buffer the port provides (13.2 KB and 1.2 to 2.9 KB);
+- **a platform file**: randomness, a clock, the measurements or a finished token, the identity seed or a signing
+  function, a status text. A function that fails makes the core refuse the request;
+- **a transport**: the core is a function from one request to one reply, as a text line
+  (`aegis_prover_handle_line`, what the gateway speaks) or as binary operations (`aegis_prover_quote` and the
+  others, which the STM32's PSA messages map onto one to one).
+
+| | STM32H573 (TF-M) | RW612 (TF-M) | RW612 (single image) | ZynqMP (OP-TEE) | Linux | PC (reference port) |
+|---|---|---|---|---|---|---|
+| Platform file | `endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c` | `endpoints/rw612/tfm/aegis_pq/aegis_pq.c` | `endpoints/rw612/prover/src/main.c` | `endpoints/zynqmp/optee/ta/aegis_ta.c` | `sdk/ports/linux/aegis_port_linux.c` | `sdk/ports/host/aegis_port_host.c` |
+| Identity seed | AES-256(DHUK) in SAES | ELS: HMAC(CKDF(die key)) | the same | OP-TEE's hardware unique key, per TA | random at first start, in a file | an argument |
+| Randomness | TF-M crypto service (the RNG peripheral) | ELS DRBG | Zephyr entropy driver | `TEE_GenerateRandom` | `getrandom` | `getrandom` |
+| Clock | RTC on the LSI, made secure, 250 Hz | secure SysTick | Zephyr uptime | OP-TEE system time, protection level 1000 | `CLOCK_BOOTTIME` | `CLOCK_MONOTONIC` |
+| Evidence | TF-M's PSA token (`evidence`) | SPE and NSPE, hashed before the non-secure image runs | APP, hashed at every quote | the FSBL's hand-off | files, hashed at every quote | files, hashed at every quote |
+| Transport | PSA messages, binary operations | lines in one PSA message | lines over TCP | lines in one TA command | lines over TCP | lines over TCP |
+| Trust the profile claims | hardware | hardware | device key | hardware (with the PUF seed) | software | none (tests) |
+
+**The same answers as before.** The STM32 port had to stay byte-compatible with the image on the boards (SPE
+3183f74a): same messages, sizes, PSA statuses, signatures, keys and tags. `tools/sdk_golden.py` builds the harnesses
+of the commit before the SDK with a trace of every byte answered, and `tests/host/test_sdk_golden.py` holds the
+new code to the recorded traces for a fixed generator (30 STM32 seeds, 18 line-protocol seeds); the same
+comparison ran over the fuzzers' corpora (704 STM32 inputs and 478 line-protocol inputs after 200 s of fuzzing
+each: none differs, `evidence/sdk-core/summary.txt`). Two habits of the STM32 partition differ from the other devices and are kept behind
+compatibility flags of the core: its heartbeat counter runs from boot across sessions, and it does not require the
+credential to name the device's key (it requires the exchange's ML-KEM key, which no other device has). One thing
+changed for the other families: a random draw of 32 zero bytes for an exchange's key is now refused everywhere
+(`ERR rng`), as the STM32 partition already did.
+
+**State.** The core needs no persistent storage, and a port must not give it any: the session and the quote an
+exchange may continue live in the context, which `aegis_prover_init` wipes at every start.
+
+**What it does not change.** The protocol, the limits of the transcript above (an image that holds the key and
+lies; a key that depends on the measured code is the remedy, and belongs in the platform's identity functions),
+and the trust each endpoint claims. Endorsed enrolment and an EAT/COSE encoding are later work; `sdk/README.md`
+names the functions they attach to.
+
+What was built from this source (none of it is on a board; the boards run the images of "One transcript" below):
+
+| Device | Image | State |
+|---|---|---|
+| STM32H573 (TF-M) | `...-freshkem-transcript-sdk`, SPE b876213a, the same MCUboot version (2.3.0) and signer as the image on the boards | built with `build_tfm.sh`; held to the answers of SPE 3183f74a byte for byte on the PC; deepest stack path by GCC's figures 18728 bytes (`tools/stack_estimate.py`; 18712 for the image on the boards, which report `sstack=18880/26624`, so about 18896 is expected); 480 bytes less secure RAM, 3.1 KB more flash |
+| RW612 (TF-M) | secure image 0.3.1, SPE b48d2ecf; the non-secure image is byte for byte 0.2.2's (NSPE 24979a1f) | built; secure RAM 176924 to 161796 bytes of 192 KB (the core no longer copies the credential, the claims and the gateway's key) |
+| RW612 (single image) | | source only (no Zephyr workspace on the build PC) |
+| ZynqMP (OP-TEE TA) | | source; `optee/tests/run.sh` runs the TA with the core on a stand-in for OP-TEE (also in CI); no `.ta` built on this PC |
+| Linux | `sdk/ports/linux`, a prover in C with the Python prover's command line, profile and measurements | PC-tested with the gateway's code (`tests/host/test_sdk_linux_port.py`); the bench's Linux endpoints keep the Python prover |
 
 ## Trust anchors
 
@@ -264,7 +319,7 @@ design, are tested in network namespaces only (`tests/host/test_enforcement.sh`,
   (`evidence/console/regression-14of14-20261119.txt`). With `--with-expiry` (or
   `AEGIS_REGRESSION_EXPIRY=1`) also `endpoint-expiry`: the session's end on every endpoint that holds a session
   (`docs/endpoint-expiry.md`), with the fleet service stopped for it and started again afterwards.
-- `tests/fuzz/run.sh` and `STM32=1 tests/fuzz/run.sh`: the endpoint partitions under libFuzzer, ASan and UBSan
-  (also in CI).
+- `tests/fuzz/run.sh` and `STM32=1 tests/fuzz/run.sh`: the Prover SDK's core and the STM32 port under libFuzzer, ASan
+  and UBSan (also in CI). `tools/sdk_golden.py check`: the same answers as before the SDK, byte for byte.
 - `tools/demo.sh`: the end-to-end story on the boards in under 2 minutes.
 - Every board change and how to undo it: `docs/board-changes.md`.

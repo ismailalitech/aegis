@@ -117,7 +117,7 @@ left>`:
 
 The secure console prints the choice at start, for example `[Aegis] session clock: ref, 1015625 Hz` (260 MHz / 256).
 
-## One transcript (0.3.0, built; not yet on the board)
+## One transcript (0.3.0; on the board since 20 November 2026)
 
 The partition keeps the last quote it signed, and a `PQKEMINIT` that carries that quote's challenge continues it: the
 ML-KEM key is signed over the transcript of the quote, the credential must name it, and the session key depends on it
@@ -131,3 +131,16 @@ The non-secure image is unchanged, byte for byte (`prover_ns.bin`, sha256 `9af83
 the gateway policy: `tools/rw612_tfm_reference.py` gives SPE `76f89751c178c99d086c362f8334869bd0b0c691a71cf8a244dd1e609035ee28`
 for this build (`aegis_s.bin`, sha256 `8f7a0197...`; NSPE stays `24979a1f...`). The heartbeat status says
 `fw=rw612-tfm-0.3.0`. On the board: `tests/board/transcript_swap_check.py`.
+
+## On the Prover SDK's core (0.3.1, built; not on the board)
+
+The partition's protocol code is the Prover SDK's core (`sdk/src/aegis_proto.c`), and `aegis_pq/aegis_pq.c` is
+its port to this chip (`sdk/README.md`). The lines, the claims and the status text are as in 0.3.0, except for the
+version they name; one refusal is new: a random draw of 32 zero bytes for an exchange's ML-KEM key answers
+`ERR rng`. The core keeps no copy of the credential, the claims or the gateway's key any more, so the secure image
+uses 161796 bytes of its 192 KB of RAM (176924 before).
+
+The non-secure image is again unchanged, byte for byte (`prover_ns.bin`, sha256 `9af83bab...`):
+`tools/rw612_tfm_reference.py` gives SPE `b48d2ecf2f36e52f9f708e6b7b65a5b85b35ce0fdbc12f0f23c9e191ecfa486f` for
+this build (`aegis_s.bin`, sha256 `ce6e5121...`; NSPE stays `24979a1f...`). The heartbeat status says
+`fw=rw612-tfm-0.3.1`.
