@@ -88,7 +88,11 @@ ap.add_argument("--wait", type=int, default=60, help="seconds to wait for the en
 ap.add_argument("--state", default=fleet.GATEWAY_STATE)
 a = ap.parse_args()
 with open(a.policy) as f:
-    entry = next(e for e in json.load(f)["endpoints"] if e["name"] == a.endpoint)
+    policy = json.load(f)
+entry = next(e for e in policy["endpoints"] if e["name"] == a.endpoint)
+# an entry with "endorsement": "required" is checked against the policy's trusted endorsers (docs/enrolment.md); a
+# policy without them is passed on as before, so the check also runs against a fleet.py from before endorsements
+TRUST = {"endorsers": policy["endorsers"]} if policy.get("endorsers") else {}
 base = os.path.dirname(os.path.abspath(a.policy))
 path = a.file or "/tmp/aegis-transcript-swap-%s.json" % a.endpoint
 sk, gid = fleet.load_gateway_identity(a.state)
@@ -122,7 +126,7 @@ def attest(challenge=None, admitted=True):
     if challenge is not None:
         fleet.secrets.token_bytes = lambda n: challenge
     try:
-        v = fleet.attest(bound, psa_token.verify_with_openssl_cli, base, timeout=40)
+        v = fleet.attest(bound, psa_token.verify_with_openssl_cli, base, timeout=40, **TRUST)
     finally:
         fleet.secrets.token_bytes = real
     if "quote" not in v or (admitted and not v["admitted"]):
@@ -142,7 +146,7 @@ def provision(quote, ep=None, lines=None):
         fleet._exchange = tap
     fleet.CRED_LIFETIME_S = a.lifetime
     try:
-        return fleet.provision(ep or bound, base, sk, gid, {}, timeout=40, quote=quote)
+        return fleet.provision(ep or bound, base, sk, gid, {}, timeout=40, quote=quote, **TRUST)
     finally:
         fleet._exchange, fleet.CRED_LIFETIME_S = real, life
 

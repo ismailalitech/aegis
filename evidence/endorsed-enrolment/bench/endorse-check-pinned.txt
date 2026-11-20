@@ -1,0 +1,146 @@
+{
+ "endpoint": "stm32h573-dk",
+ "other": "stm32h573-dk-2",
+ "trusted_endorsers": [
+  "bench-pc"
+ ],
+ "E1_as_enrolled": {
+  "admitted": true,
+  "enrolment": "endorsed",
+  "reasons": [],
+  "endpoint_asked": true,
+  "as_expected": true
+ },
+ "E1_endorsement": {
+  "endorser_name": "bench-pc",
+  "endorser_pk_sha256": "5e8dcbb64e8ec3b8337c1c61ce8292f41b7f690f4b29c83be661c026aefc4aa7",
+  "record_sha256": "21c3ff19a38af52f4be6396822c8c28ccbbb8e21ba1e35eb0a8194e57d852557",
+  "device_pk_sha256": "29b953e6571dbd367bd70c6d3b4ce2206b982bc4b71f29cca01bb54b1f119048",
+  "device_state": "development",
+  "issued": 1795177191
+ },
+ "E1_record_pinned": "21c3ff19a38af52f4be6396822c8c28ccbbb8e21ba1e35eb0a8194e57d852557",
+ "E2_no_record": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: no endorsement record (/tmp/aegis-endorsement-check-8g4vwbvm/none.json)"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E3_substituted_key": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the pinned key (sha256 c9e2aa6e8157ac94...) is not the endorsed key (29b953e6571dbd36...): substituted key"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E4_substituted_key_and_its_record": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the record endorses device 'stm32h573-dk-2', not 'stm32h573-dk'"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E5_substituted_key_at_its_device": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the pinned key (sha256 c9e2aa6e8157ac94...) is not the endorsed key (29b953e6571dbd36...): substituted key"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E5_substituted_key_and_record_at_its_device": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the record endorses device 'stm32h573-dk-2', not 'stm32h573-dk'"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E6_another_device_answers": {
+  "admitted": false,
+  "enrolment": "endorsed",
+  "reasons": [
+   "ML-DSA-65 quote signature invalid (the device that answered does not hold the endorsed key)"
+  ],
+  "endpoint_asked": true,
+  "as_expected": true
+ },
+ "E7_altered_measurement": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E7_altered_device_state": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E7_altered_expiry": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the signature of endorser bench-pc does not verify (record altered, or not signed by that key)"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E8_untrusted_endorser": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: signed by a key that is not a trusted endorser of this policy (cc0f27819f8ceb8c..., calls itself 'bench-pc')"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E8_no_trusted_endorsers": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the policy lists no trusted endorsers (\"endorsers\")"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "E9_control_trust_on_first_use": {
+  "admitted": true,
+  "enrolment": "trust-on-first-use",
+  "reasons": [],
+  "same_firmware_on_both": true,
+  "as_expected": true
+ },
+ "E10_as_enrolled_again": {
+  "admitted": true,
+  "enrolment": "endorsed",
+  "reasons": [],
+  "endpoint_asked": true,
+  "as_expected": true
+ },
+ "E11_another_record_pinned": {
+  "admitted": false,
+  "enrolment": "refused",
+  "reasons": [
+   "endorsement required: the record (21c3ff19a38af52f...) is not the one the policy pins (endorsement_sha256 0000000000000000...): an older or another record"
+  ],
+  "endpoint_asked": false,
+  "as_expected": true
+ },
+ "ok": true
+}

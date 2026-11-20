@@ -1,0 +1,18 @@
+# 2026-11-20, gateway policy switched to "endorsement": "required" for stm32h573-dk, stm32h573-dk-2, frdm-rw612
+# (endorser bench-pc, TPM-sealed key, pk sha256 5e8dcbb64e8ec3b8337c1c61ce8292f41b7f690f4b29c83be661c026aefc4aa7)
+# endorse: 0.566 s, 0.691 s, 0.194 s per device; enroll-endorsed: the three keys equal the keys already pinned.
+12:22:44 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 79 (...;fw=rw612-tfm-0.3.2;...)] [endorsed by bench-pc]
+12:23:19 stm32h573-dk ADMITTED  [credential: valid, heartbeat 92 (...;sstack=18872/26624;...)] [endorsed by bench-pc]
+12:23:19 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 95 (...;sstack=18872/26624;...)] [endorsed by bench-pc]
+# live: board 2's pinned key replaced by board 1's
+12:24:26 stm32h573-dk-2 QUARANTINED endorsement required: the pinned key (sha256 29b953e6571dbd36...) is not the endorsed key (c9e2aa6e8157ac94...): substituted key [credential: revoked]
+# key restored, board 2's record removed
+12:25:34 stm32h573-dk-2 QUARANTINED endorsement required: no endorsement record (.../policy/endorsements/stm32h573-dk-2.json) [credential: revoked]
+# record restored
+12:27:17 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat 96 (...)] [endorsed by bench-pc]
+# full board regression afterwards: passed 14, failed 0 (logs/regression/20261120-132726)
+# 14:05 review fixes deployed (fleet.py, endorsement.py); policy pins endorsement_sha256 for the three entries:
+#   stm32h573-dk 21c3ff19a38a..., stm32h573-dk-2 52acc320ce6a..., frdm-rw612 530596f0ac67...
+# fleet.py check: "pinned by endorsement_sha256" x3, rc 0; sessions kept, [endorsed by bench-pc]
+# endorsement_check.py (stm32h573-dk / -dk-2): ok true, E11 another record pinned -> refused, endpoint not asked
+# full board regression: passed 14, failed 0 (logs/regression/20261120-140652)

@@ -1,0 +1,20 @@
+{
+ "device": "frdm-rw612",
+ "endorsed": true,
+ "device_pk_sha256": "219414c54e7bbf34c7b60f3a35731603124dcda4f424fb267caccdd65835e87d",
+ "record_sha256": "530596f0ac678a743dfb5279a2493e7ed6dd3041e68cb9d6c392bc2220259ae5",
+ "family": "aegis-device/aegis-rw612-tfm-v1",
+ "measurements": [
+  {
+   "type": "NSPE",
+   "measurement_value": "24979a1f03fa24d4c038de11f8da9e7dd0e5b656683783b072b140fd8925694c"
+  },
+  {
+   "type": "SPE",
+   "measurement_value": "c8d0f01223ca59f9223fdee4df675f2eaae3a190ed4b2ef11b0e1816b7d242f7"
+  }
+ ],
+ "device_state": "development",
+ "record": "~/.local/state/aegis-endorser/bench/records/frdm-rw612.json",
+ "elapsed_s": 0.194
+}

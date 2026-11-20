@@ -1,0 +1,20 @@
+{
+ "device": "stm32h573-dk",
+ "endorsed": true,
+ "device_pk_sha256": "29b953e6571dbd367bd70c6d3b4ce2206b982bc4b71f29cca01bb54b1f119048",
+ "record_sha256": "21c3ff19a38af52f4be6396822c8c28ccbbb8e21ba1e35eb0a8194e57d852557",
+ "family": "aegis-pq",
+ "measurements": [
+  {
+   "type": "NSPE",
+   "measurement_value": "1f4110fd8b2a5e93839bccdd37c8ff13d206527bc649fb3e57318117ce6ecb8b"
+  },
+  {
+   "type": "SPE",
+   "measurement_value": "9de7616732cfde9504dd448e8d8075de4a2a95163998228395ad37973ee60979"
+  }
+ ],
+ "device_state": "development",
+ "record": "~/.local/state/aegis-endorser/bench/records/stm32h573-dk.json",
+ "elapsed_s": 0.566
+}

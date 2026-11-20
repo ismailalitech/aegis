@@ -61,7 +61,11 @@ ap.add_argument("--wait", type=int, default=60, help="seconds to wait for the en
 ap.add_argument("--state", default=fleet.GATEWAY_STATE)
 a = ap.parse_args()
 with open(a.policy) as f:
-    ep = next(e for e in json.load(f)["endpoints"] if e["name"] == a.endpoint)
+    policy = json.load(f)
+ep = next(e for e in policy["endpoints"] if e["name"] == a.endpoint)
+# an entry with "endorsement": "required" is checked against the policy's trusted endorsers (docs/enrolment.md); a
+# policy without them is passed on as before, so the check also runs against a fleet.py from before endorsements
+TRUST = {"endorsers": policy["endorsers"]} if policy.get("endorsers") else {}
 base = os.path.dirname(os.path.abspath(a.policy))
 path = a.file or "/tmp/aegis-reset-replay-%s.json" % a.endpoint
 sk, gid = fleet.load_gateway_identity(a.state)
@@ -99,8 +103,9 @@ def exchange(lifetime, lines=None):
         # carries that quote's challenge. After the reset the endpoint has no such quote, so it answers the recorded
         # line with the first version's signature over the same nonce: what B checks stays as it is. (A gateway
         # whose fleet.py is from before the transcript has neither the key nor the function.)
-        quote = {"quote": fleet.quote_to_continue(ep, base, timeout=40)} if hasattr(fleet, "quote_to_continue") else {}
-        return fleet.provision(ep, base, sk, gid, {}, timeout=40, **quote)
+        quote = ({"quote": fleet.quote_to_continue(ep, base, timeout=40, **TRUST)}
+                 if hasattr(fleet, "quote_to_continue") else {})
+        return fleet.provision(ep, base, sk, gid, {}, timeout=40, **quote, **TRUST)
     finally:
         fleet._exchange, fleet.CRED_LIFETIME_S = real, life
 

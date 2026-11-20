@@ -47,8 +47,9 @@ hardware produces**, signed and exchanged with the NIST post-quantum algorithms 
 
 1. The gateway sends a fresh challenge to the endpoint.
 2. The endpoint returns a TF-M attestation token (image measurements, signer ids, the challenge)
-   plus an ML-DSA-65 signature over it from the device key. The first time, the key is enrolled by
-   trust on first use.
+   plus an ML-DSA-65 signature over it from the device key. The key is enrolled once: by trust on
+   first use, or, where the policy requires it, by an endorsement signed at the bench
+   ([enrolment.md](enrolment.md)).
 3. The gateway checks the signature, the nonce and the measurements against its policy. A mismatch
    in any of them means **QUARANTINED**, with the reason logged.
 4. If admitted, the gateway runs an ML-KEM-768 exchange: the endpoint encapsulation key is signed by
