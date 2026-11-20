@@ -812,11 +812,11 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None, facts=None)
             verdict["quote"] = {"challenge": challenge.hex(), "token_sha3_256": _sha3(signed_bytes).hex()}
             if eat_format:
                 ev = eat.read_evidence(signed.payload, pk)
-                facts.update(ueid=ev["ueid"])
+                facts.update(ueid=ev["ueid"], dbgstat=ev["dbgstat"])
                 if (ev["components"] is None) != (kind not in PLAIN_KINDS):
-                    verdict["reasons"].append("EAT evidence refused: kind %s reports %s" % (kind, (
-                        "measurements, not a platform token" if kind in PLAIN_KINDS else
-                        "the platform's token, not measurements")))
+                    verdict["reasons"].append("EAT evidence refused: an endpoint of kind %s reports %s" % (kind, (
+                        "the platform's token, not measurements" if kind in PLAIN_KINDS else
+                        "measurements, not the platform's token")))
                     return verdict
                 tok = ev["platform_token"]          # kind aegis-pq: TF-M's token, nested; None otherwise
         if kind in PLAIN_KINDS:
@@ -1236,7 +1236,7 @@ def keep_attestation(state, verdict, facts, result, policy_bytes):
 
 def issue_result(verdict, facts, keys, policy_bytes, state, ttl=None):
     """Sign and keep the attestation result of one verdict; the verdict gets "attestation_result": {"status",
-    "sha256", "cwt" (the COSE_Sign1 in hex)}. Never raises: a result that cannot be made is reported in the verdict
+    "sha256", "file" (where the COSE_Sign1 is kept)}. Never raises: a result that cannot be made is reported in the verdict
     ("error"), and the verdict itself stands."""
     try:
         import eat
@@ -1247,7 +1247,9 @@ def issue_result(verdict, facts, keys, policy_bytes, state, ttl=None):
         result = attestation_result(verdict, facts, keys, policy_bytes, ttl)
         keep_attestation(state, verdict, facts, result, policy_bytes)
         verdict["attestation_result"] = {"status": eat.TIER_NAMES[eat.appraisal(verdict, facts)[0]],
-                                         "sha256": hashlib.sha256(result).hexdigest(), "cwt": result.hex()}
+                                         "sha256": hashlib.sha256(result).hexdigest(),
+                                         "file": os.path.join(attestation_dir(state, verdict["endpoint"]),
+                                                              "result.cbor")}
     except Exception as e:  # noqa: BLE001 - the verdict and its enforcement do not depend on the result
         verdict["attestation_result"] = {"error": "%s: %s" % (type(e).__name__, e)}
 

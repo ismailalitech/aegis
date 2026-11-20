@@ -68,14 +68,15 @@ RECORD = "endorser.json"
 LEDGER = "issued.jsonl"
 REFERENCE = "reference.json"
 REFERENCE_FORMAT = "aegis-endorser-reference-v1"
-_REFERENCE_KEYS = {"name", "kind", "profile", "allowed", "iak_pub_pem", "host", "port", "notes"}
+_REFERENCE_KEYS = {"name", "kind", "profile", "allowed", "iak_pub_pem", "host", "port", "notes", "evidence_format"}
 
 
 def load_reference(path):
     """The endorser's reference: {device name: entry}, and the directory relative paths in it resolve against.
 
     {"format": "aegis-endorser-reference-v1", "devices": [{"name", "kind", "profile"?, "allowed", "iak_pub_pem"?,
-    "host"?, "port"?, "notes"?}, ...]}. Refused (ValueError) if it is anything else, a verifier's policy included:
+    "host"?, "port"?, "notes"?, "evidence_format"?}, ...]}. Refused (ValueError) if it is anything else, a verifier's
+    policy included:
     every key is known, every name a file name, no name twice."""
     with open(path) as f:
         ref = json.load(f)
@@ -112,7 +113,8 @@ def parse_address(text):
 def reference_entry(device, address=None):
     """The entry the endorser appraises a device with: the reference's family and measurements, and the address from
     the command line (address: (host, port)) or else the reference's. Refused (ValueError) without an address."""
-    entry = {k: device[k] for k in ("name", "kind", "profile", "allowed", "iak_pub_pem") if k in device}
+    entry = {k: device[k] for k in ("name", "kind", "profile", "allowed", "iak_pub_pem", "evidence_format")
+             if k in device}
     if address is not None:
         entry["host"], entry["port"] = address
         entry["address_from"] = "--host"
@@ -133,7 +135,8 @@ def draft_reference(policy, names, base):
         eps = [e for e in policy.get("endpoints", []) if isinstance(e, dict) and e.get("name") == name]
         if len(eps) != 1:
             raise ValueError("the policy has %d entries named %r" % (len(eps), name))
-        d = {k: eps[0][k] for k in ("name", "kind", "profile", "allowed", "iak_pub_pem") if k in eps[0]}
+        d = {k: eps[0][k] for k in ("name", "kind", "profile", "allowed", "iak_pub_pem", "evidence_format")
+             if k in eps[0]}
         if "iak_pub_pem" in d:
             d["iak_pub_pem"] = fleet._path(base, d["iak_pub_pem"])
         devices.append(d)

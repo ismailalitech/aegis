@@ -191,7 +191,8 @@ def evidence_payload(challenge, pk, comps=None, platform=None, platform_token=No
     if comps is not None:
         c[MEASUREMENTS] = [measured_component(n, d, v) for n, d, v in comps]
     if platform_token is not None:
-        c[SUBMODS] = {SUBMOD_PLATFORM: cbor.dumps(cbor.Tag(CWT_TAG, cbor.loads(platform_token)))}
+        # tag 61 before the token's own bytes, as a device does it: the token is never decoded and encoded again
+        c[SUBMODS] = {SUBMOD_PLATFORM: bytes([0xD8, CWT_TAG]) + bytes(platform_token)}
     if platform is not None:
         c[P_PLATFORM] = platform
     if dbgstat is not None:
@@ -327,6 +328,8 @@ def ear_payload(verdict, facts, policy, iat, exp=None, label=None):
         att[MEASUREMENTS] = measurements_claim(facts["components"])
     if facts.get("platform"):
         att[P_PLATFORM] = facts["platform"]
+    if facts.get("dbgstat") is not None:
+        att[DBGSTAT] = facts["dbgstat"]
     if att:
         a[EAR_ATTESTER_CLAIMS] = att
     ver = {"aegis.endpoint": verdict["endpoint"], "aegis.kind": verdict.get("kind", "psa"),
