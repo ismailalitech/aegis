@@ -57,6 +57,12 @@ def _decode(data, i, depth):
         out = {}
         for _ in range(v):
             k, i = _decode(data, i, depth + 1)
+            # Keys are integers or strings only, and never repeated: an array or map as key is unhashable in
+            # Python (a TypeError the callers do not expect), and a repeated key would let two parsers disagree.
+            if isinstance(k, bool) or not isinstance(k, (int, str, bytes)):
+                raise CBORError("map key of unsupported type")
+            if k in out:
+                raise CBORError("duplicate map key")
             x, i = _decode(data, i, depth + 1)
             out[k] = x
         return out, i
