@@ -82,6 +82,9 @@ jobs:
       - name: Host regression (unit tests, red team, RTL simulation, ACVP)
         run: tools/regression.sh
 
+      - name: The soak runner on a canned gateway, a simulated day healthy and with faults (docs/soak-and-watchdogs.md)
+        run: .venv/bin/python tools/soak.py selftest
+
       - name: Standalone evidence checker on a pack the verifier exports (third-party libraries only; no skips)
         run: |
           .venv/bin/python -m unittest -v tests.host.test_evidence_format.Pack tests.host.test_sdk_eat > $RUNNER_TEMP/evidence.log 2>&1 || { cat $RUNNER_TEMP/evidence.log; exit 1; }
