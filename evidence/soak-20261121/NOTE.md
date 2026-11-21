@@ -10,10 +10,12 @@ RW612 19176/32768); gateway services never restarted by themselves; journal and 
 `report.md` says FAIL because of one item: at 22:20 the runner estimated the STM32's clock at 1.535 s per gateway
 second (bounds 0.90 to 1.06), and the run-wide figure for that board is 1.0557 (the other two: 1.0002). This is a
 false positive of the runner's rate estimate, not a board fault: the heartbeat counter (`uptime_s`) tracks the
-gateway's clock to within a second (0.9985 over 100 minutes from the gateway journal), and in the journal a heartbeat
-line stamped about 10 s late is followed by one 10 s early (44 s apart against 34 s of device time, then 34 against
-44), which a short window misreads. The runner is to be fixed to use longer windows or the device's own interval;
-the unedited report is kept as the record.
+gateway's clock to within a second (0.9985 over 100 minutes from the gateway journal). Replaying the raw samples
+showed the estimate had paired two heartbeats that span the change to the new, shorter 600 s session (ttl from 1790
+to 604 within 184 s), which distorted the rate. A second, minor effect: the journal stamps an occasional heartbeat
+line about 10 s late followed by one about 10 s early. PR #46 makes a new session end the run of pairs, drops
+outlier pairs and judges the rate only over at least 30 min and 6 pairs; replaying these raw files with it gives
+0.989 / 1.0003 / 1.0002. The unedited report is kept as the record.
 
 Not covered by 3 hours: counter wraps and drift over several days; trend bounds are not judged under 4 h
 (gateway memory, descriptors and disk were flat at 2.7 h). The credential lifetime was restored to 3600 s afterwards.
