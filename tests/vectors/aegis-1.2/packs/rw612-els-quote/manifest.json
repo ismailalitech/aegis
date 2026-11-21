@@ -1,0 +1,28 @@
+{
+ "format": "aegis-evidence-pack-v1",
+ "endpoint": "rw612-els-quote",
+ "kind": "aegis-device",
+ "exported": 1795000000,
+ "evidence_format": "aegis-quote-v1",
+ "policy_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
+ "policy_id": "ni:///sha-256;YZ-RFktyoBiP487wEQtuyCdRXQ2R1BWUPBQet6xYey8",
+ "policy_now_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
+ "result": {
+  "status": "warning",
+  "admitted": true,
+  "iat": 1795000000,
+  "exp": 1795000192
+ },
+ "key_thumbprints": {
+  "verifier": "ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f",
+  "device": "eed650d25902e69a2f6819cef659b9ba40ff07cb493bb1cf9d9ec5820877bcf2"
+ },
+ "files": {
+  "attestation-result.cbor": "48d398cff16c9172365722156a66cf140dec1329db7a2b360ec176d48fbab4ed",
+  "evidence.sig": "6eeb7be0c0bca7fee14a3b0bda6cd40a445869ebe04b45c0967a3f7d8b03d838",
+  "evidence.token": "0ac6139bdd74443720e841f2012c9fbfbe06e2395b229afdf6e7e1d4a71152cb",
+  "keys/device.cosekey": "e50c87907cf3c78e8d175a603d6d59da5b232c7f91d4aabba9b424e8b3717803",
+  "keys/verifier.cosekey": "599d78bbefb93640761ac95073d5ecb851616dadf698b97dfb82d6aa76c01e86"
+ },
+ "verify": "tools/verify_evidence.py pack <this directory>"
+}

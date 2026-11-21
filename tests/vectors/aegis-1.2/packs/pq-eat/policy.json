@@ -1,0 +1,217 @@
+{
+ "note": "Synthetic golden vectors (tools/gen_golden_vectors.py): every key is derived from a published seed. Not a policy for any real fleet.",
+ "timeout_s": 5,
+ "attestation_results": true,
+ "audit_log": {
+  "checkpoint_s": 3600,
+  "min_interval_s": 0,
+  "segment_bytes": 1048576,
+  "max_segments": 0
+ },
+ "enforce_cmd": [
+  "true"
+ ],
+ "max_endorsement_age_s": 63072000,
+ "endorsers": [
+  {
+   "name": "golden-endorser",
+   "pk_file": "endorsers/golden-endorser.mldsa65.pub",
+   "pk_sha256": "a07f7c3475f6e72be1b82c43899f577cc8060e4271f3e7a4bc0d576c6fd52e97"
+  }
+ ],
+ "endpoints": [
+  {
+   "name": "psa-tfm",
+   "kind": "psa",
+   "host": "192.0.2.10",
+   "port": 7444,
+   "iak_pub_pem": "keys/tfm-iak.pub.pem",
+   "allowed": [
+    {
+     "type": "SPE",
+     "measurement_value": "1111111111111111111111111111111111111111111111111111111111111111",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "TF-M 2.3.0"
+    },
+    {
+     "type": "NSPE",
+     "measurement_value": "2222222222222222222222222222222222222222222222222222222222222222",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "prover-ns 0.4.0"
+    }
+   ]
+  },
+  {
+   "name": "pq-quote",
+   "kind": "aegis-pq",
+   "host": "192.0.2.11",
+   "port": 7444,
+   "pq_pub_file": "keys/pq-quote.mldsa65.pub",
+   "pq_pub_sha256": "8e7a8e924ded363f05c74858c99fecd07c7407b824e4cf033a74da14eae3e405",
+   "iak_pub_pem": "keys/tfm-iak.pub.pem",
+   "allowed": [
+    {
+     "type": "SPE",
+     "measurement_value": "1111111111111111111111111111111111111111111111111111111111111111",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "TF-M 2.3.0"
+    },
+    {
+     "type": "NSPE",
+     "measurement_value": "2222222222222222222222222222222222222222222222222222222222222222",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "prover-ns 0.4.0"
+    }
+   ],
+   "endorsement": "required",
+   "transcript": "v2",
+   "provision": true,
+   "heartbeat_mac": "kmac256",
+   "note": "the older quote (PQCHAL), endorsed by a JSON record; a session would be bound to the attestation (transcript v2)",
+   "endorsement_sha256": "ff2ba18046ee5359423a95f1e408d16e9114adce40140cd4398b095680737675"
+  },
+  {
+   "name": "pq-eat",
+   "kind": "aegis-pq",
+   "host": "192.0.2.12",
+   "port": 7444,
+   "pq_pub_file": "keys/pq-eat.mldsa65.pub",
+   "pq_pub_sha256": "83298143b471ae4a88a8e91eb3726882c836fc22cb4f4adea42a723af2ee456e",
+   "iak_pub_pem": "keys/tfm-iak.pub.pem",
+   "allowed": [
+    {
+     "type": "SPE",
+     "measurement_value": "1111111111111111111111111111111111111111111111111111111111111111",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "TF-M 2.3.0"
+    },
+    {
+     "type": "NSPE",
+     "measurement_value": "2222222222222222222222222222222222222222222222222222222222222222",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "prover-ns 0.4.0"
+    }
+   ],
+   "evidence_format": "eat-cose-v1",
+   "endorsement": "required",
+   "endorsement_file": "endorsements/pq-eat.cbor",
+   "note": "standard evidence (PQEAT) nesting TF-M's token, endorsed by a COSE record",
+   "endorsement_sha256": "5151ece64146455cbcdeb2835e0627fcdff777df0970da43482ca3ff5ae83877"
+  },
+  {
+   "name": "rw612-tfm-eat",
+   "kind": "aegis-device",
+   "host": "192.0.2.13",
+   "port": 7444,
+   "pq_pub_file": "keys/rw612-tfm-eat.mldsa65.pub",
+   "pq_pub_sha256": "74f16889d5f3f40146c630b0d03473ea3a98b5224a8c1b66d8e1e40e72ca2eb3",
+   "profile": "aegis-rw612-tfm-v1",
+   "allowed": [
+    {
+     "type": "SPE",
+     "measurement_value": "eb13febd231ae39dee8e2949a8cd44d2416d4ce7e2407d40a36211c710934052"
+    },
+    {
+     "type": "NSPE",
+     "measurement_value": "f8df4ecbe30f6f2022ada8438d914c9d6b5f184a78854138c2f59d30b0998b06"
+    }
+   ],
+   "evidence_format": "eat-cose-v1",
+   "endorsement": "required",
+   "endorsement_file": "endorsements/rw612-tfm-eat.cbor",
+   "max_endorsement_age_s": 31536000,
+   "endorsement_sha256": "d1f1b746ab0998044dbe3c6f1ecf48778819dcf3274d515c7795a76f814aa66f"
+  },
+  {
+   "name": "rw612-els-quote",
+   "kind": "aegis-device",
+   "host": "192.0.2.14",
+   "port": 7444,
+   "pq_pub_file": "keys/rw612-els-quote.mldsa65.pub",
+   "pq_pub_sha256": "8a97118b869fff05974abf673f53d9756fffdf101d3d32482762eb24080a9ebd",
+   "profile": "aegis-rw612-els-v1",
+   "allowed": [
+    {
+     "type": "APP",
+     "measurement_value": "220bcdeb984ac3ec3c7beedb440db8dcb575d5045c83f936cf679f8389a4d25d"
+    }
+   ]
+  },
+  {
+   "name": "zynqmp-devhuk-eat",
+   "kind": "aegis-tee",
+   "host": "192.0.2.15",
+   "port": 7444,
+   "pq_pub_file": "keys/zynqmp-devhuk-eat.mldsa65.pub",
+   "pq_pub_sha256": "6efbeae61771664976af94145d5a2534e6fc9a2a7900259723f3d99446edb39f",
+   "profile": "aegis-zynqmp-optee-devhuk-v1",
+   "allowed": [
+    {
+     "type": "TA",
+     "measurement_value": "7d8d6924562e6ecf86c578a656eeb7a3b4c137483c8ad2ed80da3de0ca152077"
+    }
+   ],
+   "evidence_format": "eat-cose-v1",
+   "allow_dev_profile": true,
+   "note": "development profile: one key for every chip, admitted with a warning"
+  },
+  {
+   "name": "zynqmp-optee-quote",
+   "kind": "aegis-tee",
+   "host": "192.0.2.16",
+   "port": 7444,
+   "pq_pub_file": "keys/zynqmp-optee-quote.mldsa65.pub",
+   "pq_pub_sha256": "92b3b1c9cbe5789ad7e6da3ddcdc0b7e558b629402f5282d1e81b975b51928e2",
+   "profile": "aegis-zynqmp-optee-v1",
+   "allowed": [
+    {
+     "type": "TA",
+     "measurement_value": "7d8d6924562e6ecf86c578a656eeb7a3b4c137483c8ad2ed80da3de0ca152077"
+    }
+   ],
+   "note": "reports a trusted application the policy does not allow: refused"
+  },
+  {
+   "name": "linux-host",
+   "kind": "aegis-linux",
+   "host": "192.0.2.17",
+   "port": 7444,
+   "pq_pub_file": "keys/linux-host.mldsa65.pub",
+   "pq_pub_sha256": "0956085c3538dc28f885ee1941a63ac4b55d37a7e0a1f5d620a61ca8a1b21517",
+   "profile": "aegis-linux-software-v1",
+   "allowed": [
+    {
+     "type": "PROVER",
+     "measurement_value": "2667d34501620788f1b1d5ed14468c3f4a8161ac7eb8daf6951e3ca497f93e41"
+    },
+    {
+     "type": "KERNEL",
+     "measurement_value": "a4f87510abce4886db2553a1eaa5995ed5ae510785287e183b52152be009dda1"
+    }
+   ],
+   "heartbeat_mac": "sha3-256",
+   "verifier_pin_sha256": "30aa069d4914214e607b430c887959f2d2dcea180af0d85abe13d0ee7b46dc1b"
+  },
+  {
+   "name": "offline-eat",
+   "kind": "aegis-device",
+   "host": "192.0.2.18",
+   "port": 7444,
+   "pq_pub_file": "keys/offline-eat.mldsa65.pub",
+   "pq_pub_sha256": "427fa7dbe66d541ee73e7327ae2075ce46be152165512fa72b4909b3e18e1027",
+   "profile": "aegis-rw612-tfm-v1",
+   "allowed": [
+    {
+     "type": "SPE",
+     "measurement_value": "eb13febd231ae39dee8e2949a8cd44d2416d4ce7e2407d40a36211c710934052"
+    },
+    {
+     "type": "NSPE",
+     "measurement_value": "f8df4ecbe30f6f2022ada8438d914c9d6b5f184a78854138c2f59d30b0998b06"
+    }
+   ],
+   "evidence_format": "eat-cose-v1",
+   "note": "does not answer: nothing to appraise"
+  }
+ ]
+}
