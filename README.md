@@ -45,7 +45,7 @@ What has run on the bench, each with the record or test that shows it:
   [`evidence/stm32-kemfix/fuzzing.txt`](evidence/stm32-kemfix/fuzzing.txt); since the SDK one harness,
   `tests/fuzz/fuzz_sdk_core.c`, which CI runs in the RW612, STM32 and EAT modes), a red-team harness
   (`tests/redteam/`) and a regression run check it. `tools/regression.sh --board --with-expiry` has 14 stages; its
-  first stage, the host suite in `tests/host/`, runs about 450 tests. The last full runs, at the start, middle and end
+  first stage, the host suite in `tests/host/`, runs about 530 tests. The last full runs, at the start, middle and end
   of the soak below, passed 14 of 14 each with the ZynqMP connected
   ([`evidence/soak-20261121/NOTE.md`](evidence/soak-20261121/NOTE.md)); the run before, without the ZynqMP:
   [`evidence/console/regression-14of14-20261119.txt`](evidence/console/regression-14of14-20261119.txt).
