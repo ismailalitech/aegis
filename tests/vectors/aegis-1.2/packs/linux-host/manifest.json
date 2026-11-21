@@ -1,0 +1,39 @@
+{
+ "format": "aegis-evidence-pack-v1",
+ "endpoint": "linux-host",
+ "kind": "aegis-linux",
+ "exported": 1795000030,
+ "evidence_format": "aegis-quote-v1",
+ "policy_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
+ "policy_id": "ni:///sha-256;nRqbwygDdWJHDENmJcjAWJhGrDGs7df3DqgUjd26-qM",
+ "policy_now_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
+ "result": {
+  "status": "warning",
+  "admitted": true,
+  "iat": 1795000030,
+  "exp": 1795000227,
+  "audit_head": {
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
+   "batch": 1,
+   "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+  },
+  "warnings": [
+   "instance-identity: the key is pinned without an endorsement: nothing names the device that holds it",
+   "executables: the components are measured by the measured software itself (trust: software)"
+  ],
+  "min_trust": "software"
+ },
+ "key_thumbprints": {
+  "verifier": "ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f",
+  "device": "91010e580c8d312a7d1ed821d06637ad40676ac7f9d3b7033a39654673059cd2"
+ },
+ "files": {
+  "attestation-result.cbor": "b9f44ede703d6c60d559d2f92d2ed57a973d2889ec4fed92ec69c605bfbe7d00",
+  "evidence.sig": "b67de3a9b5cb0f871f9f1a8c9df951d237eb77283daa4ccfb0e1f463a0b55872",
+  "evidence.token": "6a8bfb1350810b3210b2d36c8076c99aeda187b2128edeffa5492bd1da2cebdb",
+  "keys/device.cosekey": "949d2ba36ed769a61b106e3575e94f3a88672602c6afef28df085e4a2e8cbdd7",
+  "keys/verifier.cosekey": "599d78bbefb93640761ac95073d5ecb851616dadf698b97dfb82d6aa76c01e86"
+ },
+ "signed_manifest": "manifest.cose",
+ "verify": "tools/verify_evidence.py pack <this directory>"
+}

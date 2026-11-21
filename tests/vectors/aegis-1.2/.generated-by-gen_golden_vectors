@@ -1,0 +1,1 @@
+tools/gen_golden_vectors.py writes this directory; it replaces it as a whole

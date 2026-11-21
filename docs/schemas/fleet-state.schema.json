@@ -1,0 +1,114 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "tag:github.com,2026:ismailalitech/aegis/schemas/fleet-state/v1",
+ "title": "Aegis fleet verifier state file (fleet-state.json)",
+ "description": "What `fleet.py watch` writes after every cycle to STATE_DIR/fleet-state.json (/var/lib/aegis on the gateway, ~/.local/state/aegis for a user on a PC; --state names another file): the verdict of every policy entry in that cycle. Written whole and renamed into place. `fleet.py once` prints the same verdicts as a JSON list. Not signed: the signed statement of a verdict is its attestation result (docs/evidence-format.md). The verdict object is #/$defs/verdict.",
+ "$comment": "Aegis 1.2 as written (gateway/aegisd/fleet.py attest, credential_step, record_enforcement, issue_result, run_once). A verdict of Aegis 1.1 has no disabled, min_trust or attestation_result.audit_head, and matches too.",
+ "type": "object",
+ "additionalProperties": false,
+ "required": ["updated", "verdicts"],
+ "properties": {
+  "updated": {"type": "integer", "minimum": 0, "description": "Unix time the file was written"},
+  "verdicts": {"type": "array", "items": {"$ref": "#/$defs/verdict"}, "description": "one per policy entry, in the policy's order"}
+ },
+ "$defs": {
+  "verdict": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": ["endpoint", "kind", "time", "admitted", "reasons", "enforce_rc"],
+   "properties": {
+    "endpoint": {"type": "string", "description": "the policy entry's name (\"?\" if the entry had none and its attestation raised)"},
+    "kind": {"$ref": "#/$defs/kind"},
+    "time": {"type": "integer", "minimum": 0, "description": "Unix time the quote was asked for"},
+    "admitted": {"type": "boolean", "description": "true exactly when reasons is empty"},
+    "reasons": {"type": "array", "items": {"type": "string"}, "description": "why it is not admitted; free text for people, not a closed list"},
+    "evidence_format": {"const": "eat-cose-v1", "description": "only for an entry that asks for standard evidence; absent: the older quote (PQ kinds) or a PSA token (kind psa)"},
+    "enrolment": {"$ref": "#/$defs/enrolment"},
+    "endorsement": {"$ref": "#/$defs/endorsement"},
+    "elapsed_s": {"type": "number", "minimum": 0, "description": "seconds from the request to the answer (or to the failure)"},
+    "pq_signature": {"const": "ML-DSA-65 valid", "description": "PQ kinds: the evidence's ML-DSA-65 signature verified with the pinned key"},
+    "device_pk_sha256": {"$ref": "#/$defs/sha256", "description": "SHA-256 of the 1952-byte ML-DSA-65 public key the evidence was verified with"},
+    "quote": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": ["challenge", "token_sha3_256"],
+     "description": "the quote as signed, which a session of this cycle continues (transcript v2)",
+     "properties": {
+      "challenge": {"$ref": "#/$defs/sha256", "description": "the 32-byte challenge, hex"},
+      "token_sha3_256": {"$ref": "#/$defs/sha256", "description": "SHA3-256 of the bytes the device's ML-DSA-65 signature covers: the token (older quote, without the label) or the COSE Sig_structure (EAT)"}
+     }
+    },
+    "trust": {"$ref": "#/$defs/trust"},
+    "disabled": {"const": true, "description": "Aegis 1.2: the entry says \"disabled\": true; it was not contacted, and the reasons begin with \"disabled by policy\""},
+    "min_trust": {"$ref": "#/$defs/trust", "description": "Aegis 1.2: the trust floor the verdict was held to (the entry's, or the policy's top-level one); a verdict whose trust does not meet it is refused (\"trust X below min_trust Y\")"},
+    "warning": {"type": "string", "description": "set with an admission the operator must hear about (development key, development profile, unbound session); free text"},
+    "measurements": {
+     "type": "object",
+     "additionalProperties": {},
+     "description": "{measurement_type: measurement_value} as reported: lower-case hex (normally SHA-256) for every component of an admitted verdict; a refused verdict carries what the claims held"
+    },
+    "instance_id": {"description": "normally a string or null: the claims' instance ID in hex: 0x01 || SHA-256 of the IAK's point (PSA token), 0x02 || SHA-256 of the ML-DSA-65 key (older Aegis claims), the UEID 0x01 || SHA-256 of that key (EAT); null if the claims have none. A refused verdict carries what the claims held."},
+    "enforce_rc": {"type": ["integer", "null"], "description": "exit status of the policy's enforce_cmd; null without a hook (or one that did not start or finish)"},
+    "enforcement": {"enum": ["ok", "FAILED"], "description": "absent without a hook"},
+    "enforce_error": {"type": "string", "description": "the hook's stderr, with enforcement FAILED"},
+    "credential": {"type": "string", "description": "for an entry with \"provision\": what became of its session this cycle; free text"},
+    "session_binding": {"enum": ["transcript-v2", "unbound"], "description": "how a session issued or kept this cycle is tied to the attestation"},
+    "attestation_result": {
+     "description": "only when the policy asks for results (\"attestation_results\": true, or the entry's \"evidence_format\": \"eat-cose-v1\")",
+     "oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["status", "sha256", "file"],
+       "properties": {"status": {"$ref": "#/$defs/status"}, "sha256": {"$ref": "#/$defs/sha256", "description": "SHA-256 of the COSE_Sign1"},
+                      "file": {"type": "string", "description": "STATE_DIR/attestation/<name>/result.cbor"},
+                      "audit_head": {"type": "object", "additionalProperties": false, "required": ["log", "batch", "sha256"],
+                                     "description": "Aegis 1.2, with the audit log on and a batch on disk: the head the result names (aegis.audit-log, -batch, -head), in hex",
+                                     "properties": {"log": {"type": "string", "pattern": "^[0-9a-f]{32}$"}, "batch": {"type": "integer", "minimum": 1},
+                                                    "sha256": {"$ref": "#/$defs/sha256"}}}}},
+      {"type": "object", "additionalProperties": false, "required": ["error"],
+       "properties": {"error": {"type": "string", "description": "why no result could be signed; the verdict stands"}}}
+     ]
+    }
+   },
+   "allOf": [
+    {"if": {"properties": {"admitted": {"const": true}}},
+     "then": {"properties": {"reasons": {"maxItems": 0}}},
+     "else": {"properties": {"reasons": {"minItems": 1}}}},
+    {"if": {"required": ["enforcement"], "properties": {"enforcement": {"const": "FAILED"}}},
+     "then": {"required": ["enforce_error"]}},
+    {"if": {"required": ["enrolment"], "properties": {"enrolment": {"const": "refused"}}},
+     "then": {"properties": {"admitted": {"const": false}}}},
+    {"if": {"required": ["disabled"]},
+     "then": {"properties": {"admitted": {"const": false}, "reasons": {"contains": {"const": "disabled by policy"}}}}}
+   ]
+  },
+  "kind": {
+   "enum": ["psa", "aegis-pq", "aegis-device", "aegis-tee", "aegis-linux"],
+   "description": "the policy entry's kind (psa when the entry names none). An entry of another kind is refused at the policy stage."
+  },
+  "trust": {
+   "enum": ["trustzone", "trustzone-devkey", "device-key", "software", "development-shared-key"],
+   "description": "closed list, strongest first (the order min_trust compares by); docs/data-formats.md says what each means. Absent for kind psa unless its IAK is TF-M's development key, and for a verdict refused before the claims were read."
+  },
+  "enrolment": {
+   "enum": ["endorsed", "trust-on-first-use", "refused"],
+   "description": "PQ kinds only: how the pinned ML-DSA-65 key came to be trusted. refused: the entry requires an endorsement and the record was refused (never admitted)."
+  },
+  "endorsement": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": ["endorser_name", "endorser_pk_sha256", "record_sha256", "device_pk_sha256", "device_state", "issued"],
+   "description": "the accepted endorsement record, with enrolment endorsed",
+   "properties": {
+    "endorser_name": {"type": "string", "description": "the policy's name for the endorser key (endorsers[].name), not the record's own"},
+    "endorser_pk_sha256": {"$ref": "#/$defs/sha256"},
+    "record_sha256": {"$ref": "#/$defs/sha256", "description": "the record's name, what endorsement_sha256 pins: JSON form SHA-256 of canonical JSON {\"body\", \"sig\"}; COSE form SHA-256 of the file"},
+    "device_pk_sha256": {"$ref": "#/$defs/sha256"},
+    "device_state": {"enum": ["development", "closed"]},
+    "issued": {"type": "integer", "minimum": 0},
+    "expires": {"type": "integer", "minimum": 0},
+    "serial": {"type": "string"}
+   }
+  },
+  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+  "status": {"enum": ["affirming", "warning", "contraindicated", "incomplete"]}
+ }
+}

@@ -1,0 +1,38 @@
+{
+ "format": "aegis-evidence-pack-v1",
+ "endpoint": "pq-eat",
+ "kind": "aegis-pq",
+ "exported": 1795000030,
+ "evidence_format": "eat-cose-v1",
+ "policy_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
+ "policy_id": "ni:///sha-256;nRqbwygDdWJHDENmJcjAWJhGrDGs7df3DqgUjd26-qM",
+ "policy_now_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
+ "result": {
+  "status": "affirming",
+  "admitted": true,
+  "iat": 1795000030,
+  "exp": 1795000227,
+  "audit_head": {
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
+   "batch": 1,
+   "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+  }
+ },
+ "key_thumbprints": {
+  "verifier": "ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f",
+  "device": "bafc7fe945abee29dec98c138848e2f66f0b98b8b9d60e7162d71fb4a538bb5e",
+  "endorser": "80662c11dc1fcb5779267ef0b31b190c93c0ff6ed9559a9074ea9bc7db42c98d"
+ },
+ "files": {
+  "attestation-result.cbor": "efa5ea978d564773f289701394e71f3ab6acbc6cee8a03db3b013333c2592bf9",
+  "endorsement.cbor": "92c9e85b2cbcf7215394b400c5bec519bd74c86e66c143f3c7735704eda50bcc",
+  "evidence.cbor": "510ec388ddd5cdb7b4811752366a035d60904f1d9987fb7e692d0579ff801093",
+  "keys/device-iak.pem": "3a33001ee4e0528322f6f28d18b3f264254c868a6b3876532ecdad06759ac379",
+  "keys/device.cosekey": "c896da4cfd74b1d8a6714cee7a4a92fc26888fd7e13502a07e31a9830f98acaf",
+  "keys/endorser.cosekey": "c8cff1514ff096d3ce68fce24a797a763ad83d3fedd8d575661f6ad6c263b615",
+  "keys/verifier.cosekey": "599d78bbefb93640761ac95073d5ecb851616dadf698b97dfb82d6aa76c01e86",
+  "policy.json": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3"
+ },
+ "signed_manifest": "manifest.cose",
+ "verify": "tools/verify_evidence.py pack <this directory>"
+}

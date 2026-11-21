@@ -1,0 +1,33 @@
+{
+ "format": "aegis-evidence-pack-v1",
+ "endpoint": "retired-device",
+ "kind": "aegis-device",
+ "exported": 1795000030,
+ "evidence_format": null,
+ "policy_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
+ "policy_id": "ni:///sha-256;nRqbwygDdWJHDENmJcjAWJhGrDGs7df3DqgUjd26-qM",
+ "policy_now_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
+ "result": {
+  "status": "incomplete",
+  "admitted": false,
+  "iat": 1795000030,
+  "exp": 1795000227,
+  "audit_head": {
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
+   "batch": 1,
+   "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+  },
+  "disabled": true
+ },
+ "key_thumbprints": {
+  "verifier": "ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f",
+  "device": "1d9af0a3fc4774a9a61b3370c286e57d9a5e7a2428936d83a5111b79afcd1c20"
+ },
+ "files": {
+  "attestation-result.cbor": "daa1806cb3013104b2451c4dba6652159b8b89bab931155d488bccd38bbc0d33",
+  "keys/device.cosekey": "971b737ca556ed4d6bb6ba39092c596fc3db025d673ae7567e56d0d7eb3d1458",
+  "keys/verifier.cosekey": "599d78bbefb93640761ac95073d5ecb851616dadf698b97dfb82d6aa76c01e86"
+ },
+ "signed_manifest": "manifest.cose",
+ "verify": "tools/verify_evidence.py pack <this directory>"
+}

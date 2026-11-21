@@ -1,0 +1,343 @@
+{
+ "updated": 1795000030,
+ "verdicts": [
+  {
+   "endpoint": "psa-tfm",
+   "kind": "psa",
+   "time": 1795000030,
+   "admitted": true,
+   "reasons": [],
+   "elapsed_s": 0.0,
+   "measurements": {
+    "SPE": "1111111111111111111111111111111111111111111111111111111111111111",
+    "NSPE": "2222222222222222222222222222222222222222222222222222222222222222"
+   },
+   "instance_id": "014ed776e525dd841856ee6f92c6e162e5e5de0756386ff081497a8b58e361d9bd",
+   "enforce_rc": 0,
+   "enforcement": "ok",
+   "attestation_result": {
+    "status": "warning",
+    "sha256": "88a25026e9be0db6cf457b8bd04fcda76321740a6e10ed299b283e5000448492",
+    "file": "/var/lib/aegis/attestation/psa-tfm/result.cbor",
+    "audit_head": {
+     "log": "9baeed5c92111c5bf4162e631dfc9f43",
+     "batch": 1,
+     "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+    }
+   }
+  },
+  {
+   "endpoint": "pq-quote",
+   "kind": "aegis-pq",
+   "time": 1795000030,
+   "admitted": true,
+   "reasons": [],
+   "min_trust": "trustzone",
+   "enrolment": "endorsed",
+   "endorsement": {
+    "endorser_name": "golden-endorser",
+    "endorser_pk_sha256": "a07f7c3475f6e72be1b82c43899f577cc8060e4271f3e7a4bc0d576c6fd52e97",
+    "record_sha256": "b6c0965746db445fab767d9d570a5ccf2f118105bfe319bfcdfbe592f35cc95a",
+    "device_pk_sha256": "8e7a8e924ded363f05c74858c99fecd07c7407b824e4cf033a74da14eae3e405",
+    "device_state": "development",
+    "issued": 1794913600,
+    "serial": "GOLDEN-PQ-QUOTE"
+   },
+   "elapsed_s": 0.0,
+   "pq_signature": "ML-DSA-65 valid",
+   "device_pk_sha256": "8e7a8e924ded363f05c74858c99fecd07c7407b824e4cf033a74da14eae3e405",
+   "quote": {
+    "challenge": "def1fb6296effd37116d2be4f8d7824731483f81a56ffcb0c9bbb5c261200d52",
+    "token_sha3_256": "a8b9dc55a40f4c4cdb065a40f26fae00a07bb6721476122f0e991b054676aee3"
+   },
+   "trust": "trustzone",
+   "measurements": {
+    "SPE": "1111111111111111111111111111111111111111111111111111111111111111",
+    "NSPE": "2222222222222222222222222222222222222222222222222222222222222222"
+   },
+   "instance_id": "014ed776e525dd841856ee6f92c6e162e5e5de0756386ff081497a8b58e361d9bd",
+   "enforce_rc": 0,
+   "enforcement": "ok",
+   "attestation_result": {
+    "status": "affirming",
+    "sha256": "86d6363d747e2f3d84cafbebf6b51cdbf23d575e0f26b1a93f932b3d808ea197",
+    "file": "/var/lib/aegis/attestation/pq-quote/result.cbor",
+    "audit_head": {
+     "log": "9baeed5c92111c5bf4162e631dfc9f43",
+     "batch": 1,
+     "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+    }
+   }
+  },
+  {
+   "endpoint": "pq-eat",
+   "kind": "aegis-pq",
+   "time": 1795000030,
+   "admitted": true,
+   "reasons": [],
+   "evidence_format": "eat-cose-v1",
+   "enrolment": "endorsed",
+   "endorsement": {
+    "endorser_name": "golden-endorser",
+    "endorser_pk_sha256": "a07f7c3475f6e72be1b82c43899f577cc8060e4271f3e7a4bc0d576c6fd52e97",
+    "record_sha256": "92c9e85b2cbcf7215394b400c5bec519bd74c86e66c143f3c7735704eda50bcc",
+    "device_pk_sha256": "83298143b471ae4a88a8e91eb3726882c836fc22cb4f4adea42a723af2ee456e",
+    "device_state": "development",
+    "issued": 1794913600,
+    "expires": 1857985600,
+    "serial": "GOLDEN-PQ-EAT"
+   },
+   "elapsed_s": 0.0,
+   "pq_signature": "ML-DSA-65 valid",
+   "device_pk_sha256": "83298143b471ae4a88a8e91eb3726882c836fc22cb4f4adea42a723af2ee456e",
+   "quote": {
+    "challenge": "b8a362c084fc2d7e40d81ec8f66df48ffa0922df04793a71dc2f4f3e1b3895e4",
+    "token_sha3_256": "e23446a85f58a23d9edf4b36c3f60162b72505b1542bd6d9766fb2aeedd16367"
+   },
+   "trust": "trustzone",
+   "measurements": {
+    "SPE": "1111111111111111111111111111111111111111111111111111111111111111",
+    "NSPE": "2222222222222222222222222222222222222222222222222222222222222222"
+   },
+   "instance_id": "014ed776e525dd841856ee6f92c6e162e5e5de0756386ff081497a8b58e361d9bd",
+   "enforce_rc": 0,
+   "enforcement": "ok",
+   "attestation_result": {
+    "status": "affirming",
+    "sha256": "efa5ea978d564773f289701394e71f3ab6acbc6cee8a03db3b013333c2592bf9",
+    "file": "/var/lib/aegis/attestation/pq-eat/result.cbor",
+    "audit_head": {
+     "log": "9baeed5c92111c5bf4162e631dfc9f43",
+     "batch": 1,
+     "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+    }
+   }
+  },
+  {
+   "endpoint": "rw612-tfm-eat",
+   "kind": "aegis-device",
+   "time": 1795000030,
+   "admitted": true,
+   "reasons": [],
+   "min_trust": "trustzone",
+   "evidence_format": "eat-cose-v1",
+   "enrolment": "endorsed",
+   "endorsement": {
+    "endorser_name": "golden-endorser",
+    "endorser_pk_sha256": "a07f7c3475f6e72be1b82c43899f577cc8060e4271f3e7a4bc0d576c6fd52e97",
+    "record_sha256": "7c2376713b39e07609f2d5feee626c0b1251d726db8e5b97039e6fa57eca5e1b",
+    "device_pk_sha256": "74f16889d5f3f40146c630b0d03473ea3a98b5224a8c1b66d8e1e40e72ca2eb3",
+    "device_state": "closed",
+    "issued": 1794913600,
+    "expires": 1857985600,
+    "serial": "GOLDEN-RW612-TFM-EAT"
+   },
+   "elapsed_s": 0.0,
+   "pq_signature": "ML-DSA-65 valid",
+   "device_pk_sha256": "74f16889d5f3f40146c630b0d03473ea3a98b5224a8c1b66d8e1e40e72ca2eb3",
+   "quote": {
+    "challenge": "8ad5e1505fefe6785bb6be994d52592608707154d9d4df803b6a7a5837a00d40",
+    "token_sha3_256": "ffb69caf0a2e1088bf71882c104831ea1011429c912a0eac8ea8f0462772c242"
+   },
+   "trust": "trustzone",
+   "measurements": {
+    "SPE": "eb13febd231ae39dee8e2949a8cd44d2416d4ce7e2407d40a36211c710934052",
+    "NSPE": "f8df4ecbe30f6f2022ada8438d914c9d6b5f184a78854138c2f59d30b0998b06"
+   },
+   "instance_id": "0174f16889d5f3f40146c630b0d03473ea3a98b5224a8c1b66d8e1e40e72ca2eb3",
+   "enforce_rc": 0,
+   "enforcement": "ok",
+   "attestation_result": {
+    "status": "affirming",
+    "sha256": "d6464cd01027addc679a6f9550de7b915a3d7df372322b7545e8281811084845",
+    "file": "/var/lib/aegis/attestation/rw612-tfm-eat/result.cbor",
+    "audit_head": {
+     "log": "9baeed5c92111c5bf4162e631dfc9f43",
+     "batch": 1,
+     "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+    }
+   }
+  },
+  {
+   "endpoint": "rw612-els-quote",
+   "kind": "aegis-device",
+   "time": 1795000030,
+   "admitted": true,
+   "reasons": [],
+   "enrolment": "trust-on-first-use",
+   "elapsed_s": 0.0,
+   "pq_signature": "ML-DSA-65 valid",
+   "device_pk_sha256": "8a97118b869fff05974abf673f53d9756fffdf101d3d32482762eb24080a9ebd",
+   "quote": {
+    "challenge": "9bc7c659a2361611b0a6d277b731d8b402285c91aa3d05ad139ad5c1c794e0dd",
+    "token_sha3_256": "1fa810b2c9dd9709ad602b0f4646c7563941eed79b99a234812b5963c61139fa"
+   },
+   "trust": "device-key",
+   "measurements": {
+    "APP": "220bcdeb984ac3ec3c7beedb440db8dcb575d5045c83f936cf679f8389a4d25d"
+   },
+   "instance_id": "028a97118b869fff05974abf673f53d9756fffdf101d3d32482762eb24080a9ebd",
+   "enforce_rc": 0,
+   "enforcement": "ok",
+   "attestation_result": {
+    "status": "warning",
+    "sha256": "60d95d0e7cd2fb7501ad9c42b46e252f5bbed33c223ca1e910a980b20283ad8a",
+    "file": "/var/lib/aegis/attestation/rw612-els-quote/result.cbor",
+    "audit_head": {
+     "log": "9baeed5c92111c5bf4162e631dfc9f43",
+     "batch": 1,
+     "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+    }
+   }
+  },
+  {
+   "endpoint": "zynqmp-devhuk-eat",
+   "kind": "aegis-tee",
+   "time": 1795000030,
+   "admitted": true,
+   "reasons": [],
+   "min_trust": "development-shared-key",
+   "evidence_format": "eat-cose-v1",
+   "enrolment": "trust-on-first-use",
+   "elapsed_s": 0.0,
+   "pq_signature": "ML-DSA-65 valid",
+   "device_pk_sha256": "6efbeae61771664976af94145d5a2534e6fc9a2a7900259723f3d99446edb39f",
+   "quote": {
+    "challenge": "1742f8c26ed399ee18c9f02a28d7d65dd1c5fd0204670921125d3e5147892c42",
+    "token_sha3_256": "83d52a1708200e5360871cf8243e167d36235f389b23cdb655bd638cbfac285d"
+   },
+   "trust": "development-shared-key",
+   "warning": "development profile aegis-zynqmp-optee-devhuk-v1 admitted only because allow_dev_profile is set: its key is the same on every chip",
+   "measurements": {
+    "TA": "7d8d6924562e6ecf86c578a656eeb7a3b4c137483c8ad2ed80da3de0ca152077"
+   },
+   "instance_id": "016efbeae61771664976af94145d5a2534e6fc9a2a7900259723f3d99446edb39f",
+   "enforce_rc": 0,
+   "enforcement": "ok",
+   "attestation_result": {
+    "status": "warning",
+    "sha256": "bb11ab9fbd084839e58abb1bc141ebf969b71262de330c2da9f0d87b7d2db288",
+    "file": "/var/lib/aegis/attestation/zynqmp-devhuk-eat/result.cbor",
+    "audit_head": {
+     "log": "9baeed5c92111c5bf4162e631dfc9f43",
+     "batch": 1,
+     "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+    }
+   }
+  },
+  {
+   "endpoint": "zynqmp-optee-quote",
+   "kind": "aegis-tee",
+   "time": 1795000030,
+   "admitted": false,
+   "reasons": [
+    "component TA not allowed (measurement fc5193d58519...)"
+   ],
+   "enrolment": "trust-on-first-use",
+   "elapsed_s": 0.0,
+   "pq_signature": "ML-DSA-65 valid",
+   "device_pk_sha256": "92b3b1c9cbe5789ad7e6da3ddcdc0b7e558b629402f5282d1e81b975b51928e2",
+   "quote": {
+    "challenge": "e88a034b7ec158458fff15454e7e365f7021dcd0c3216481118af0454cf3e910",
+    "token_sha3_256": "671a77dd419413d7a1bd71a2bacea4cfc93534b734a47642b27729bab05faeef"
+   },
+   "trust": "trustzone",
+   "measurements": {
+    "TA": "fc5193d58519f5e504445fa0f860523684a9d4308f90f74350d58d0a2aaa0413"
+   },
+   "instance_id": "0292b3b1c9cbe5789ad7e6da3ddcdc0b7e558b629402f5282d1e81b975b51928e2",
+   "enforce_rc": 0,
+   "enforcement": "ok",
+   "attestation_result": {
+    "status": "contraindicated",
+    "sha256": "5e26954037d6eb007e2d0259a3ea3593115b5b1f1a21931e851159898411aa4e",
+    "file": "/var/lib/aegis/attestation/zynqmp-optee-quote/result.cbor",
+    "audit_head": {
+     "log": "9baeed5c92111c5bf4162e631dfc9f43",
+     "batch": 1,
+     "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+    }
+   }
+  },
+  {
+   "endpoint": "linux-host",
+   "kind": "aegis-linux",
+   "time": 1795000030,
+   "admitted": true,
+   "reasons": [],
+   "min_trust": "software",
+   "enrolment": "trust-on-first-use",
+   "elapsed_s": 0.0,
+   "pq_signature": "ML-DSA-65 valid",
+   "device_pk_sha256": "0956085c3538dc28f885ee1941a63ac4b55d37a7e0a1f5d620a61ca8a1b21517",
+   "quote": {
+    "challenge": "e6aa97765f83c25e639317751432c98f63b4e66de53055be5360367518f0a27f",
+    "token_sha3_256": "994eb0affb8df5cece4340678c2776457e0853c54eae1dc9135c50ccad2d8266"
+   },
+   "trust": "software",
+   "measurements": {
+    "PROVER": "2667d34501620788f1b1d5ed14468c3f4a8161ac7eb8daf6951e3ca497f93e41",
+    "KERNEL": "a4f87510abce4886db2553a1eaa5995ed5ae510785287e183b52152be009dda1"
+   },
+   "instance_id": "020956085c3538dc28f885ee1941a63ac4b55d37a7e0a1f5d620a61ca8a1b21517",
+   "enforce_rc": 0,
+   "enforcement": "ok",
+   "attestation_result": {
+    "status": "warning",
+    "sha256": "b9f44ede703d6c60d559d2f92d2ed57a973d2889ec4fed92ec69c605bfbe7d00",
+    "file": "/var/lib/aegis/attestation/linux-host/result.cbor",
+    "audit_head": {
+     "log": "9baeed5c92111c5bf4162e631dfc9f43",
+     "batch": 1,
+     "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+    }
+   }
+  },
+  {
+   "endpoint": "offline-eat",
+   "kind": "aegis-device",
+   "time": 1795000030,
+   "admitted": false,
+   "reasons": [
+    "no attestation: [Errno 111] Connection refused"
+   ],
+   "evidence_format": "eat-cose-v1",
+   "enrolment": "trust-on-first-use",
+   "elapsed_s": 0.0,
+   "enforce_rc": 0,
+   "enforcement": "ok",
+   "attestation_result": {
+    "status": "incomplete",
+    "sha256": "d32edc012891c86692c466a0fcef6d8cd500904016d84e3c78f5866bd6835a03",
+    "file": "/var/lib/aegis/attestation/offline-eat/result.cbor",
+    "audit_head": {
+     "log": "9baeed5c92111c5bf4162e631dfc9f43",
+     "batch": 1,
+     "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+    }
+   }
+  },
+  {
+   "endpoint": "retired-device",
+   "kind": "aegis-device",
+   "time": 1795000030,
+   "admitted": false,
+   "reasons": [
+    "disabled by policy"
+   ],
+   "disabled": true,
+   "enforce_rc": 0,
+   "enforcement": "ok",
+   "attestation_result": {
+    "status": "incomplete",
+    "sha256": "daa1806cb3013104b2451c4dba6652159b8b89bab931155d488bccd38bbc0d33",
+    "file": "/var/lib/aegis/attestation/retired-device/result.cbor",
+    "audit_head": {
+     "log": "9baeed5c92111c5bf4162e631dfc9f43",
+     "batch": 1,
+     "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+    }
+   }
+  }
+ ]
+}

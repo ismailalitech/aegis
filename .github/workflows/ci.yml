@@ -97,6 +97,12 @@ jobs:
           tail -n 4 $RUNNER_TEMP/audit.log
           if grep -q skipped $RUNNER_TEMP/audit.log; then echo "a test of the standalone checker was skipped"; exit 1; fi
 
+      - name: Golden vectors and the JSON Schemas of docs/data-formats.md (regenerated, checked with the standalone checkers; no skips)
+        run: |
+          .venv/bin/python -m unittest -v tests.host.test_golden_vectors > $RUNNER_TEMP/golden.log 2>&1 || { cat $RUNNER_TEMP/golden.log; exit 1; }
+          tail -n 4 $RUNNER_TEMP/golden.log
+          if grep -q skipped $RUNNER_TEMP/golden.log; then echo "a test of the golden vectors was skipped"; exit 1; fi
+
       - name: Audit-log anchors kept off the gateway (tools/audit_anchors.py; selftest and hostile input; no skips)
         run: |
           .venv/bin/python tools/audit_anchors.py --selftest

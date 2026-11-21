@@ -1,0 +1,261 @@
+Ò„XQ£80X Ü¬‘·!æà~N–è¼'Ä¾…"p~î-31–tÒÙWx'application/vnd.aegis.fleet-policy+cbor Y¦¦x1tag:github.com,2026:ismailalitech/aegis/policy/v1jıx°YA{
+ "note": "Synthetic golden vectors (tools/gen_golden_vectors.py): every key is derived from a published seed. Not a policy for any real fleet.",
+ "timeout_s": 5,
+ "attestation_results": true,
+ "audit_log": {
+  "checkpoint_s": 3600,
+  "min_interval_s": 0,
+  "segment_bytes": 1048576,
+  "max_segments": 0
+ },
+ "enforce_cmd": [
+  "true"
+ ],
+ "max_endorsement_age_s": 63072000,
+ "endorsers": [
+  {
+   "name": "golden-endorser",
+   "pk_file": "endorsers/golden-endorser.mldsa65.pub",
+   "pk_sha256": "a07f7c3475f6e72be1b82c43899f577cc8060e4271f3e7a4bc0d576c6fd52e97"
+  }
+ ],
+ "endpoints": [
+  {
+   "name": "psa-tfm",
+   "kind": "psa",
+   "host": "192.0.2.10",
+   "port": 7444,
+   "iak_pub_pem": "keys/tfm-iak.pub.pem",
+   "allowed": [
+    {
+     "type": "SPE",
+     "measurement_value": "1111111111111111111111111111111111111111111111111111111111111111",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "TF-M 2.3.0"
+    },
+    {
+     "type": "NSPE",
+     "measurement_value": "2222222222222222222222222222222222222222222222222222222222222222",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "prover-ns 0.4.0"
+    }
+   ]
+  },
+  {
+   "name": "pq-quote",
+   "kind": "aegis-pq",
+   "host": "192.0.2.11",
+   "port": 7444,
+   "pq_pub_file": "keys/pq-quote.mldsa65.pub",
+   "pq_pub_sha256": "8e7a8e924ded363f05c74858c99fecd07c7407b824e4cf033a74da14eae3e405",
+   "iak_pub_pem": "keys/tfm-iak.pub.pem",
+   "allowed": [
+    {
+     "type": "SPE",
+     "measurement_value": "1111111111111111111111111111111111111111111111111111111111111111",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "TF-M 2.3.0"
+    },
+    {
+     "type": "NSPE",
+     "measurement_value": "2222222222222222222222222222222222222222222222222222222222222222",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "prover-ns 0.4.0"
+    }
+   ],
+   "endorsement": "required",
+   "transcript": "v2",
+   "provision": true,
+   "heartbeat_mac": "kmac256",
+   "note": "the older quote (PQCHAL), endorsed by a JSON record; a session would be bound to the attestation (transcript v2)",
+   "min_trust": "trustzone",
+   "endorsement_sha256": "b6c0965746db445fab767d9d570a5ccf2f118105bfe319bfcdfbe592f35cc95a"
+  },
+  {
+   "name": "pq-eat",
+   "kind": "aegis-pq",
+   "host": "192.0.2.12",
+   "port": 7444,
+   "pq_pub_file": "keys/pq-eat.mldsa65.pub",
+   "pq_pub_sha256": "83298143b471ae4a88a8e91eb3726882c836fc22cb4f4adea42a723af2ee456e",
+   "iak_pub_pem": "keys/tfm-iak.pub.pem",
+   "allowed": [
+    {
+     "type": "SPE",
+     "measurement_value": "1111111111111111111111111111111111111111111111111111111111111111",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "TF-M 2.3.0"
+    },
+    {
+     "type": "NSPE",
+     "measurement_value": "2222222222222222222222222222222222222222222222222222222222222222",
+     "signer_id": "3333333333333333333333333333333333333333333333333333333333333333",
+     "image": "prover-ns 0.4.0"
+    }
+   ],
+   "evidence_format": "eat-cose-v1",
+   "endorsement": "required",
+   "endorsement_file": "endorsements/pq-eat.cbor",
+   "note": "standard evidence (PQEAT) nesting TF-M's token, endorsed by a COSE record",
+   "endorsement_sha256": "92c9e85b2cbcf7215394b400c5bec519bd74c86e66c143f3c7735704eda50bcc"
+  },
+  {
+   "name": "rw612-tfm-eat",
+   "kind": "aegis-device",
+   "host": "192.0.2.13",
+   "port": 7444,
+   "pq_pub_file": "keys/rw612-tfm-eat.mldsa65.pub",
+   "pq_pub_sha256": "74f16889d5f3f40146c630b0d03473ea3a98b5224a8c1b66d8e1e40e72ca2eb3",
+   "profile": "aegis-rw612-tfm-v1",
+   "allowed": [
+    {
+     "type": "SPE",
+     "measurement_value": "eb13febd231ae39dee8e2949a8cd44d2416d4ce7e2407d40a36211c710934052"
+    },
+    {
+     "type": "NSPE",
+     "measurement_value": "f8df4ecbe30f6f2022ada8438d914c9d6b5f184a78854138c2f59d30b0998b06"
+    }
+   ],
+   "evidence_format": "eat-cose-v1",
+   "endorsement": "required",
+   "endorsement_file": "endorsements/rw612-tfm-eat.cbor",
+   "max_endorsement_age_s": 31536000,
+   "min_trust": "trustzone",
+   "endorsement_sha256": "7c2376713b39e07609f2d5feee626c0b1251d726db8e5b97039e6fa57eca5e1b"
+  },
+  {
+   "name": "rw612-els-quote",
+   "kind": "aegis-device",
+   "host": "192.0.2.14",
+   "port": 7444,
+   "pq_pub_file": "keys/rw612-els-quote.mldsa65.pub",
+   "pq_pub_sha256": "8a97118b869fff05974abf673f53d9756fffdf101d3d32482762eb24080a9ebd",
+   "profile": "aegis-rw612-els-v1",
+   "allowed": [
+    {
+     "type": "APP",
+     "measurement_value": "220bcdeb984ac3ec3c7beedb440db8dcb575d5045c83f936cf679f8389a4d25d"
+    }
+   ]
+  },
+  {
+   "name": "zynqmp-devhuk-eat",
+   "kind": "aegis-tee",
+   "host": "192.0.2.15",
+   "port": 7444,
+   "pq_pub_file": "keys/zynqmp-devhuk-eat.mldsa65.pub",
+   "pq_pub_sha256": "6efbeae61771664976af94145d5a2534e6fc9a2a7900259723f3d99446edb39f",
+   "profile": "aegis-zynqmp-optee-devhuk-v1",
+   "allowed": [
+    {
+     "type": "TA",
+     "measurement_value": "7d8d6924562e6ecf86c578a656eeb7a3b4c137483c8ad2ed80da3de0ca152077"
+    }
+   ],
+   "evidence_format": "eat-cose-v1",
+   "allow_dev_profile": true,
+   "note": "development profile: one key for every chip, admitted with a warning",
+   "min_trust": "development-shared-key"
+  },
+  {
+   "name": "zynqmp-optee-quote",
+   "kind": "aegis-tee",
+   "host": "192.0.2.16",
+   "port": 7444,
+   "pq_pub_file": "keys/zynqmp-optee-quote.mldsa65.pub",
+   "pq_pub_sha256": "92b3b1c9cbe5789ad7e6da3ddcdc0b7e558b629402f5282d1e81b975b51928e2",
+   "profile": "aegis-zynqmp-optee-v1",
+   "allowed": [
+    {
+     "type": "TA",
+     "measurement_value": "7d8d6924562e6ecf86c578a656eeb7a3b4c137483c8ad2ed80da3de0ca152077"
+    }
+   ],
+   "note": "reports a trusted application the policy does not allow: refused"
+  },
+  {
+   "name": "linux-host",
+   "kind": "aegis-linux",
+   "host": "192.0.2.17",
+   "port": 7444,
+   "pq_pub_file": "keys/linux-host.mldsa65.pub",
+   "pq_pub_sha256": "0956085c3538dc28f885ee1941a63ac4b55d37a7e0a1f5d620a61ca8a1b21517",
+   "profile": "aegis-linux-software-v1",
+   "allowed": [
+    {
+     "type": "PROVER",
+     "measurement_value": "2667d34501620788f1b1d5ed14468c3f4a8161ac7eb8daf6951e3ca497f93e41"
+    },
+    {
+     "type": "KERNEL",
+     "measurement_value": "a4f87510abce4886db2553a1eaa5995ed5ae510785287e183b52152be009dda1"
+    }
+   ],
+   "heartbeat_mac": "sha3-256",
+   "verifier_pin_sha256": "30aa069d4914214e607b430c887959f2d2dcea180af0d85abe13d0ee7b46dc1b",
+   "min_trust": "software"
+  },
+  {
+   "name": "offline-eat",
+   "kind": "aegis-device",
+   "host": "192.0.2.18",
+   "port": 7444,
+   "pq_pub_file": "keys/offline-eat.mldsa65.pub",
+   "pq_pub_sha256": "427fa7dbe66d541ee73e7327ae2075ce46be152165512fa72b4909b3e18e1027",
+   "profile": "aegis-rw612-tfm-v1",
+   "allowed": [
+    {
+     "type": "SPE",
+     "measurement_value": "eb13febd231ae39dee8e2949a8cd44d2416d4ce7e2407d40a36211c710934052"
+    },
+    {
+     "type": "NSPE",
+     "measurement_value": "f8df4ecbe30f6f2022ada8438d914c9d6b5f184a78854138c2f59d30b0998b06"
+    }
+   ],
+   "evidence_format": "eat-cose-v1",
+   "note": "does not answer: nothing to appraise"
+  },
+  {
+   "name": "retired-device",
+   "kind": "aegis-device",
+   "host": "192.0.2.19",
+   "port": 7444,
+   "pq_pub_file": "keys/retired-device.mldsa65.pub",
+   "pq_pub_sha256": "fd054d758ff157ad28b71f45f0ccc141af985c34b2c72520810e3e725685fa12",
+   "profile": "aegis-rw612-els-v1",
+   "allowed": [
+    {
+     "type": "APP",
+     "measurement_value": "220bcdeb984ac3ec3c7beedb440db8dcb575d5045c83f936cf679f8389a4d25d"
+    }
+   ],
+   "disabled": true,
+   "note": "taken out by the operator (Aegis 1.2): not contacted, quarantined"
+  }
+ ]
+}
+tgolden-policy-signerlgolden-fleetYí¶»×å<ƒå5lwr]¼Lsàg›ËÕÁEUNÕY•K¥áBqáWËşõ¥ZÓ’Ú©Í„Sì-äşl(¤@¢ÜêÿllDğ'a,6O¡E'’0ÑãQ–ÇKzÒQr"dø¯ô<åŠš÷OJÁ›_ü¯öQ’_)míõq¼æ^Z¿„óvÒıM{€`Bz·g­ı¤ŒÂ¡æŞ>9klÎÏÜ\sºƒJ»AFxÂ	©üfgœò`ºä­¾” ËrAH¬ú‘8BbÃô×i¾*fLèª §³­£ñ _hU£ğò{zh#÷„^ST~O!½v›Iq¿
+ßÆ^Ë22£†òÍÂ•&¨Esä
+h[ˆï$¾s”˜ôş'mRßÿ^['ĞšPK¹Óú×ä=\Y^6,‰z¾ç7#Z=SQ9WMDm?¯¹1ğÄ¦…ƒ°°¨şà¾47ÙìÒÚÕäi¿Ú†ıáûts×`‡°«ëÙpñ”¿fîàRwÏ-bÉ S¤l‰’¡ÉhõK‰÷	Wœ³~Gm€*Ğ9.}Şrh¬O*Ù¾í’ö(Œ=Ê5	†$j™‹CzÖ±Œg†È©¿a›OîäVGiÙñØš[öèñ¹
+È*ÈMèaìşRe
+ÕÊhVë`³‰ ùô h‚sÃÅ0„©ÉB““³ÏxÜœnó[ÑšÂh#Ç¦øMÉ±€‡%•‰7 Ø½…Ç»œB”½¼AÅV@Ó™èFò+¤áb€ÒE6‚T&)ân‰`ò¬Û¿rË¥Àüä‰—-L—ñ1lDïwB
+Tw
+ÑMB–Ú ìd“õ%AQ5*Ußè€›ÿ'oÊÛ¢
+I‡Î½‘vá6WÇ&œÜnæêàözgt­8şKçÕÍÜ7“-;’4í}6†ƒ:÷ê;Qv™SzS.%ğ· üçG¯›múVzˆ‡Öİ¦Ê9Ø9šm÷8«/{—´{ŒFkm$·D3KáÈ ƒ¬ÙöÏ q9@ä¢\é¸|f½ıGlgéµbó!%v¦©DÕÀ¬Y˜šíÕ•6¿©ğ‘É9¢<İÌ¹­uM¥âéhŞì·"`ôïk0ôD£´×;y¸ÿ¥ñpURâ8…cu°b¼Mv'pÑDÑIÌk¨T·rFêĞ›ÖYC]l½—•L™8z³:ŞËYí>ú{&IğàÜ9¯@làBÆÇùÀˆš³T÷éE¡¬×­ˆñÜ¶èÍõ6ózò «Ù›ƒPU|(Ã¸SwÆ!uÚYÓ{;Á
+óØ
+m‡HG¼á9¡~ºÁvïĞnéÃşš+—š'Hàá]E(œÇRğ½SğªåÅ:7PE¾ÊZ*"ü7c?Ûh½³›8-oƒ3N0Z±Àu”·A'ÆêPİæ±X¡^Â4Ãª)ó'æŸ>\a$¦Ù[&ò(l¢VÌÅ÷
+¯ğ½‘‚·ÆÂG­ÑçÓ–£;_æ`BE?¸_<¬Ğç{~¡µHç6ï/(¬3zb"Ğm=cÁ$ºWÛÅöå	™ı"š·pbvM°nmı Â<˜¬ì.ÄšÒş’Lem8¹‰Ö*ÎQëèéïÈN{¾ì×’¾à:¯à©t$ÏwÜù*œ™õ_¶!Ú¸-x¥ĞzX,..¤$™ÚÚYİ†Cø‹{¾^#ÔšàÂóò4¦ôô‡«‚Õ~È7Ì+‰ğâ7¾ğ®±²´Ztwo;¿Ôíêé÷æÇøf—C4H†o»é¸ë5ı¾[áæıÔç^¦a…•¤¨³ÂE*˜>ReÑ°Ï¤Çfğ¡ã/€û¢ä¢/fŸäÂÒÜö\£Ç$ß¶1d)qJ*F[_ıÙ B¾fÁ5^9™›ÕS6Ş¾Wj|C»Dvï£zÌÎfñğzëDş~Z½ MÙú„ağ8~'lå=â‡­‘˜/ºÚåüLßëYn2¹DE|Û#Ãóé¸'b²®ó‰ñÌ†Êw¾Ğ†1nÊü8¨Ÿ¡Œp7Np–6©oûN<5`¡ÍÄ&ÉŞ‡©QöĞİ·Ä(cEXç±ÖÆi ‘"Zufzx®û£
+ıTKe¸/Ø~®×ß47A;S¢¿#7ZçAÕ©z­0OÛøéï4%õ |ÉÌdùØâDÙ“¤ÜóŠû©£aYªyjÜ¡Ğp8<qÿp]ğnı |Ü|“âÏPğªwkÅÃePº’s‰˜¥u +G+ç Ê¬AË†±WNš±•	óØ¸ô‚ÖVNBş¡ôüz2§]hf½Be÷ÁUøöw°ôrjK@+.‰9…;f÷tAœu¯¸Œ-çÈ-yZ­¬Zq){æ×â†…$B­må=Ï<ïŒG_©0‰¾Ş°{ŞÖŠ‹ÒüãóÈ½·[y Ñ1vHÃ
++'M*ø~7äìåQ,Uuua‰¥m
+¸ÚxÀSÒÁ|i¿°ÁÖYâRJº%Tûr)c]Ÿ¡ÖaÈş:ï+NfúÓhE¯2zÄ·”Ú¾‹–6;”v÷šOC}’ïü9ñÌ;ª‚èÛy2ša•„ÙTÚ®|¼İMçn¯úº
+ÓÓu$Ñ±xÌÿQf7h@MŒ7,Ü¼é {´A"ÅƒpönÄ;İàYUÃ«kzã)–DE:’—cÃkÏ ËûbÒ5Q§s5‘Q«Æ 7E¿
+ïÔãÆ8JÿÁC°¢¬‘*$©éC]}Bb#ÕH“0²¯p‘¢
+ªê/ÉOß -
+JV&Àİ
+4!jĞ=³N¢@>H¾¤¥ı(N²õók²Í—İí2Næ‰½ 3‚_x·µjgüÔn&æ©uÁ9“/››Ü{Æ:Ü#ª¤rB²´1Á¯°3pwtâ.Ø²2 «ëá± V¢6ªN}:7•"êil¶`Ga<ë‡²}&4eszJÅxï|ñzYÊg9ŸúO	ÑgöHí©àä®ÒŠ8&{ ’¹õÍ¢MV8Ú
+]Á5]çïE³ˆÛ;.ÚâÀM“ámñ®SùÎ]Ğ£nîõ7Ê€4i›´g…³Ür¡ßM´0Pù®’æ–|ğsyï–¤z‡wBÔtÔ¯oôï‰®ŞFu-0Pc¢†§+UŒDö&ø×^~pÑîFs*KHñè„Êwì?öàí§4ß;’´”mòÙgàÕ¯>Ãuå! ŸÁ¼f(RßÂ¦•Y2¤¢[Åq_nhÒ_tU=fIŠpfù&ê¼ÍùÖm(“#	z“®AŒ@åŞrŸåº ÖŸl¶®vg9ÖUò3œ²[K¢(â±ûå”Nï èçaä…™dÆùĞë¹­¼]à-TüôÕºAZ€`ÍQmwVJçJb¾Å¦×}ˆw,š;~hKW!¢^Ç„.İ
+!Y´ïÜF¤íeCRK´í„ÃBK›ÕéÈom2º"PIò ­¨ì3JšÍÂéNWşÚà9ìùGFÚ“ä“âƒ_ú1:çßEo­²Ğã²ê´vb µşª Jë´Ô² Kx–+`Ä™ú·ƒoË	ñ81	ÁCS„\()é²üË˜az7ñZ{[zËäcÌ¸&cQîÆÅ”>¨®UTÉê!Hy{“Å¡©ÉÓ4¿ÜCxøÃ£AXHº Ágí¸fSd]Ón#¡LÕ,G‘0nÒğ-$RfóÂdrRGëOM¯"n…LG™Ø»”*ËªË¿}†'ã™»&h~Â¸IjÉ¦ƒAßÚg¨Š¯Ûğ]O(É†ÍóRË·9jœ|v|íâè<ïÈ- ®Ñö<”úX¤5Ë×À‰Ÿ<ŠY)„ğÀÄ­fq¶ØÀ2æy™øT%°AÇWÂş³èPœÓ5ÒMÖò<´§â—ÍÃ°®Ğo´Ùî-p•*‘•#Ä…Klğú”Ø7ºĞ»LI“Zª]‰×áåt»Bç4-Ò>¦ªÖüÆŠ"÷Rş[Jÿ'ÿx'Ë,c3ÜÑ€Z¹‹Ú®€)ÆÑìÚ(†Æ}<é«‰6ï‡\è$ğëv*¾ïq!]@°Ùë`gH0S)AhI‹¢|´ I:İ£ÓY8WUKèøRÛó—q
+Ğ?Î¶ Læ·CYUÁö9$•Xè]š“(	¤Í{ñ$ÛêEÿ9€"ä±;Àp(OO”Õğh›î3mb•e1¿_Çâ—`×Òù…Á¹õ¼@úæM”bhĞ­Ò¶<_?Jâ¤)ãÂîX 4}\04øvpb£
+Ê¥Âî;ê^™nGÄg7¤óˆ¤-J…›İå3M”Ö?fwâDUìùdlk ¸Ñ                        
