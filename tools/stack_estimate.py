@@ -38,6 +38,7 @@ INDIRECT = {
     "quote": ["s_evidence"],
     "aegis_prover_quote": ["s_evidence"],   # quote() is part of its callers' frames
     "aegis_prover_handle_line": ["s_evidence"],
+    "eat_claims": ["s_evidence"],           # AEGIS_EAT_COSE builds: the platform's token for QUOTE_EAT
     "aegis_prover_init": [],                # identity_public_key: this port sets none, the core holds the key
 }
 ROOTS = ["aegis_pq_service_sfn", "aegis_pq_init"]

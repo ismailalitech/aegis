@@ -35,6 +35,11 @@
  *      again on hardware from the payload (byte 0: the LSI never ready, initialisation mode never entered or never
  *      left, a counter that stands still; byte 1: the RTC clock BL2 left; bytes 2-5: the counter's value)
  *   7  GET_PUBKEY
+ * Built with -DAEGIS_EAT_COSE=1 (tests/host/test_sdk_eat.py), a raw message can also be QUOTE_EAT (type 7): one with
+ * valid arguments that is answered must be a COSE_Sign1 signed by the device key over its Sig_structure and carrying
+ * the challenge, and it becomes the quote a KEM_INIT continues (T1 over that Sig_structure); a refused one, or one
+ * with invalid arguments, leaves no quote to continue. "--serve" (FZ_STANDALONE) answers raw messages read from
+ * standard input, for that test to play the non-secure prover and the gateway.
  * Checks, besides the sanitizers:
  *   - no psa_write beyond the caller's output size (TF-M panics on it), no read of an input that is not there;
  *   - a credential is accepted if and only if an exchange is pending, the clock works, the sizes are valid, its body
@@ -158,16 +163,26 @@ static int rng_next(unsigned k)
 	return rng_zero ? 2 : 1;
 }
 
-/* the attestation service: a stand-in token that carries the challenge */
+/* the attestation service: a stand-in token that carries the challenge; "--serve" can set a token of its own (for
+ * any challenge, as the test gives it), which is refused as TF-M refuses a buffer too small for its token */
 #define FZ_TOKEN_LEN 120u
+static uint8_t *serve_token;
+static size_t serve_token_len;
 psa_status_t psa_call(psa_handle_t handle, int32_t type, const psa_invec *in, size_t in_len, psa_outvec *out,
 		      size_t out_len)
 {
 	uint8_t *t = out[0].base;
 
 	if (handle != TFM_ATTESTATION_SERVICE_HANDLE || type != TFM_ATTEST_GET_TOKEN || in_len != 1 || out_len != 1 ||
-	    in[0].len != 32 || out[0].len < FZ_TOKEN_LEN)
+	    in[0].len != 32)
 		DIE("unexpected psa_call");
+	if (serve_token != NULL) {
+		if (out[0].len < serve_token_len) return PSA_ERROR_BUFFER_TOO_SMALL;
+		memcpy(t, serve_token, serve_token_len);
+		out[0].len = serve_token_len;
+		return PSA_SUCCESS;
+	}
+	if (out[0].len < FZ_TOKEN_LEN) DIE("unexpected psa_call");
 	memset(t, 0xa7, FZ_TOKEN_LEN);
 	memcpy(t, "FZTOKEN", 7);
 	memcpy(t + 8, in[0].base, 32);
@@ -437,6 +452,39 @@ static int model_continues(const uint8_t nonce[32])
 	return b;
 }
 
+#if AEGIS_EAT_COSE
+/* a QUOTE_EAT with valid arguments, read as a verifier would (not with the core's code): d2 84, the protected header
+ * (a byte string of 60), a0, the payload as a byte string, 59 0c ed and the signature. The Sig_structure is
+ * 84 6a "Signature1", the protected header, 40 and the payload; the device key signs it (pure ML-DSA-65, empty
+ * context) and T1 hashes it. */
+static void model_quote_eat(psa_status_t st, const uint8_t ch[32], const uint8_t *o, size_t n)
+{
+	static uint8_t tbs[EAT_OUT_MAX];
+	static const uint8_t sig_head[3] = {0x59, 0x0c, 0xed};
+	const uint8_t pre[2] = {0, 0};
+	uint8_t h[32];
+	size_t pl;
+
+	M.quote = 0;
+	if (st != PSA_SUCCESS) return;
+	if (n < 65 + 3 + SIG_LEN || n > EAT_OUT_MAX || o[0] != 0xd2 || o[1] != 0x84 || o[2] != 0x58 || o[3] != 0x3c ||
+	    o[64] != 0xa0 || memcmp(o + n - SIG_LEN - 3, sig_head, 3))
+		DIE("QUOTE_EAT: not a COSE_Sign1 of the expected layout (%zu bytes)", n);
+	pl = n - 65 - 3 - SIG_LEN;
+	memcpy(tbs, "\x84\x6aSignature1", 12);
+	memcpy(tbs + 12, o + 2, 62);
+	tbs[74] = 0x40;
+	memcpy(tbs + 75, o + 65, pl);
+	if (aegis_mldsa_verify_internal(o + n - SIG_LEN, tbs, 75 + pl, pre, 2, pk, 0) != 0)
+		DIE("QUOTE_EAT not signed by the device key");
+	if (!memmem(o + 65, pl, ch, 32)) DIE("QUOTE_EAT without the challenge");
+	sha3_256(tbs, 75 + pl, h);
+	sha3v(M.q_t1, 3, "aegis-transcript-v2/quote", (size_t)25, ch, (size_t)32, h, (size_t)32);
+	memcpy(M.q_ch, ch, 32);
+	M.quote = 1;
+}
+#endif
+
 /* the answered KEM_INIT: its signature is the transcript's if it continues a quote, the first version's if not */
 static void model_kem_key(int continues, const uint8_t nonce[32], const uint8_t *ek, const uint8_t *s)
 {
@@ -476,6 +524,19 @@ static void op_raw(const uint8_t *p, size_t n)
 	valid_quote = type == AEGIS_PQ_QUOTE && l0 == 32 && o0 >= TOKEN_MAX && o1 >= SIG_LEN;
 	model_sweep();
 	st = send(type, d, l0, d + l0, l1, o0, o1, &r0, &r1, &w0, &w1);
+#if AEGIS_EAT_COSE
+	if (type == AEGIS_PQ_QUOTE_EAT) {
+		if (l0 == 32 && o0 >= EAT_OUT_MAX) {
+			if (st == PSA_SUCCESS && w1 != 0) DIE("QUOTE_EAT output");
+			model_quote_eat(st, d, r0, w0);
+		} else if (st == PSA_SUCCESS) {
+			DIE("QUOTE_EAT with invalid arguments succeeded");
+		}
+		free(r0);
+		free(r1);
+		return;
+	}
+#endif
 	if (valid_init) {
 		int continues = model_continues(d);
 
@@ -1007,6 +1068,72 @@ static int transcript_vector(void)
 	return 0;
 }
 
+/* "--serve": raw messages from standard input, one per line, answered on standard output, for
+ * tests/host/test_sdk_eat.py to play the non-secure prover (endpoints/stm32h573/prover-ns/src/main.c) and the gateway.
+ * Prints "pk=<device key>" and "gw_sk=<the test gateway's secret key>" first. Then per line:
+ *   TOKEN <hex>                         the attestation service's token from now on (any challenge)
+ *   MSG <type> <in0> <in1> <o0> <o1>    a message; inputs in hex ("-": none), output sizes in bytes
+ *                                       -> "<status> <out0> <out1>" (hex, "-" for nothing written)
+ * The partition starts as after a reset with a working clock; the clock does not move. */
+static void serve_hex(const uint8_t *p, size_t n)
+{
+	if (!n) fputc('-', stdout);
+	for (size_t i = 0; i < n; i++) printf("%02x", p[i]);
+}
+
+static size_t serve_unhex(const char *t, uint8_t *out, size_t cap)
+{
+	size_t n = 0;
+	unsigned v;
+
+	if (!strcmp(t, "-")) return 0;
+	while (t[0] && t[1] && n < cap && sscanf(t, "%2x", &v) == 1) {
+		out[n++] = (uint8_t)v;
+		t += 2;
+	}
+	return n;
+}
+
+static int serve(void)
+{
+	static char line[65536], a[32768], b[32768];
+	static uint8_t in0[16384], in1[16384];
+	int type;
+	size_t o0, o1, l0, l1, w0, w1;
+	uint8_t *r0, *r1;
+	psa_status_t st;
+
+	reset(0, 2, 0xFFFF0000u);
+	rng_state = RNG_SEED;
+	rng_skip = rng_fail = 0;
+	print_hex("pk", pk, PK_LEN);
+	print_hex("gw_sk", gw_sec, sizeof(gw_sec));
+	fflush(stdout);
+	while (fgets(line, sizeof(line), stdin)) {
+		if (!strncmp(line, "TOKEN ", 6) && sscanf(line + 6, "%32767s", a) == 1) {
+			free(serve_token);
+			serve_token = malloc(sizeof(in0));
+			serve_token_len = serve_unhex(a, serve_token, sizeof(in0));
+			printf("ok\n");
+		} else if (sscanf(line, "MSG %d %32767s %32767s %zu %zu", &type, a, b, &o0, &o1) == 5) {
+			l0 = serve_unhex(a, in0, sizeof(in0));
+			l1 = serve_unhex(b, in1, sizeof(in1));
+			st = send(type, in0, l0, in1, l1, o0, o1, &r0, &r1, &w0, &w1);
+			printf("%d ", (int)st);
+			serve_hex(r0, w0);
+			fputc(' ', stdout);
+			serve_hex(r1, w1);
+			fputc('\n', stdout);
+			free(r0);
+			free(r1);
+		} else {
+			printf("? %s", line);
+		}
+		fflush(stdout);
+	}
+	return 0;
+}
+
 /* without libFuzzer: the inputs named on the command line, one after the other */
 int main(int argc, char **argv)
 {
@@ -1014,6 +1141,7 @@ int main(int argc, char **argv)
 
 	LLVMFuzzerInitialize(&argc, &argv);
 	if (argc == 2 && !strcmp(argv[1], "--transcript")) return transcript_vector();
+	if (argc == 2 && !strcmp(argv[1], "--serve")) return serve();
 	for (int i = 1; i < argc; i++) {
 		FILE *f = fopen(argv[i], "rb");
 		size_t n;

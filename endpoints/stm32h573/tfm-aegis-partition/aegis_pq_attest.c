@@ -53,6 +53,16 @@
  *                                text, as MACed.
  *                      Without out[1] (out_size[1] == 0: provers up to 0.5.0) status = data, as before.
  *                      AEGIS_HB_KMAC=0 builds the first version instead (SHA3-256, "aegis-hb-v1").
+ *   type 7 QUOTE_EAT:  only in a build with -DAEGIS_EAT_COSE=1 (CMake: -DAEGIS_EAT_COSE=ON); off by default, and the
+ *                      partition without it answers PSA_ERROR_NOT_SUPPORTED as for any unknown type.
+ *                      in[0] = 32-byte challenge
+ *                      out[0] <- the same quote as standard evidence (docs/evidence-format.md): an EAT in a COSE_Sign1
+ *                                signed with ML-DSA-65, TF-M's token for the challenge nested as the submodule
+ *                                "platform"; at most EAT_OUT_MAX (4124) bytes, and out[0] must take that many
+ *                      It is the quote a following KEM_INIT continues, in place of an earlier QUOTE (T1 hashes the
+ *                      COSE Sig_structure). The statuses are QUOTE's. The work buffer is then AEGIS_EAT_WORK_MIN
+ *                      (1962) bytes, 728 more; the object is made in the credential's buffer, which only KEM_FINISH
+ *                      uses, within its own message.
  *
  * Messages, sizes, status codes and every byte answered are those of the partition before it was moved onto the
  * core (SPE 3183f74a); tests/host/test_sdk_golden.py holds it to that. Two of its ways differ from the other
@@ -96,6 +106,13 @@
 #define AEGIS_PQ_SESSION    5
 #define AEGIS_PQ_HEARTBEAT  6
 #define TOKEN_MAX           0x250u
+#if defined(AEGIS_EAT_COSE) && AEGIS_EAT_COSE
+#define AEGIS_PQ_QUOTE_EAT  7
+/* the claims around a token of TOKEN_MAX bytes: nonce 35, ueid 3 + 35, profile 3 + 53, submods 3 + 1 + 9 and the
+ * token's head 3 and tag 2, intuse 3 + 1, and the map's head 1 (sdk/src/aegis_proto.c, eat_claims) */
+#define EAT_CLAIMS_MAX      (TOKEN_MAX + 152u)
+#define EAT_OUT_MAX         AEGIS_EAT_LEN(EAT_CLAIMS_MAX)
+#endif
 
 static const uint8_t seed_label[32] = "aegis-stm32h5-mldsa65-seed-v1...";
 static const uint8_t prov_label[32] = "aegis-stm32h5-provision-root-v1.";
@@ -103,7 +120,14 @@ static const uint8_t prov_label[32] = "aegis-stm32h5-provision-root-v1.";
 /* The core's context, its work buffer (the smallest: this partition's RAM is what TF-M's secure data region has
  * left), and what a message's inputs are read into. */
 static struct aegis_prover core;
+#if defined(AEGIS_EAT_COSE) && AEGIS_EAT_COSE
+static uint8_t work[AEGIS_EAT_WORK_MIN]; /* the identity key as a COSE_Key for the kid; the claims and 78 also fit */
+_Static_assert(AEGIS_EAT_WORK_MIN >= AEGIS_WORK_MIN && AEGIS_EAT_WORK_MIN >= EAT_CLAIMS_MAX + AEGIS_EAT_PAYLOAD_AT,
+	       "the work buffer");
+_Static_assert(AEGIS_CRED_MAX >= EAT_OUT_MAX, "the EAT is made in the credential's buffer");
+#else
 static uint8_t work[AEGIS_WORK_MIN];
+#endif
 static uint8_t kem_ct[AEGIS_KEM_CT_LEN];
 static uint8_t cred[AEGIS_CRED_MAX];
 static uint8_t msg_nonce[AEGIS_CHALLENGE_LEN]; /* a challenge or a nonce: public */
@@ -520,6 +544,29 @@ static psa_status_t do_quote(const psa_msg_t *msg)
 	return PSA_SUCCESS;
 }
 
+#if defined(AEGIS_EAT_COSE) && AEGIS_EAT_COSE
+/* QUOTE_EAT: the object is made in cred (no message keeps anything there), so the partition's RAM grows by the work
+ * buffer's 728 bytes only; the core signs it as for QUOTE (its frames are those of aegis_prover_quote) */
+static psa_status_t do_quote_eat(const psa_msg_t *msg)
+{
+	size_t len = 0;
+	int rc;
+
+	if (msg->in_size[0] != AEGIS_CHALLENGE_LEN || msg->out_size[0] < EAT_OUT_MAX) {
+		return PSA_ERROR_INVALID_ARGUMENT;
+	}
+	if (psa_read(msg->handle, 0, msg_nonce, AEGIS_CHALLENGE_LEN) != AEGIS_CHALLENGE_LEN) {
+		return PSA_ERROR_INVALID_ARGUMENT;
+	}
+	rc = aegis_prover_quote_eat(&core, msg_nonce, cred, EAT_OUT_MAX, &len);
+	if (rc != AEGIS_OK) {
+		return status_of(rc);
+	}
+	psa_write(msg->handle, 0, cred, len);
+	return PSA_SUCCESS;
+}
+#endif
+
 static psa_status_t do_kem_init(const psa_msg_t *msg)
 {
 	const uint8_t *ek, *sig;
@@ -669,6 +716,10 @@ psa_status_t aegis_pq_service_sfn(const psa_msg_t *msg)
 		return do_session(msg);
 	case AEGIS_PQ_HEARTBEAT:
 		return do_heartbeat(msg);
+#if defined(AEGIS_EAT_COSE) && AEGIS_EAT_COSE
+	case AEGIS_PQ_QUOTE_EAT:
+		return do_quote_eat(msg);
+#endif
 	default:
 		return PSA_ERROR_NOT_SUPPORTED;
 	}

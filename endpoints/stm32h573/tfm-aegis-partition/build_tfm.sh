@@ -4,6 +4,7 @@
 # Same configuration as the SecureBench reference build (securebench-ws/build/spe) plus the
 # out-of-tree partition; reuses that build's already fetched and patched dependencies.
 # Output: $OUT/bin/tfm_s_signed.{bin,hex} and $OUT/api_ns for the Non-Secure build.
+# Arguments go to CMake, for example -DAEGIS_EAT_COSE=ON (standard evidence, docs/evidence-format.md).
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 TFM=${TFM:-$HOME/securebench-ws/upstream/trusted-firmware-m}
@@ -22,6 +23,6 @@ cmake -S "$TFM" -B "$OUT" -G Ninja -DTFM_PLATFORM=stm/stm32h573i_dk \
   -DT_COSE_PATH="$DEPS/t_cose-src" -DTFM_EXTRAS_REPO_PATH="$DEPS/tf-m-extras-src" \
   -DTF_PSA_CRYPTO_PATH="$DEPS/tf-psa-crypto-src" \
   -DTFM_EXTRA_MANIFEST_LIST_FILES="$HERE/manifest_list.yaml" \
-  -DTFM_EXTRA_PARTITION_PATHS="$HERE" > "$HERE/build-tfm.log" 2>&1
+  -DTFM_EXTRA_PARTITION_PATHS="$HERE" "$@" > "$HERE/build-tfm.log" 2>&1
 cmake --build "$OUT" -- install >> "$HERE/build-tfm.log" 2>&1
 ls -l "$OUT/bin/tfm_s_signed.bin"

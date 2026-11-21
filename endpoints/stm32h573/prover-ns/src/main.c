@@ -23,6 +23,9 @@
  *   device -> "PQHB <status hex> <counter hex> <tag hex> END"
  *             status "uptime_s=..;link=..;fw=..;sstack=<used>/<size>": this side's text plus the secure
  *             partition's stack high-water mark, all under the partition's KMAC (from 0.6.0)
+ *   host   -> "PQEAT <64 hex digits>"               only in a build with -DAEGIS_EAT_COSE=ON (and a secure image
+ *                                                    with the same option): standard evidence
+ *   device -> "PQEAT <length> <hex> END"            an EAT in a COSE_Sign1, ML-DSA-65 (docs/evidence-format.md)
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -136,6 +139,7 @@ static int parse_hex(const char *s, uint8_t *out, size_t len)
 #define AEGIS_PQ_KEM_FINISH 4
 #define AEGIS_PQ_SESSION    5
 #define AEGIS_PQ_HEARTBEAT  6
+#define AEGIS_PQ_QUOTE_EAT  7 /* only with AEGIS_EAT_COSE */
 #define KEM_EK_LEN  1184u
 #define KEM_CT_LEN  1088u
 #define CRED_MAX    6144u
@@ -299,6 +303,27 @@ static size_t handle_pq(const char *line, char *out, size_t max)
 		memcpy(out + k, " END\r\n", 6);
 		return k + 6;
 	}
+#if defined(AEGIS_EAT_COSE) && AEGIS_EAT_COSE
+	if (strncmp(line, "PQEAT ", 6) == 0) {
+		psa_invec i[1] = {{challenge, CHALLENGE_LEN}};
+		psa_outvec o[1] = {{cred_buf, sizeof(cred_buf)}}; /* the partition needs room for EAT_OUT_MAX (4124) */
+
+		if (parse_hex(line + 6, challenge, CHALLENGE_LEN) != 0) {
+			return (size_t)snprintf(out, max, "ERR bad-request\r\n");
+		}
+		st = psa_call(AEGIS_PQ_SERVICE_HANDLE, AEGIS_PQ_QUOTE_EAT, i, 1, o, 1);
+		if (st != PSA_SUCCESS) {
+			return (size_t)snprintf(out, max, "ERR pq %ld\r\n", (long)st);
+		}
+		if (o[0].len > sizeof(cred_buf) || max < 6 + 10 + 2 * o[0].len + 6) {
+			return (size_t)snprintf(out, max, "ERR too-long\r\n");
+		}
+		k = (size_t)snprintf(out, max, "PQEAT %u ", (unsigned int)o[0].len);
+		k += put_hex_into(out + k, cred_buf, o[0].len);
+		memcpy(out + k, " END\r\n", 6);
+		return k + 6;
+	}
+#endif
 	if (strcmp(line, "PQKEY") == 0) {
 		psa_outvec o[1] = {{pq_buf, PQ_PK_LEN}};
 

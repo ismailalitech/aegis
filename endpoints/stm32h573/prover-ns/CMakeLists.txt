@@ -44,6 +44,9 @@ target_sources(tfm_ns PRIVATE
 target_include_directories(tfm_ns PRIVATE net net/hal ${LWIP_DIR}/src/include)
 target_compile_definitions(tfm_ns PRIVATE HAL_ETH_MODULE_ENABLED ETH_RX_DESC_CNT=8U ETH_TX_DESC_CNT=4U)
 target_compile_definitions(tfm_ns PRIVATE AEGIS_PROVER_VERSION="${AEGIS_PROVER_VERSION}")
+if(AEGIS_EAT_COSE)       # standard evidence: PQEAT, for a secure image built with the same option
+    target_compile_definitions(tfm_ns PRIVATE AEGIS_EAT_COSE=1)
+endif()
 if(AEGIS_NS_SAES_TEST)    # test image only (probe.sh --saes)
     target_sources(tfm_ns PRIVATE ${CONFIG_SPE_PATH}/platform/hal/Src/stm32h5xx_hal_cryp.c
                                   ${CONFIG_SPE_PATH}/platform/hal/Src/stm32h5xx_hal_cryp_ex.c)
