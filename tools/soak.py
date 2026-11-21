@@ -320,6 +320,8 @@ BOUNDS = {
     "ttl_rate_min": 0.90,         # endpoint seconds per gateway second, from the heartbeat ttl
     "ttl_rate_max": 1.06,         # the endpoints' margin covers a clock up to 6 % fast (docs/endpoint-expiry.md)
     "ttl_rate_min_span_s": 1800,  # gateway seconds of heartbeat pairs before the rate is judged
+    "ttl_rate_min_pairs": 6,      # and at least this many pairs
+    "ttl_rate_pair_tol": 0.25,    # a pair further than this from the median pair rate is left out (journal jitter)
     "ttl_low_s": 60,              # a ttl below this: the renewal is late, the endpoint is about to end the session
     "stack_frac_max": 0.90,       # secure stack high-water mark against its size
     "trend_min_h": 6.0,           # hours of samples (one fleet process) before a trend is judged
@@ -419,8 +421,31 @@ def trend_findings(rows, bounds, final=False):
 
 def new_ep_track():
     return {"session": None, "expires": None, "hb": None, "uptime_s": None, "requests": None, "last_hb": None,
-            "rate_dt": 0.0, "rate_dttl": 0.0, "stack_used_max": None, "stack_size": None, "stack_first": None,
+            "rate_pairs": [], "stack_used_max": None, "stack_size": None, "stack_first": None,
             "verdicts": 0, "quarantined": 0, "renewals": 0, "resets": 0, "lifetime": None}
+
+
+RATE_PAIRS_KEEP = 6000  # the most recent heartbeat pairs kept per endpoint (about two days at one per 30 s)
+
+
+def ep_rate(tr, bounds=BOUNDS):
+    """The endpoint's clock rate (endpoint seconds per gateway second) from its heartbeat pairs, or None while too few
+    exist. A pair is (gateway seconds between two heartbeat lines, ttl fallen between them) within one session. The
+    journal sometimes stamps a line ~10 s late and the next ~10 s early, so one pair alone says little: the pairs
+    further than ttl_rate_pair_tol from the median pair rate are left out and the rest are pooled (their ttl fall over
+    their gateway time), judged only over ttl_rate_min_span_s and ttl_rate_min_pairs.
+    Returns {"rate", "span_s", "pairs", "left_out"}."""
+    pairs = [p for p in tr.get("rate_pairs") or [] if p[0] > 0]
+    if len(pairs) < bounds["ttl_rate_min_pairs"]:
+        return None
+    rates = sorted(d / t for t, d in pairs)
+    n = len(rates)
+    med = rates[n // 2] if n % 2 else (rates[n // 2 - 1] + rates[n // 2]) / 2.0
+    kept = [(t, d) for t, d in pairs if abs(d / t - med) <= bounds["ttl_rate_pair_tol"]]
+    span = sum(t for t, _ in kept)
+    if len(kept) < bounds["ttl_rate_min_pairs"] or span < bounds["ttl_rate_min_span_s"]:
+        return None
+    return {"rate": sum(d for _, d in kept) / span, "span_s": span, "pairs": len(kept), "left_out": n - len(kept)}
 
 
 def check_endpoint(name, tr, cur, prev, bounds, cred_lifetime, sample_span_s):
@@ -439,12 +464,14 @@ def check_endpoint(name, tr, cur, prev, bounds, cred_lifetime, sample_span_s):
     for r in recs:
         if r.get("issued"):
             tr["renewals"] += 1
+            tr["last_hb"] = None  # a new session: its ttl starts again, so no pair spans the issue
         st = r.get("status") or {}
         if r.get("hb") is not None and "ttl" in st:
             last = tr["last_hb"]
             if last and r["hb"] > last[1] and st["ttl"] <= last[2] and 0 < r["t"] - last[0] <= 600:
-                tr["rate_dt"] += r["t"] - last[0]
-                tr["rate_dttl"] += last[2] - st["ttl"]
+                pairs = tr.setdefault("rate_pairs", [])
+                pairs.append([round(r["t"] - last[0], 3), last[2] - st["ttl"]])
+                del pairs[:-RATE_PAIRS_KEEP]
             tr["last_hb"] = [r["t"], r["hb"], st["ttl"]]
         f += check_status(name, tr, st, bounds, cred_lifetime)
     c = cur["creds"].get(name)
@@ -476,8 +503,9 @@ def check_endpoint(name, tr, cur, prev, bounds, cred_lifetime, sample_span_s):
                 f.append(finding("FAIL", name, name + ":overdue", "renewal overdue: %d s left" % (c["expires"] - gw)))
         # its last_status is only as new as the last counted heartbeat: not checked (stale after a stop)
         tr["session"], tr["expires"], tr["hb"] = c["session"], c["expires"], c["hb"]
-    if tr["rate_dt"] >= bounds["ttl_rate_min_span_s"]:
-        rate = tr["rate_dttl"] / tr["rate_dt"]
+    est = ep_rate(tr, bounds)
+    if est is not None:
+        rate = est["rate"]
         if not bounds["ttl_rate_min"] <= rate <= bounds["ttl_rate_max"]:
             f.append(finding("FAIL", name, name + ":rate", "endpoint clock at %.3f s per gateway second (bounds "
                              "%.2f to %.2f)" % (rate, bounds["ttl_rate_min"], bounds["ttl_rate_max"])))
@@ -1114,7 +1142,9 @@ def write_report(out):
              "secure stack max | lifetime seen |\n|---|---|---|---|---|---|---|---|---|")
     for n in cfg["endpoints"]:
         tr = st["eps"][n]
-        rate = "%.4f over %d s" % (tr["rate_dttl"] / tr["rate_dt"], tr["rate_dt"]) if tr["rate_dt"] else "-"
+        est = ep_rate(tr)
+        rate = "%.4f over %d s (%d pairs, %d left out)" % (
+            est["rate"], est["span_s"], est["pairs"], est["left_out"]) if est else "-"
         stack = "%s/%s (first %s)" % (tr["stack_used_max"], tr["stack_size"], tr["stack_first"]) \
             if tr["stack_used_max"] is not None else "-"
         L.append("| %s | %d | %d | %d | %s | %s | %d | %s | %s |" % (
