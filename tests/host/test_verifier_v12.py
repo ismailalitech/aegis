@@ -60,7 +60,10 @@ def audit_checker(*args):
 def v11(path):
     """A file as Aegis 1.1 shipped it (tag v1.1.0), written to a directory of its own; None where git does not have
     the tag (a shallow checkout)."""
-    r = subprocess.run(["git", "-C", ROOT, "show", "v1.1.0:" + path], capture_output=True)
+    try:
+        r = subprocess.run(["git", "-C", ROOT, "show", "v1.1.0:" + path], capture_output=True)
+    except OSError:             # no git at all (the evaluation container): the host job runs these tests
+        return None
     if r.returncode != 0:
         return None
     d = tempfile.mkdtemp()
