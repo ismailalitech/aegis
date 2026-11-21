@@ -51,7 +51,7 @@ POLICY = "/root/aegis/gateway/policy/fleet.json"
 STATE_DIR = "/var/lib/aegis"
 SSH = "ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2 root@{gateway} "
 # fleet.py audit writes the record to a file; only that file reaches stdout (its JSON report goes to stderr)
-FETCH_CMD = SSH + ("'f=$(mktemp) || exit 1; python3 {fleet} audit {policy} --state-dir {state_dir} --out \"$f\" >&2; "
+FETCH_CMD = SSH + ("'f=$(mktemp) || exit 1; python3 {fleet} audit {policy}{signers_opt} --state-dir {state_dir} --out \"$f\" >&2; "
                    "rc=$?; cat \"$f\"; rm -f \"$f\"; exit $rc'")
 # the segment files, under the writers' lock where flock exists (no torn end in the copy)
 LOG_CMD = SSH + ("'cd {state_dir}/audit && if command -v flock >/dev/null 2>&1; then flock -s lock tar -cf - "
@@ -77,6 +77,10 @@ def now_iso():
 
 def render(template, values):
     for k, v in values.items():
+        if k == "signers_opt":      # "" or " --policy-signers PATH": the one place a space is allowed
+            if v and not (v.startswith(" --policy-signers ") and SAFE.match(v[len(" --policy-signers "):])):
+                raise SystemExit("audit_anchors: --policy-signers %r is not a plain path" % v)
+            continue
         if not SAFE.match(str(v)):
             raise SystemExit("audit_anchors: %s %r is not a plain host name or path" % (k, v))
     try:
@@ -537,7 +541,8 @@ def selftest():
 def values(a):
     if not a.gateway:
         raise SystemExit("audit_anchors: no gateway: give --gateway or set AEGIS_GATEWAY")
-    return {"gateway": a.gateway, "fleet": a.fleet, "policy": a.policy, "state_dir": a.state_dir}
+    return {"gateway": a.gateway, "fleet": a.fleet, "policy": a.policy, "state_dir": a.state_dir,
+            "signers_opt": (" --policy-signers " + a.policy_signers) if a.policy_signers else ""}
 
 
 def main(argv=None):
@@ -552,6 +557,8 @@ def main(argv=None):
     ap.add_argument("--store", default=STORE, help="default %(default)s")
     ap.add_argument("--fleet", default=FLEET, help="fleet.py on the gateway (default %(default)s)")
     ap.add_argument("--policy", default=POLICY, help="the policy on the gateway (default %(default)s)")
+    ap.add_argument("--policy-signers", help="the policy signers file on the gateway, when it runs a signed policy "
+                    "(then --policy names the signed file)")
     ap.add_argument("--state-dir", default=STATE_DIR, help="the verifier's state on the gateway (default %(default)s)")
     ap.add_argument("--fetch-cmd", default=FETCH_CMD, help="shell template printing one batch record")
     ap.add_argument("--log-cmd", default=LOG_CMD, help="shell template printing a tar of the segment files")
