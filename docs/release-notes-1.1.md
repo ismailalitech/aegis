@@ -9,11 +9,18 @@ Changes since [Aegis 1.0](release-notes-1.0.md). The Prover SDK is unchanged (re
   STM32H573s) is now labelled by the attestation key its policy entry pins: `trustzone-devkey` when that is TF-M's
   published development key (`gateway/policy/keys/tfm-dev-iak.pub.pem`), `trustzone` for a key of the device's own.
   Before 1.1 such a verdict carried no label, so a reader of the signed result had to infer the trust from other
-  claims. With the development key, the result's `executables` claim carries a detail that says so
+  claims. With the development key the verdict carries a warning, the signed result's status is "warning" instead of
+  "affirming", and its `executables` claim carries a detail that says why. A kind `psa` endpoint pinned to the same
+  key (its only signature) is labelled `development-shared-key`, with a warning. The key is recognised by its decoded
+  public key, not by the text of the PEM file
   (`common/eat.py`, `gateway/aegisd/fleet.py`; [`architecture.md`](architecture.md); tests in
   `tests/host/test_fleet.py` and `tests/host/test_evidence_format.py`).
 - **Anchors against a signed policy.** `tools/audit_anchors.py --policy-signers` (from 1.0's last pull request)
   lets the collector run against a gateway that runs from a signed policy.
+
+Older evidence (`evidence/zynqmp/optee-phase-a.txt`, the console diagrams) shows the ZynqMP's phase-A development
+profile as `trustzone-devkey`; that profile is labelled `development-shared-key` today, and `trustzone-devkey`
+means the TF-M case above.
 
 ## On the bench
 

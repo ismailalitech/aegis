@@ -748,7 +748,7 @@ class Results(Bench):
         facts = {"stage": "appraised", "signature": True, "components_ok": True}
         status, vector, details = eat.appraisal(verdict, facts)
         self.assertEqual(vector[eat.V_EXECUTABLES], eat.EX_BOOT_APPROVED)
-        self.assertIn("development key", " ".join(details[eat.V_EXECUTABLES]))
+        self.assertIn("development attestation key", " ".join(details[eat.V_EXECUTABLES]))
         verdict["trust"] = "trustzone"
         self.assertNotIn(eat.V_EXECUTABLES, eat.appraisal(verdict, facts)[2])
 
