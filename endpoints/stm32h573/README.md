@@ -47,7 +47,7 @@ gives 18704 for both builds).
 2. **Non-secure slot.** Allow the new NSPE next to the old one, write the prover, reset, wait for `ADMITTED`
    (`ssh root@$GATEWAY journalctl -u aegis-fleet -f`). Step 1's backup already holds this slot.
 
-       ssh root@$GATEWAY "cp /root/aegis/gateway/policy/fleet.json /root/aegis/gateway/policy/fleet.json.bak-eat"
+       ssh root@$GATEWAY "cp /root/aegis/gateway/policy/fleet.json /root/aegis/gateway/policy/fleet.json.bak-eat` (any name you will remember; `upgrade_secure.sh` makes its own `fleet.json.bak-<stamp>`"
        ssh root@$GATEWAY "python3 -c \"
        import json; P = '/root/aegis/gateway/policy/fleet.json'; p = json.load(open(P))
        e = [x for x in p['endpoints'] if x['name'] == 'stm32h573-dk-2'][0]
@@ -68,6 +68,24 @@ gives 18704 for both builds).
        json.dump(p, open(P, 'w'), indent=1)\""
 
    The gateway must run a `fleet.py` that knows `evidence_format` (this repository's `main` since WP10).
+
+### When the gateway runs a signed policy
+
+`upgrade_secure.sh` and the `fleet.json` edits above act on the unsigned policy file. If the loop runs from a signed
+policy (`docs/audit-and-policy.md`), they do not reach it. Do it as on the bench of 21 November 2026:
+
+1. Put the new SPE and NSPE next to the old ones in the signed policy (`policy-sign`, a new version), deploy it
+   (`fleet.py check` first), and let the loop reload it.
+2. Write both slots with STM32CubeProgrammer as in step 2 (`-d <hex> -v`, then `-hardRst`). The board is refused
+   with "component SPE is not the endorsed one" until step 3, as expected.
+3. `aegis_provision.py endorse` the new image (the reference holds only the two new components), then
+   `fleet.py enroll-endorsed <signed policy> <record> --policy-signers ...`. It does not pin the record; it prints
+   the record's pin. Use that printed `endorsement_sha256` (the record's own hash, not the SHA-256 of the file).
+4. Sign a policy with that pin, `"evidence_format": "eat-cose-v1"` and the old SPE and NSPE removed. The board is
+   then admitted, and `fleet.py export-evidence` gives a pack that `tools/verify_evidence.py pack` accepts.
+
+Rollback: sign a policy that allows the old SPE and NSPE again and drops `evidence_format`, write the rollback
+images, and re-endorse them (the old record is kept as `fleet.json.bak-<stamp>`'s `endorsement_sha256`).
 
 ### Roll back
 
