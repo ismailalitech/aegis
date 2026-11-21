@@ -194,6 +194,20 @@ def write_once(path, data):
         os.close(dfd)
 
 
+def flip(path, offset):
+    """Change one bit of a file in place, its size and times kept (selftest, tests: a store changed behind the tool's
+    back, by someone the read-only mode does not stop)."""
+    st = os.stat(path)
+    os.chmod(path, st.st_mode | 0o200)
+    with open(path, "r+b") as f:
+        f.seek(offset)
+        b = f.read(1)
+        f.seek(offset)
+        f.write(bytes([b[0] ^ 0x01]))
+    os.chmod(path, st.st_mode)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+
 def append(path, text):
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
@@ -501,10 +515,9 @@ def selftest():
             not os.access(os.path.join(store.anchors, f), os.W_OK) for f in os.listdir(store.anchors))
             and len(store.load()) == 2 else [("store", "")], [])
         store.close()
-        os.chmod(os.path.join(store.anchors, sorted(os.listdir(store.anchors))[0]), 0o600)
-        with open(os.path.join(store.anchors, sorted(os.listdir(store.anchors))[0]), "r+b") as f:
-            f.seek(40)
-            f.write(b"\xff")
+        # one bit flipped (XOR: a byte is never "changed" to the value it had), same size, same mtime, written as
+        # root could: what is found is the content against the manifest, not the mode or the time
+        flip(os.path.join(store.anchors, sorted(os.listdir(store.anchors))[0]), 40)
         store = Store(os.path.join(tmp, "store"), [pk])
         try:
             store.load()

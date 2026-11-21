@@ -25,6 +25,8 @@ import audit  # noqa: E402
 import cbor  # noqa: E402
 import cose  # noqa: E402
 import mldsa  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import audit_anchors as aa  # noqa: E402
 from test_audit_policy import NEEDS_LIBS, VPK, VSK, XPK, XSK, T0, make_state, records  # noqa: E402
 
 TOOL = os.path.join(ROOT, "tools", "audit_anchors.py")
@@ -259,15 +261,40 @@ class Anchors(unittest.TestCase):
         self.fetch(records(self.audit_dir)[-1])
         d, lines = self.kept()
         f = os.path.join(d, "anchors", lines[0]["file"])
-        os.chmod(f, 0o600)
-        with open(f, "r+b") as fh:
-            fh.write(b"\x00")
+        aa.flip(f, 0)
         rc, rep = self.check()
         self.assertEqual((rc, self.kinds(rep)), (1, ["store"]), rep)
         os.unlink(f)
         self.assertEqual(self.kinds(self.check()[1]), ["store"])
         rc, rep = self.fetch(records(self.audit_dir)[-1])                 # a fetch does not repair it either
         self.assertEqual(self.kinds(rep), ["store"])
+
+    def test_any_one_bit_changed_in_a_kept_anchor_is_found_whatever_its_mode_size_and_time(self):
+        # regression (CI run 44845868657): the selftest overwrote byte 40, inside the random kid, with 0xff, which it
+        # sometimes already was. Every byte position is changed here (XOR), as root would (mode ignored), with the
+        # size and mtime kept: only the content against the manifest and the signature can find it
+        self.fetch(records(self.audit_dir)[-1])
+        d, lines = self.kept()
+        f = os.path.join(d, "anchors", lines[0]["file"])
+        st = os.stat(f)
+        size = st.st_size
+        for offset in sorted({0, 1, 11, 40, 100, size // 2, size - 1}):
+            aa.flip(f, offset)
+            st2 = os.stat(f)
+            self.assertEqual((st2.st_size, st2.st_mtime_ns, st2.st_mode), (st.st_size, st.st_mtime_ns, st.st_mode))
+            store = aa.Store(self.store, [VPK])
+            try:
+                with self.assertRaises(aa.Found) as cm:
+                    store.load()
+                self.assertEqual(cm.exception.kind, "store")
+            finally:
+                store.close()
+            aa.flip(f, offset)                                            # back as it was
+            store = aa.Store(self.store, [VPK])
+            try:
+                self.assertEqual(len(store.load()), 1)
+            finally:
+                store.close()
 
     def test_watch_alerts_on_changes_only(self):
         self.fetch(records(self.audit_dir)[-1])
