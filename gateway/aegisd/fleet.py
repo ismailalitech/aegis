@@ -169,6 +169,10 @@ LEGACY_QUOTE = "aegis-quote-v1"     # the default: claims or a PSA token, and a 
 #                                     "aegis-endpoint-quote-v1" || 0x00 || token
 PSA_TOKEN = "psa-token"             # kind psa: TF-M's token alone (COSE_Sign1, ES256)
 PACK_FORMAT = "aegis-evidence-pack-v1"
+# policy "min_trust": the trust labels, strongest first (docs/audit-and-policy.md, "Disabled entries and trust
+# floors"). A floor is met by its own label and every one before it; a verdict without a label meets none.
+TRUST_ORDER = ("trustzone", "trustzone-devkey", "device-key", "software", "development-shared-key")
+DISABLED_REASON = "disabled by policy"     # policy "disabled": true: the endpoint is not contacted
 TOFU_NOTE = ('trust on first use: nothing shows that the pinned key belongs to a genuine device (no "endorsement": '
              '"required" in the policy entry); weaker')
 
@@ -558,10 +562,49 @@ def _current_record(ep, rec, body, now):
 
 
 def effective_entry(policy, ep):
-    """The entry as the verifier applies it: policy-wide settings that the entry does not set itself, merged in."""
-    if isinstance(ep, dict) and "max_endorsement_age_s" in policy and "max_endorsement_age_s" not in ep:
-        return dict(ep, max_endorsement_age_s=policy["max_endorsement_age_s"])
-    return ep
+    """The entry as the verifier applies it: policy-wide settings that the entry does not set itself
+    ("max_endorsement_age_s", "min_trust"), merged in. The entry's own value replaces the policy-wide one."""
+    if not isinstance(ep, dict):
+        return ep
+    merged = {k: policy[k] for k in ("max_endorsement_age_s", "min_trust") if k in policy and k not in ep}
+    return dict(ep, **merged) if merged else ep
+
+
+def trust_meets(trust, floor):
+    """Whether the trust label trust meets the floor (TRUST_ORDER: strongest first). No label meets no floor."""
+    return trust in TRUST_ORDER and floor in TRUST_ORDER and TRUST_ORDER.index(trust) <= TRUST_ORDER.index(floor)
+
+
+def possible_trust(ep, base_dir):
+    """The trust labels a verdict of this (valid) entry can carry, from its kind, profile and keys: a set holding
+    labels and None (no label). For `check`: a floor that none of them meets is never met."""
+    kind = ep.get("kind", "psa")
+    if kind in PLAIN_KINDS:
+        return {PLAIN_KINDS[kind].get(ep.get("profile"))}
+    if not ep.get("iak_pub_pem"):
+        return {None}               # aegis-pq without an ES256 key; psa always has one (policy_errors)
+    try:
+        with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
+            dev = pem_first_der(f.read()) == TFM_DEV_IAK_DER
+    except OSError:
+        return {"trustzone", "trustzone-devkey"} if kind == "aegis-pq" else {"development-shared-key", None}
+    if kind == "aegis-pq":
+        return {"trustzone-devkey" if dev else "trustzone"}
+    return {"development-shared-key" if dev else None}
+
+
+def trust_floor_note(ep, base_dir):
+    """For `check`: (what the entry's min_trust means for it, whether the floor can never be met), or None without a
+    floor."""
+    floor = ep.get("min_trust")
+    if floor is None:
+        return None
+    labels = possible_trust(ep, base_dir)
+    names = " or ".join(sorted(t or "none" for t in labels))
+    if any(trust_meets(t, floor) for t in labels):
+        return "min_trust %s: met by trust %s" % (floor, names), False
+    return ("min_trust %s can NEVER be met: this entry's trust is %s (order: %s); it is quarantined every cycle"
+            % (floor, names, " > ".join(TRUST_ORDER)), True)
 
 
 def enrolment_note(ep, base_dir, endorsers=None):
@@ -751,6 +794,14 @@ def policy_errors(ep):
         errors.append("policy: unknown evidence_format %r (known: %s)" % (fmt, ", ".join(EVIDENCE_FORMATS)))
     elif fmt is not None and kind not in PQ_KINDS:
         errors.append("policy: evidence_format %s needs a post-quantum kind (%s)" % (fmt, ", ".join(PQ_KINDS)))
+    if "disabled" in ep and not isinstance(ep["disabled"], bool):
+        # a value that is not true or false is not taken as either: the entry is refused
+        errors.append("policy: disabled is not true or false")
+    floor = ep.get("min_trust")
+    if "min_trust" in ep and not (isinstance(floor, str) and floor in TRUST_ORDER):
+        # a floor this verifier does not know must not be taken as no floor
+        errors.append("policy: unknown min_trust %r (known, strongest first: %s)" % (
+            floor if isinstance(floor, (str, int, bool, type(None))) else type(floor).__name__, ", ".join(TRUST_ORDER)))
     return errors
 
 
@@ -789,6 +840,10 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None, facts=None)
     An entry with "evidence_format": "eat-cose-v1" is asked for standard evidence (PQEAT): an EAT in a COSE_Sign1
     signed with the same ML-DSA-65 key (common/cose.py, common/eat.py). Its claims go through the same rules; an
     answer in the older format is then not accepted, and the other way round.
+    An entry with "disabled": true is not contacted: the verdict is not admitted, says "disabled": true and the reason
+    DISABLED_REASON. An entry with "min_trust" (its own, or the policy's top-level one: effective_entry) is admitted
+    only if the verdict's trust label meets that floor (trust_meets); otherwise the reason "trust X below min_trust
+    Y" is added, every cycle; the verdict says "min_trust".
     facts, if given, is a dict that receives what an attestation result needs and the verdict does not carry
     (attestation_result()): "stage" (policy, endorsement, no-evidence, evidence, appraised: how far it got),
     "format", "evidence" and "evidence_sig" (the bytes received), "signature" (False, True; absent if not checked),
@@ -800,9 +855,17 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None, facts=None)
     facts.clear()
     facts["stage"] = "policy"
     errors = policy_errors(ep)
+    if ep.get("disabled") is True:
+        # the operator took the endpoint out: not asked, quarantined (and its session revoked) like any refusal
+        verdict["disabled"] = True
+        verdict["reasons"] += [DISABLED_REASON] + errors
+        return verdict
     if errors:
         verdict["reasons"] += errors
         return verdict
+    floor = ep.get("min_trust")
+    if floor is not None:
+        verdict["min_trust"] = floor
     eat_format = ep.get("evidence_format") == EAT_COSE
     facts["format"] = EAT_COSE if eat_format else LEGACY_QUOTE if kind in PQ_KINDS else PSA_TOKEN
     if eat_format:
@@ -946,6 +1009,9 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None, facts=None)
         verdict["instance_id"] = s.get("instance_id")
     except Exception as e:  # noqa: BLE001 - malformed but signed claims: refuse, do not crash
         verdict["reasons"].append("claims not usable: %s: %s" % (type(e).__name__, e))
+    if floor is not None and not trust_meets(verdict.get("trust"), floor):
+        # every cycle: the label is this quote's, and the floor the policy's of this cycle
+        verdict["reasons"].append("trust %s below min_trust %s" % (verdict.get("trust") or "none", floor))
     verdict["admitted"] = not verdict["reasons"]
     return verdict
 
@@ -1324,22 +1390,31 @@ def keep_attestation(state, verdict, facts, result, policy_bytes):
     return meta
 
 
-def issue_result(verdict, facts, keys, policy_bytes, state, ttl=None):
+def issue_result(verdict, facts, keys, policy_bytes, state, ttl=None, audit=None):
     """Sign and keep the attestation result of one verdict; the verdict gets "attestation_result": {"status",
     "sha256", "file" (where the COSE_Sign1 is kept)}. Never raises: a result that cannot be made is reported in the verdict
-    ("error"), and the verdict itself stands."""
+    ("error"), and the verdict itself stands. audit: the AuditTrail, if the policy keeps an audit log; the result
+    then names the log's last batch on disk as it is signed (aegis.audit-head), and the verdict's "attestation_result"
+    says which ("audit_head": {"log", "batch", "sha256"}, in hex)."""
     try:
         import eat
         if not (isinstance(verdict.get("endpoint"), str) and ENTRY_NAME.match(verdict["endpoint"])):
             raise ValueError("the entry's name is not a file name")
         if facts.get("evidence"):
             facts["evidence_sha256"] = hashlib.sha256(facts["evidence"]).digest()
+        facts.pop("audit_head", None)
+        head = audit.head() if audit is not None else None
+        if head is not None:
+            facts["audit_head"] = head
         result = attestation_result(verdict, facts, keys, policy_bytes, ttl)
         keep_attestation(state, verdict, facts, result, policy_bytes)
         verdict["attestation_result"] = {"status": eat.TIER_NAMES[eat.appraisal(verdict, facts)[0]],
                                          "sha256": hashlib.sha256(result).hexdigest(),
                                          "file": os.path.join(attestation_dir(state, verdict["endpoint"]),
                                                               "result.cbor")}
+        if head is not None:
+            verdict["attestation_result"]["audit_head"] = {"log": head[0].hex(), "batch": head[1],
+                                                           "sha256": head[2].hex()}
     except Exception as e:  # noqa: BLE001 - the verdict and its enforcement do not depend on the result
         verdict["attestation_result"] = {"error": "%s: %s" % (type(e).__name__, e)}
 
@@ -1349,9 +1424,11 @@ def export_evidence(policy, policy_bytes, base_dir, state, name, out, with_polic
     attestation result (keep_attestation), the entry's endorsement record, the public keys as COSE_Key files and
     manifest.json, which names every file by its SHA-256 and the policy by its hash. tools/verify_evidence.py checks
     a pack with third-party libraries only. The keys in a pack are for convenience: whoever relies on it compares
-    their thumbprints with the keys they trust. Raises ValueError or OSError; returns the manifest."""
+    their thumbprints with the keys they trust. manifest.cose is the verifier's signature over manifest.json and the
+    export time (common/evidence_pack.py). Raises ValueError or OSError; returns the manifest."""
     import cose
     import eat
+    import evidence_pack
     eps = [e for e in policy.get("endpoints", []) if isinstance(e, dict) and e.get("name") == name]
     if len(eps) != 1 or not ENTRY_NAME.match(str(name)):
         raise ValueError("the policy has %s entry named %r" % ("no" if not eps else "more than one", str(name)[:40]))
@@ -1400,25 +1477,42 @@ def export_evidence(policy, policy_bytes, base_dir, state, name, out, with_polic
                 files["keys/endorser.cosekey"] = cbor_key(e["pk"])
     if with_policy:
         files["policy.json"] = policy_bytes
-    manifest = {"format": PACK_FORMAT, "endpoint": name, "kind": kind, "exported": int(time.time()),
+    exported = int(time.time())
+    summary = {"status": result["status"], "admitted": result["admitted"], "iat": result["iat"], "exp": result["exp"]}
+    # Aegis 1.2: what the result says besides, for a reader of the manifest (the result itself is what is signed)
+    if result.get("audit_head"):
+        h = result["audit_head"]
+        summary["audit_head"] = {"log": h["log"].hex(), "batch": h["batch"], "sha256": h["sha256"].hex()}
+    for k in ("warnings", "min_trust"):
+        if result.get(k):
+            summary[k] = result[k]
+    if result.get("disabled"):
+        summary["disabled"] = True
+    manifest = {"format": PACK_FORMAT, "endpoint": name, "kind": kind, "exported": exported,
                 "evidence_format": meta.get("evidence_format"),
                 "policy_sha256": meta["policy_sha256"],
                 "policy_id": eat.policy_id(policy_bytes) if hashlib.sha256(policy_bytes).hexdigest() ==
                 meta["policy_sha256"] else None,
                 "policy_now_sha256": hashlib.sha256(policy_bytes).hexdigest(),
-                "result": {"status": result["status"], "admitted": result["admitted"], "iat": result["iat"],
-                           "exp": result["exp"]},
+                "result": summary,
                 "key_thumbprints": {k[5:-8]: cose.key_thumbprint(cose.key_from_cose(_cbor_loads(v))).hex()
                                     for k, v in files.items() if k.endswith(".cosekey")},
                 "files": {k: hashlib.sha256(v).hexdigest() for k, v in sorted(files.items())},
+                # Aegis 1.2: the verifier's signature over this file's bytes and the export time
+                # (common/evidence_pack.py); a 1.1 reader skips the key and the file
+                "signed_manifest": evidence_pack.SIGNATURE_FILE,
                 "verify": "tools/verify_evidence.py pack <this directory>"}
+    manifest_bytes = (json.dumps(manifest, indent=1) + "\n").encode()
+    signed = evidence_pack.sign(keys[0], keys[1], name, exported, manifest_bytes, files["attestation-result.cbor"])
+    evidence_pack.read(signed, keys[1], manifest_bytes, files["attestation-result.cbor"])    # as a reader will
     os.makedirs(os.path.join(out, "keys"))          # a new directory: an existing pack is never mixed with this one
     for fname, data in files.items():
         with open(os.path.join(out, fname), "wb") as f:
             f.write(data)
-    with open(os.path.join(out, "manifest.json"), "w") as f:
-        json.dump(manifest, f, indent=1)
-        f.write("\n")
+    with open(os.path.join(out, "manifest.json"), "wb") as f:
+        f.write(manifest_bytes)
+    with open(os.path.join(out, evidence_pack.SIGNATURE_FILE), "wb") as f:
+        f.write(signed)
     return manifest
 
 
@@ -1702,7 +1796,8 @@ class AuditTrail:
             # address that changes every cycle); how far the appraisal got is
             key = repr((admitted, facts.get("stage"), v.get("device_pk_sha256"),
                         sorted((str(k), str(m)) for k, m in meas.items()), v.get("enrolment"), v.get("trust"),
-                        e.get("record_sha256"), facts.get("format"), v.get("enforcement")))
+                        e.get("record_sha256"), facts.get("format"), v.get("enforcement"),
+                        v.get("disabled") is True, str(v.get("min_trust"))))
             if self.decisions.get((name, address)) == key:
                 return
             self.decisions[(name, address)] = key
@@ -1715,7 +1810,8 @@ class AuditTrail:
                  "device_key_sha256": _digest(v.get("device_pk_sha256")),
                  "endorsement_sha256": _digest(e.get("record_sha256")), "endorser": e.get("endorser_name"),
                  "quote_sha3_256": _digest(quote.get("token_sha3_256")), "result_sha256": _digest(result.get("sha256")),
-                 "warning": v.get("warning")}
+                 "warning": v.get("warning"), "disabled": True if v.get("disabled") is True else None,
+                 "min_trust": v.get("min_trust")}
             if meas:
                 d["measurements"] = {str(k)[:64]: _digest(m) or str(m)[:64] for k, m in list(meas.items())[:16]}
             if not admitted:
@@ -1723,12 +1819,22 @@ class AuditTrail:
                 d["reasons"] = reasons[:6]
                 if len(reasons) > 6:
                     d["more_reasons"] = len(reasons) - 6
-            for k in ("credential", "warning"):
+            for k in ("credential", "warning", "min_trust"):
                 if d[k] is not None:
                     d[k] = str(d[k])[:240]
             self.log.add("admit" if admitted else "refuse", name, {k: x for k, x in d.items() if x is not None},
                          v.get("time"))
         self._guard("decision", note)
+
+    def head(self):
+        """(log id, batch number, SHA-256 of the record) of the log's last batch record on disk now, or None (no batch
+        yet, or the log cannot be read). It is the head an attestation result signed now names (aegis.audit-head):
+        a batch written before the result. The entries this cycle queues, the result's own decision among them, go
+        into a later batch: at the end of the cycle, or up to min_interval_s later."""
+        def read():
+            b = self.log.head()
+            return None if b is None else (b.log, b.batch, b.head)
+        return self._guard("head", read)
 
     # -- writing --
 
@@ -1909,7 +2015,7 @@ def run_once(policy, base_dir, ecdsa_verify, credentials=True, interval=30, stat
                                       (again.get("quote") is not None and v.get("quote") == again.get("quote"))):
                 facts = second["facts"]     # the cycle's verdict rests on the second quote: that is its evidence
         if signs:
-            issue_result(v, facts, signer, policy_bytes, state, ttl)
+            issue_result(v, facts, signer, policy_bytes, state, ttl, audit)
         if audit is not None:
             audit.decision(v, facts, ep)
         out.append(v)
@@ -2017,10 +2123,10 @@ def main(argv=None):
         except (OSError, ValueError) as e:
             print("export-evidence: %s" % e, file=sys.stderr)
             return 1
-        print("evidence pack of %s in %s: %s, result %s (%s), policy sha256 %s\n  %s" % (
+        print("evidence pack of %s in %s: %s, result %s (%s), policy sha256 %s, exported at %d (signed in %s)\n  %s" % (
             m["endpoint"], out, m["evidence_format"], m["result"]["status"],
-            "admitted" if m["result"]["admitted"] else "not admitted", m["policy_sha256"],
-            "\n  ".join("%s  %s" % (h, n) for n, h in m["files"].items())))
+            "admitted" if m["result"]["admitted"] else "not admitted", m["policy_sha256"], m["exported"],
+            m["signed_manifest"], "\n  ".join("%s  %s" % (h, n) for n, h in m["files"].items())))
         return 0
     if a.cmd == "enroll-endorsed":
         # Endorsed enrolment (docs/enrolment.md): each record is checked against this policy's trusted endorsers and
@@ -2103,8 +2209,19 @@ def main(argv=None):
             ep = effective_entry(policy, ep)
             errs, warns = policy_errors(ep), policy_warnings(ep)
             bad += bool(errs)
+            if ep.get("disabled") is True:
+                # what the operator asked for, not a mistake: not counted. Its session is revoked, its enforcement
+                # is a quarantine, every cycle
+                print("%s DISABLED: %s: not contacted, quarantined every cycle, its session revoked%s" % (
+                    ep.get("name"), DISABLED_REASON, "; also REFUSED: " + "; ".join(errs) if errs else ""))
+                continue
             print("%s %s%s" % (ep.get("name"), "REFUSED: " + "; ".join(errs) if errs else "ok",
                                "".join(" " + w for w in warns)))
+            floor = None if errs else trust_floor_note(ep, base)
+            if floor is not None:
+                bad += floor[1]
+                print("  %s%s" % (floor[0], " (the entry's own floor; the policy's is %s)" % policy["min_trust"]
+                                  if "min_trust" in policy and ep["min_trust"] != policy["min_trust"] else ""))
             if not errs and ep.get("kind") in PQ_KINDS:
                 note, refused = enrolment_note(ep, base, policy.get("endorsers"))
                 bad += refused
@@ -2166,11 +2283,14 @@ def main(argv=None):
     if not a.no_credentials:
         for ep in policy.get("endpoints", []):
             if ep.get("provision") and ep.get("transcript") not in TRANSCRIPTS and not policy_errors(ep) \
-                    and not issuer_refusal(ep, state_dir, on_host):
+                    and ep.get("disabled") is not True and not issuer_refusal(ep, state_dir, on_host):
                 log("aegis-fleet: %s: %s" % (ep.get("name"), binding_note(ep)), LOG_WARNING)
     for ep in policy.get("endpoints", []):
-        if ep.get("kind") in PQ_KINDS and ep.get("endorsement") is None and not policy_errors(ep):
+        if ep.get("kind") in PQ_KINDS and ep.get("endorsement") is None and not policy_errors(ep) \
+                and ep.get("disabled") is not True:
             log("aegis-fleet: %s: enrolment: %s" % (ep.get("name"), TOFU_NOTE), LOG_WARNING)
+        elif ep.get("disabled") is True:
+            log("aegis-fleet: %s: %s: not contacted, quarantined every cycle" % (ep.get("name"), DISABLED_REASON))
     if pinfo["signed"]:
         log("aegis-fleet: %s" % policy_line(pinfo))
     trail, refused = None, None
