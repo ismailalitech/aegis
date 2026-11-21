@@ -144,6 +144,17 @@ is counted and the count becomes a `gap` entry. If the policy changes the log's 
 written, what the old settings' writer held goes to the new one, followed by a `gap` entry that says how many
 entries were carried over and how many did not fit.
 
+### Measured on the bench
+
+On 21 November 2026 the bench gateway (PolarFire SoC, three provisioned endpoints, 30 s cycle) ran with the audit log
+on, a signed policy, and standard-format results (`"evidence_format": "eat-cose-v1"`) on one endpoint (the STM32
+board 2). Over ten minutes: the audit directory did not grow (44 KB before and after; eight batches, 43 KB, in the
+first hour), the fleet service's resident memory stayed at 25132 KB, and the credentials directory at 10 KB. The one
+endpoint with standard results rewrites its three files in place every cycle (`evidence.cbor` 4048 bytes,
+`result.cbor` 4529, `meta.json` 440): about 9 KB a cycle, about 23 MB a day, about 8 GB of writes a year, and no
+growth in size. The kernel on the gateway exposes no per-process write counter, so these are file sizes and cycle
+counts, not measured flash writes. Standard results on every endpoint would be about three times that.
+
 ### What a reader can tell
 
 `audit.verify()` and `tools/verify_audit.py` check the same things, in file order: every record is a batch record
