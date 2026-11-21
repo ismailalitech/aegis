@@ -41,6 +41,14 @@
      raises PolicyRefused and nothing else, and the checker never verifies it. Whatever a verdict holds (random
      CBOR in every field), the audit trail never raises, and the log it wrote verifies under both readers, which
      read the same entries from it.
+  8. Aegis 1.2. A pack's manifest.cose that is not the verifier's statement of exactly this pack (mutated, another
+     key, the verifier's key under another typ or header, another endpoint, time, manifest or result, a claim
+     added, removed or replaced) is never accepted: common/evidence_pack.py raises its Refused or cose.Refused and
+     nothing else, and the checker (tools/verify_evidence.py) agrees on every one. A result whose new claims
+     (aegis.audit-log/-batch/-head, aegis.warnings, aegis.disabled, aegis.min-trust) hold anything is read by
+     eat.read_ear only if each is of its form, and the checker agrees. A policy entry whose "disabled" and
+     "min_trust" hold anything: attest() never raises, contacts the endpoint only where it may admit it (not where
+     the floor can never be met by the entry's profile), admits exactly where the floor is met, and the result made of the verdict reads back and says "disabled".
 
   fuzz_host.py [iterations]     prints a JSON summary, exit 0 only if no property broke
 """
@@ -1062,9 +1070,199 @@ try:
 except Exception as e:  # noqa: BLE001
     ap_broken("the log written from hostile verdicts does not verify: %r" % (e,))
 
+# ---- 8. Aegis 1.2: the signed pack statement, the result's new claims, "disabled" and "min_trust" ----
+import evidence_pack  # noqa: E402
+
+v12 = {"pack_statements": 0, "pack_accepted_other": 0, "pack_raised": 0, "pack_readers_disagree": 0,
+       "results": 0, "result_raised": 0, "result_misread": 0, "result_readers_disagree": 0,
+       "entries": 0, "entry_wrong": 0, "entry_raised": 0, "entry_result_unreadable": 0,
+       "checker": checker is not None}
+
+
+def v12_broken(text):
+    if len(broken) < 20:
+        broken.append("aegis 1.2: " + text)
+
+
+# 8a. manifest.cose: bytes that are not the verifier's statement of this pack
+pack_dir = tempfile.mkdtemp()
+PACK_MAN = {"format": "aegis-evidence-pack-v1", "endpoint": "dev", "exported": 1_800_000_000,
+            "signed_manifest": "manifest.cose"}
+pack_man_bytes = (json.dumps(PACK_MAN, indent=1) + "\n").encode()
+good_pack = evidence_pack.sign(v_sk, v_pk, "dev", PACK_MAN["exported"], pack_man_bytes, good_ear)
+good_pack_payload = cose.parse(good_pack).payload
+
+
+def pack_readers(data):
+    """(the verifier's reader accepts, the checker accepts or None) for manifest.cose bytes in the pack above."""
+    try:
+        evidence_pack.read(data, v_pk, pack_man_bytes, good_ear)
+        ours = True
+    except (evidence_pack.Refused, cose.Refused):
+        ours = False
+    except Exception as e:  # noqa: BLE001
+        ours = False
+        v12["pack_raised"] += 1
+        v12_broken("evidence_pack.read raised %r" % (e,))
+    theirs = None
+    if checker is not None:
+        with open(os.path.join(pack_dir, "manifest.cose"), "wb") as f:
+            f.write(data)
+        try:
+            theirs = checker.check_pack_signature(pack_dir, PACK_MAN, pack_man_bytes, good_ear, v_pk, True)["signed"]
+        except Exception:  # noqa: BLE001
+            theirs = False
+    return ours, theirs
+
+
+if pack_readers(good_pack) not in ((True, True), (True, None)):
+    v12_broken("the control (a good pack statement) was not accepted")
+
+
+def hostile_pack():
+    which = R.randrange(7)
+    if which == 0:
+        return mutate(good_pack)
+    c = cbor.loads(good_pack_payload)
+    if which == 1:          # the verifier's key under another typ: a result, a batch, a policy
+        return cose.sign1(v_sk, v_pk, good_pack_payload, typ=R.choice([cose.TYP_EAT_CWT, audit.TYP, signed_policy.TYP]))
+    if which == 2:          # another key
+        return cose.sign1(r_sk, r_pk, good_pack_payload, typ=evidence_pack.TYP)
+    if which == 3:
+        return hostile_header(v_pk, v_sk, good_pack_payload, typ=evidence_pack.TYP)
+    if which == 4:          # another pack, another time, another manifest or result: properly signed
+        k = R.choice([2, 3, 4, 5])
+        c[k] = {2: lambda: R.choice(["other", "dev ", "", "x" * 65]), 3: lambda: c[3] + R.choice([-1, 1, 3600]),
+                4: lambda: hashlib.sha256(pack_man_bytes + b" ").digest(),
+                5: lambda: hashlib.sha256(good_ev).digest()}[k]()
+    elif which == 5:
+        k = R.choice(list(c) + [0, 6, -1, "x"])
+        c[k] = rand_cbor(1)
+    else:
+        del c[R.choice(list(c))]
+    return cose.sign1(v_sk, v_pk, cbor.dumps(c, sort=True), typ=evidence_pack.TYP)
+
+
+for _ in range(min(N, 900)):
+    data = hostile_pack()
+    if data == good_pack:
+        continue
+    v12["pack_statements"] += 1
+    ours, theirs = pack_readers(data)
+    same = False
+    try:
+        same = cose.verify1(data, v_pk, typ=evidence_pack.TYP).payload == good_pack_payload
+    except Exception:  # noqa: BLE001
+        pass
+    if ours and not same:
+        v12["pack_accepted_other"] += 1
+        v12_broken("a pack statement that is not this pack's was accepted: %s..." % data.hex()[:120])
+    if theirs is not None and theirs != ours:
+        v12["pack_readers_disagree"] += 1
+        v12_broken("the two readers disagree on a pack statement (verifier %s, checker %s): %s..." % (
+            ours, theirs, data.hex()[:120]))
+
+# 8b. attestation results whose Aegis 1.2 claims hold anything, signed by the verifier
+good_ear_claims = cbor.loads(cose.parse(good_ear).payload)
+NEW_CLAIMS = {"aegis.audit-log": lambda: R.choice([bytes(16), bytes(15), "00" * 16]),
+              "aegis.audit-batch": lambda: R.choice([1, 7, 0, -1, 1 << 53, True, "1"]),
+              "aegis.audit-head": lambda: R.choice([bytes(32), bytes(33), None]),
+              "aegis.warnings": lambda: R.choice([["w"], ["w"] * 8, ["w"] * 9, [], [""], ["x" * 301], "w", [1]]),
+              "aegis.disabled": lambda: R.choice([True, False, 1, None]),
+              "aegis.min-trust": lambda: R.choice(["trustzone", "", "x" * 65, 3, None]),
+              "aegis.pack-signed": lambda: R.choice([True, False, 1, None, "true"])}
+for _ in range(min(N, 600)):
+    c = cbor.loads(cbor.dumps(good_ear_claims))
+    ver = next(iter(c[266].values()))[1006]
+    for k in R.sample(list(NEW_CLAIMS), R.randrange(1, len(NEW_CLAIMS) + 1)):
+        ver[k] = NEW_CLAIMS[k]() if R.random() < 0.8 else rand_cbor(1)
+    data = cose.sign1(v_sk, v_pk, cbor.dumps(c, sort=True))
+    v12["results"] += 1
+    try:
+        r = eat.read_ear(data, v_pk)
+        ours = True
+        h = r["audit_head"]
+        if not ((h is None or (len(h["log"]) == 16 and type(h["batch"]) is int and h["batch"] >= 1
+                               and len(h["sha256"]) == 32))
+                and (r["warnings"] is None or (1 <= len(r["warnings"]) <= 8 and all(
+                    isinstance(w, str) and 1 <= len(w) <= 300 for w in r["warnings"])))
+                and (not r["disabled"] or not r["admitted"])
+                and (r["min_trust"] is None or (isinstance(r["min_trust"], str) and 1 <= len(r["min_trust"]) <= 64))
+                and r["pack_signed"] == (ver.get("aegis.pack-signed") is True)):
+            v12["result_misread"] += 1
+            v12_broken("read_ear accepted a 1.2 claim not of its form: %r" % (ver,))
+    except (eat.Refused, cose.Refused):
+        ours = False
+    except Exception as e:  # noqa: BLE001
+        ours = False
+        v12["result_raised"] += 1
+        v12_broken("read_ear raised %r" % (e,))
+    if checker is not None:
+        try:
+            checker.check_result(data, v_pk)
+            theirs = True
+        except Exception:  # noqa: BLE001 - its main() prints every exception as "not verified"
+            theirs = False
+        if theirs != ours:
+            v12["result_readers_disagree"] += 1
+            v12_broken("the two readers disagree on a result's 1.2 claims (verifier %s, checker %s): %r" % (
+                ours, theirs, ver))
+
+# 8c. policy entries whose "disabled" and "min_trust" hold anything: attest() never raises, contacts the endpoint
+# only for an entry it may admit, admits only where the floor is met, and the result it makes reads back
+DEV_HUK = fleet.TEE_DEVHUK_PROFILE
+for i in range(min(N, 400)):
+    devhuk = i % 2 == 1                     # trust "development-shared-key"; the other: "trustzone"
+    ep = dict(std_ep, profile=DEV_HUK if devhuk else fleet.TEE_PROFILE)
+    if devhuk:
+        ep["allow_dev_profile"] = True
+    for key, values in (("disabled", [True, False, None, 0, 1, "true", [], {}]),
+                        ("min_trust", list(fleet.TRUST_ORDER) + [None, "", "TrustZone", 1, ["trustzone"]])):
+        if R.random() < 0.6:
+            ep[key] = R.choice(values) if R.random() < 0.85 else rand_cbor(1)
+    valid = ("disabled" not in ep or isinstance(ep["disabled"], bool)) and (
+        "min_trust" not in ep or (isinstance(ep["min_trust"], str) and ep["min_trust"] in fleet.TRUST_ORDER))
+    label = "development-shared-key" if devhuk else "trustzone"
+    # a floor the entry's profile can never meet is a policy error: the entry is not asked either
+    met = "min_trust" not in ep or (valid and fleet.TRUST_ORDER.index(label) <= fleet.TRUST_ORDER.index(ep["min_trust"]))
+    contact = valid and ep.get("disabled") is not True and met
+    want = contact
+    platform = DEV_HUK if devhuk else fleet.TEE_PROFILE
+
+    def make(ch, platform=platform):
+        c = std_claims(ch)
+        c[-82400] = platform
+        return cose.sign1(pq_sk, pq_pk, cbor.dumps(c, sort=True))
+    if contact:
+        ep["port"] = Responder(make).port
+    else:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            ep["port"] = s.getsockname()[1]  # nobody listens: a contact would show as "no attestation"
+    v12["entries"] += 1
+    facts = {}
+    try:
+        v = fleet.attest(ep, None, std_dir, 2, facts=facts)
+        if v["admitted"] != want or (not contact and any(r.startswith("no attestation") for r in v["reasons"])) \
+                or (ep.get("disabled") is True and v["reasons"][0] != "disabled by policy"):
+            v12["entry_wrong"] += 1
+            v12_broken("entry %r: admitted %s (want %s), reasons %r" % (
+                {k: ep.get(k) for k in ("disabled", "min_trust", "profile")}, v["admitted"], want, v["reasons"]))
+        try:
+            r = eat.read_ear(cose.sign1(v_sk, v_pk, eat.ear_payload(v, facts, eat.policy_id(b"{}"), 1000)), v_pk)
+            if r["disabled"] != (ep.get("disabled") is True) or (ep.get("disabled") is True and r["status"] != "incomplete"):
+                v12["entry_wrong"] += 1
+                v12_broken("the result of a disabled entry does not say so: %r" % (r,))
+        except Exception as e:  # noqa: BLE001
+            v12["entry_result_unreadable"] += 1
+            v12_broken("the result of entry %r does not read back: %r" % (ep, e))
+    except Exception as e:  # noqa: BLE001
+        v12["entry_raised"] += 1
+        v12_broken("attest() raised %r on entry %r" % (e, ep))
+
 print(json.dumps({"token_parser": token_result, "aegisd_service": service_result,
                   "hostile_endpoint": endpoint_result, "one_transcript": transcript_result,
                   "endorsed_enrolment": endorsement_result, "standard_evidence": std, "audit_and_policy": ap,
-                  "broken": broken},
+                  "aegis_1_2": v12, "broken": broken},
                  indent=1))
 sys.exit(1 if broken else 0)

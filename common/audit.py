@@ -615,12 +615,18 @@ class Log:
                 os.close(dfd)
 
     def head(self):
-        """The log's last batch record as it is on disk now (a Batch; its .raw is an anchor), or None."""
+        """The log's last batch record as it is on disk now (a Batch; its .raw is an anchor), or None. The fleet loop
+        asks before it signs each attestation result (aegis.audit-head), so this costs a stat of the last segment
+        when nobody else wrote since this object did."""
         fd = self._lock()
         try:
             held = list(self.pending)
             self._sync()
-            self.pending = held                 # looking is not writing: a "log-start" for a log never begun is dropped
+            # looking is not writing: a "log-start" for a log never begun is dropped; what _sync found and must be
+            # said (a torn end it cut off: "recovered") stays queued, after a "log-start" that was already queued
+            added = [e for e in self.pending if all(e is not h for h in held) and e[E_EVENT] != "log-start"]
+            lead = 1 if held and held[0][E_EVENT] == "log-start" else 0
+            self.pending = held[:lead] + added + held[lead:]
             return self._tail
         finally:
             os.close(fd)
