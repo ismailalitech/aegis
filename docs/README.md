@@ -2,7 +2,8 @@
 # Aegis documentation
 
 Start with [`architecture.md`](architecture.md), then [`threat-model.md`](threat-model.md) for what is **not**
-claimed. Every document below is in this directory unless a path says otherwise.
+claimed. What is in Aegis 1.0, how it was verified and its known limits: [`release-notes-1.0.md`](release-notes-1.0.md).
+Every document below is in this directory unless a path says otherwise.
 
 ## Run it without hardware
 
@@ -18,6 +19,7 @@ claimed. Every document below is in this directory unless a path says otherwise.
 |---|---|
 | [`architecture.md`](architecture.md) | the protocol, the components and the reasons for them |
 | [`threat-model.md`](threat-model.md) | what is protected against, what is not |
+| [`release-notes-1.0.md`](release-notes-1.0.md) | Aegis 1.0: components, boards, standards, how it was verified, known limits |
 | [`whitepaper.md`](whitepaper.md) | the project in one paper |
 | [`datasheet.md`](datasheet.md) | the gateway in one page |
 | [`enrolment.md`](enrolment.md) | how a verifier comes to trust a device key: endorsed enrolment |
@@ -26,7 +28,7 @@ claimed. Every document below is in this directory unless a path says otherwise.
 | [`evidence-format.md`](evidence-format.md) | evidence, attestation results and endorsements as EAT / COSE |
 | [`audit-and-policy.md`](audit-and-policy.md) | the signed audit log and the signed policy |
 | [`vlan-enforcement.md`](vlan-enforcement.md) | network enforcement with one port and a VLAN switch |
-| [`soak-and-watchdogs.md`](soak-and-watchdogs.md) | the watchdogs and the 24-hour soak: what it catches, pass and fail, how to run it |
+| [`soak-and-watchdogs.md`](soak-and-watchdogs.md) | the watchdogs and the 24-hour soak: what it catches, pass and fail, how to run it (a 3-hour run: [`../evidence/soak-20261121/`](../evidence/soak-20261121/NOTE.md)) |
 
 ## The Prover SDK (for device makers)
 

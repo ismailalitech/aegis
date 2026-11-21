@@ -1,0 +1,134 @@
+2026-11-20T21:55:38+01:00 INFO     runner: soak started: 3 h, endpoints stm32h573-dk-2,frdm-rw612,zynqmp-te0808, absent stm32h573-dk,arduino-uno, credential lifetime 600 s
+2026-11-20T21:55:38+01:00 WARN     stm32h573-dk-2: credential lifetime 3600 s, the soak expects 600 s
+2026-11-20T21:55:38+01:00 WARN     frdm-rw612: credential lifetime 3600 s, the soak expects 600 s
+2026-11-20T21:55:38+01:00 WARN     zynqmp-te0808: credential lifetime 3600 s, the soak expects 600 s
+2026-11-20T21:55:41+01:00 INFO     regression: start started (pid 478270)
+2026-11-20T22:00:38+01:00 EXPECTED aegis-fleet: aegis-fleet is inactive
+2026-11-20T22:01:41+01:00 INFO     regression: start passed (6.0 min)
+2026-11-20T22:05:38+01:00 EXPECTED stm32h573-dk-2: session 28c18c2cab0a77fe replaced by 8df6d9b478a6a1ac before its renewal was due (revoked)
+2026-11-20T22:05:38+01:00 EXPECTED frdm-rw612: session 00349764d9304d0a replaced by ff43aa493a93d0b6 before its renewal was due (revoked)
+2026-11-20T22:05:38+01:00 EXPECTED zynqmp-te0808: session f14188cab9595a13 replaced by d3720436a3061944 before its renewal was due (revoked)
+2026-11-20T22:05:38+01:00 CLEARED  stm32h573-dk-2: stm32h573-dk-2:lifetime
+2026-11-20T22:05:38+01:00 CLEARED  frdm-rw612: frdm-rw612:lifetime
+2026-11-20T22:05:38+01:00 CLEARED  zynqmp-te0808: zynqmp-te0808:lifetime
+2026-11-20T22:05:38+01:00 CLEARED  aegis-fleet: aegis-fleet:inactive
+2026-11-20T22:10:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T22:10:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T22:10:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T22:15:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T22:15:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T22:15:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T22:20:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T22:20:38+01:00 FAIL     stm32h573-dk-2: endpoint clock at 1.535 s per gateway second (bounds 0.90 to 1.06)
+2026-11-20T22:20:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T22:20:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T22:25:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T22:25:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T22:25:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T22:30:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T22:30:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T22:30:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T22:35:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T22:35:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T22:35:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T22:40:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T22:40:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T22:40:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T22:45:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T22:45:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T22:45:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T22:50:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T22:50:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T22:50:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T22:55:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T22:55:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T22:55:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:00:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:00:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:00:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:05:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:05:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:05:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:10:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:10:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:10:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:15:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:15:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:15:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:20:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:20:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:20:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:25:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:25:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:25:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:25:41+01:00 INFO     regression: middle started (pid 486732)
+2026-11-20T23:30:38+01:00 EXPECTED aegis-fleet: aegis-fleet is inactive
+2026-11-20T23:30:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:30:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:30:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:31:41+01:00 INFO     regression: middle passed (6.0 min)
+2026-11-20T23:35:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:35:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:35:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:35:38+01:00 CLEARED  aegis-fleet: aegis-fleet:inactive
+2026-11-20T23:40:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:40:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:40:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:45:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:45:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:45:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:50:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:50:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:50:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-20T23:55:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-20T23:55:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-20T23:55:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:00:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:00:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:00:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:05:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:05:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:05:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:10:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:10:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:10:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:15:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:15:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:15:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:20:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:20:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:20:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:25:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:25:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:25:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:30:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:30:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:30:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:35:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:35:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:35:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:40:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:40:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:40:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:45:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:45:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:45:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:50:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:50:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:50:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:55:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T00:55:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T00:55:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T00:55:41+01:00 INFO     regression: end started (pid 500561)
+2026-11-21T01:00:38+01:00 EXPECTED aegis-fleet: aegis-fleet is inactive
+2026-11-21T01:00:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T01:00:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T01:01:41+01:00 INFO     regression: end passed (6.0 min)
+2026-11-21T01:05:38+01:00 INFO     stm32h573-dk-2: session renewed
+2026-11-21T01:05:38+01:00 INFO     frdm-rw612: session renewed
+2026-11-21T01:05:38+01:00 INFO     zynqmp-te0808: session renewed
+2026-11-21T01:05:38+01:00 CLEARED  stm32h573-dk-2: stm32h573-dk-2:rate
+2026-11-21T01:05:38+01:00 CLEARED  aegis-fleet: aegis-fleet:inactive
+2026-11-21T01:05:41+01:00 EXPECTED stm32h573-dk-2: heartbeat counter stopped at 1268
+2026-11-21T01:05:41+01:00 EXPECTED frdm-rw612: heartbeat counter stopped at 7
+2026-11-21T01:05:41+01:00 EXPECTED zynqmp-te0808: heartbeat counter stopped at 7

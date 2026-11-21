@@ -10,7 +10,7 @@ Everything in Aegis that runs without hardware, in one container and from one co
 | `sdk-api-reference` | the API reference is the header's (`tools/gen_sdk_api_ref.py --check`) |
 | `simulated-device` | a device built on the Prover SDK, attested by the verifier (`fleet.py`, the code the gateway runs) on the portable PC-verifier flow: enrolled, admitted with an ML-KEM-768 session bound to its quote, a KMAC256 heartbeat, quarantined when its image changes; its EAT evidence pack and the verifier's signed audit log checked by the standalone checkers that import no Aegis code (`sdk/examples/simulated-device/`) |
 | `gateway-quote` | the gateway's identity and quote service (`aegisd.py serve --platform linux`) and the PC verifier of the gateway (`host/aegis_verify.py`): enrolled, quote accepted |
-| `host-tests` | the host test suite, `tests/host` (about 400 tests) |
+| `host-tests` | the host test suite, `tests/host` (about 450 tests) |
 | `redteam-host` | 2000 malformed tokens and quotes against the verifier's parsers (`tests/redteam/fuzz_host.py`) |
 
 What it cannot show: anything on the boards (the PolarFire gateway's fabric accelerator, the STM32, RW612 and ZynqMP

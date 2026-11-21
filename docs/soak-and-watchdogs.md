@@ -55,8 +55,15 @@ The soak **passes** only if all of the following hold:
 - A heartbeat counter that stops within a session; a session replaced before its renewal was due; a renewal overdue by
   more than 180 s; a stored credential past its end.
 - `ttl` above the lifetime plus a sixteenth, or below 60 s. An endpoint's clock rate outside 0.90 to 1.06 endpoint
-  seconds per gateway second, judged once 30 min of heartbeat pairs exist. The endpoints' margin covers a clock up to
-  6 % fast. The STM32's LSI was measured at 0.941.
+  seconds per gateway second. The endpoints' margin covers a clock up to 6 % fast. The STM32's LSI was measured at
+  0.941. The rate comes from heartbeat pairs: two lines in a row of one session, up to 600 s apart, giving the `ttl`
+  fallen against the gateway time between their journal stamps. A new session starts a new run of pairs, because its
+  `ttl` starts again. The journal sometimes stamps one line about 10 s late and the next about 10 s early, so a single
+  pair can read 0.74 or 1.29. The soak therefore leaves out each pair more than 0.25 from the median pair rate, pools
+  the rest (total `ttl` fallen over total gateway time), and judges only once at least 30 min and 6 pairs are left.
+  The report shows the rate, its span and how many pairs were left out. A 3 h soak on 2026-11-20 reported 1.535 for
+  the STM32, which actually ran at 1:1: one pair spanned the regression's new, shorter session (`ttl` 1790 to 604 in
+  184 s).
 - A secure stack high-water mark at 90 % of its size or more.
 - The gateway's clock stepping by more than 120 s against the PC's.
 - A kernel line or console line from the fatal list, or a fleet error line. A fleet error line that names an endpoint
