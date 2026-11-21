@@ -11,6 +11,11 @@ the device's side of "evidence_format": "eat-cose-v1".
   the verifier     the C core behind a socket (sdk/ports/host), appraised by fleet.py; a session bound to the EAT
                    quote by transcript v2 (T1 hashes the COSE Sig_structure); an evidence pack of it checked by the
                    standalone checker
+  the STM32H573   the TF-M partition (endpoints/stm32h573/tfm-aegis-partition) built with the option, on the PC
+                   against the stand-ins of tests/fuzz/stm32: message QUOTE_EAT (type 7) behind the line protocol of
+                   the non-secure prover, appraised by fleet.py with TF-M's token nested; a session bound to it; the
+                   sizes the partition reserves (a token of 592 bytes fits, one more does not); every seed of
+                   tests/fuzz/stm32/seeds through that build; and the default build answering type 7 as unknown
 Needs gcc and the mldsa-native / mlkem-native v2.0.0 trees (MLDSA_NATIVE_DIR, MLKEM_NATIVE_DIR)."""
 import contextlib
 import glob
@@ -19,9 +24,11 @@ import io
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +40,7 @@ import cose  # noqa: E402
 import eat  # noqa: E402
 import fleet  # noqa: E402
 import mldsa  # noqa: E402
+import psa_token  # noqa: E402
 import sdk_golden  # noqa: E402
 import transcript  # noqa: E402
 import test_rw612_proto as rw  # noqa: E402
@@ -395,6 +403,224 @@ class Device(unittest.TestCase):
         self.assertTrue(rep["verified"])
         self.assertEqual(rep["evidence"]["quote_sha3_256"], v["quote"]["token_sha3_256"])
         self.assertEqual(rep["evidence"]["measurements"], [{"name": "APP", "sha256": self.digest(), "version": "0.1.0"}])
+
+
+PSA_ERROR_NOT_SUPPORTED, PSA_ERROR_INVALID_ARGUMENT, PSA_ERROR_BUFFER_TOO_SMALL = -134, -135, -138
+QUOTE_EAT, EAT_OUT_MAX, TOKEN_MAX = 7, 4124, 0x250   # aegis_pq_attest.c
+VERIFY = psa_token.verify_with_cryptography          # the token's ES256 signature (kind aegis-pq with iak_pub_pem)
+
+
+class Partition:
+    """The STM32 partition's harness in "--serve" mode, with the non-secure prover's line protocol in front of it
+    (endpoints/stm32h573/prover-ns/src/main.c: the same requests, sizes and replies) on a TCP port, as the board
+    serves it. token(challenge) gives the attestation service's token."""
+
+    def __init__(self, exe, token):
+        self.pr = subprocess.Popen([exe, "--serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.pk = bytes.fromhex(self.pr.stdout.readline().strip().partition("=")[2])
+        self.gw_sk = bytes.fromhex(self.pr.stdout.readline().strip().partition("=")[2])
+        self.token, self.lock = token, threading.Lock()
+        self.srv = socket.socket()
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(4)
+        self.port = self.srv.getsockname()[1]
+        threading.Thread(target=self.loop, daemon=True).start()
+
+    def msg(self, type_, in0=b"", in1=b"", o0=0, o1=0):
+        with self.lock:
+            self.pr.stdin.write("MSG %d %s %s %d %d\n" % (type_, in0.hex() or "-", in1.hex() or "-", o0, o1))
+            self.pr.stdin.flush()
+            st, a, b = self.pr.stdout.readline().split()
+        return int(st), bytes.fromhex(a.strip("-")), bytes.fromhex(b.strip("-"))
+
+    def set_token(self, tok):
+        with self.lock:
+            self.pr.stdin.write("TOKEN %s\n" % tok.hex())
+            self.pr.stdin.flush()
+            assert self.pr.stdout.readline().strip() == "ok"
+
+    def answer(self, line):
+        w = line.split()
+        if w == ["PQKEY"]:
+            st, pk, _ = self.msg(1, o0=1952)
+            return "PQKEY 1952 %s END" % pk.hex() if st == 0 else "ERR pq %d" % st
+        if len(w) == 2 and w[0] == "PQEAT":
+            ch = bytes.fromhex(w[1])
+            self.set_token(self.token(ch))
+            st, ev, _ = self.msg(QUOTE_EAT, ch, o0=6144)        # main.c: its credential buffer
+            return "PQEAT %d %s END" % (len(ev), ev.hex()) if st == 0 else "ERR pq %d" % st
+        if len(w) == 2 and w[0] == "PQCHAL":
+            ch = bytes.fromhex(w[1])
+            self.set_token(self.token(ch))
+            st, tok, sig = self.msg(2, ch, o0=TOKEN_MAX, o1=3309)
+            return "PQTOKEN %d %s %d %s END" % (len(tok), tok.hex(), len(sig), sig.hex()) if st == 0 else "ERR pq %d" % st
+        if len(w) == 2 and w[0] == "PQKEMINIT":
+            st, ek, sig = self.msg(3, bytes.fromhex(w[1]), o0=1184, o1=3309)
+            return "PQKEMEK %d %s %d %s END" % (len(ek), ek.hex(), len(sig), sig.hex()) if st == 0 else "ERR pq %d" % st
+        if len(w) == 3 and w[0] == "PQKEMFIN":
+            st, tag, _ = self.msg(4, bytes.fromhex(w[1]), bytes.fromhex(w[2]), o0=32)
+            return "PQKEMOK %s END" % tag.hex() if st == 0 else "ERR pq %d" % st
+        if w == ["PQSESSION"]:
+            st, s, _ = self.msg(5, o0=64)
+            return "PQSESSION %s %s END" % (s[:32].hex(), s[32:].hex()) if st == 0 else "ERR pq %d" % st
+        return "ERR bad-request"
+
+    def loop(self):
+        while True:
+            try:
+                c, _ = self.srv.accept()
+            except OSError:
+                return
+            with c:
+                buf = b""
+                while b"\n" not in buf:
+                    chunk = c.recv(65536)
+                    if not chunk:
+                        break
+                    buf += chunk
+                if buf:
+                    c.sendall((self.answer(buf.split(b"\n")[0].decode().strip()) + "\r\n").encode())
+
+    def close(self):
+        self.srv.close()
+        self.pr.kill()
+        self.pr.wait()
+        self.pr.stdin.close()
+        self.pr.stdout.close()
+
+
+@unittest.skipUnless(HAVE, "needs gcc and mldsa-native / mlkem-native")
+class Stm32Partition(unittest.TestCase):
+    """The STM32H573 partition with the option: what endpoints/stm32h573 builds with -DAEGIS_EAT_COSE=ON."""
+
+    @classmethod
+    def setUpClass(cls):
+        import test_stm32_partition as sp
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        cls.sp, cls.d = sp, tempfile.mkdtemp()
+        objs = [os.path.join(cls.d, n) for n in ("kmac.o", "mlkem.o", "mldsa.o", "sha256.o")]
+        for src, obj in zip((os.path.join(SDK, "src", "aegis_kmac.c"), os.path.join(SDK, "crypto", "mlkem_unit.c"),
+                             os.path.join(rw.MLDSA, "mldsa_native.c"), os.path.join(SDK, "src", "aegis_sha256.c")),
+                            objs):
+            sp.gcc("-c", src, "-o", obj)
+        sp.gcc(os.path.join(sp.FUZZ, "gen_gw_pk.c"), objs[2], "-o", os.path.join(cls.d, "gen_gw_pk"))
+        with open(os.path.join(cls.d, "fz_gateway_pk.h"), "w") as f:
+            subprocess.run([os.path.join(cls.d, "gen_gw_pk")], check=True, stdout=f)
+        cls.exe, cls.exe_off = os.path.join(cls.d, "partition-eat"), os.path.join(cls.d, "partition")
+        for exe, extra in ((cls.exe, EAT), (cls.exe_off, [])):
+            sp.gcc("-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter", "-DFZ_STANDALONE",
+                   '-DAEGIS_GATEWAY_PK_HEADER="fz_gateway_pk.h"', "-I", cls.d, "-I", os.path.join(sp.FUZZ, "stub"),
+                   *extra, os.path.join(sp.FUZZ, "fuzz_stm32_partition.c"), *objs, "-o", exe)
+        import test_fleet as tf
+        cls.tf = tf
+        cls.iak = ec.generate_private_key(ec.SECP256R1())
+        with open(os.path.join(cls.d, "iak.pem"), "wb") as f:
+            f.write(cls.iak.public_key().public_bytes(serialization.Encoding.PEM,
+                                                      serialization.PublicFormat.SubjectPublicKeyInfo))
+        cls.dev = Partition(cls.exe, lambda ch: tf.make_token(cls.iak, ch))
+        with open(os.path.join(cls.d, "ep.pub"), "w") as f:
+            f.write(cls.dev.pk.hex())
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dev.close()
+        shutil.rmtree(cls.d, ignore_errors=True)
+
+    def ep(self, **kw):
+        e = {"name": "stm32h573-dk-2", "kind": "aegis-pq", "host": "127.0.0.1", "port": self.dev.port,
+             "pq_pub_file": "ep.pub", "iak_pub_pem": "iak.pem", "heartbeat_mac": "kmac256",
+             "allowed": [{"type": "SPE", "measurement_value": self.tf.GOOD_S},
+                         {"type": "NSPE", "measurement_value": self.tf.GOOD_NS}],
+             "evidence_format": "eat-cose-v1"}
+        e.update(kw)
+        return {k: v for k, v in e.items() if v is not None}
+
+    def test_1_admitted_on_standard_evidence_with_the_token_nested(self):
+        facts = {}
+        v = fleet.attest(self.ep(), VERIFY, self.d, 20, facts=facts)
+        self.assertTrue(v["admitted"], v["reasons"])
+        self.assertEqual((v["evidence_format"], v["pq_signature"]), ("eat-cose-v1", "ML-DSA-65 valid"))
+        self.assertEqual(v["measurements"], {"SPE": self.tf.GOOD_S, "NSPE": self.tf.GOOD_NS})
+        s = cose.verify1(facts["evidence"], self.dev.pk)
+        challenge = bytes.fromhex(v["quote"]["challenge"])
+        tok = eat.read_evidence(s.payload, self.dev.pk)["platform_token"]
+        self.assertEqual(s.payload, eat.evidence_payload(challenge, self.dev.pk, platform_token=tok))
+        self.assertEqual(psa_token.parse(tok)[3]["challenge"], challenge)
+        self.assertEqual(v["quote"]["token_sha3_256"], hashlib.sha3_256(s.tbs).hexdigest())
+        if checker is not None:
+            claims, tbs = checker.open_sign1(facts["evidence"], self.dev.pk, "evidence")
+            self.assertEqual((tbs, claims[10]), (s.tbs, challenge))
+        # the same rules: a changed NSPE is refused; the older request still answers
+        self.assertFalse(fleet.attest(self.ep(allowed=[{"type": "SPE", "measurement_value": self.tf.GOOD_S}]),
+                                      VERIFY, self.d, 20)["admitted"])
+        self.assertTrue(fleet.attest(self.ep(evidence_format=None), VERIFY, self.d, 20)["admitted"])
+
+    def test_2_a_session_continues_the_eat_quote(self):
+        ep = self.ep(transcript="v2")
+        v = fleet.attest(ep, VERIFY, self.d, 20)
+        self.assertTrue(v["admitted"], v["reasons"])
+        r = fleet.provision(ep, self.d, self.dev.gw_sk, "gid", v["measurements"], timeout=30, quote=v["quote"])
+        self.assertEqual((r["transcript"], r["quote"]), ("v2", v["quote"]))
+        st, sess, _ = self.dev.msg(5, o0=64)
+        self.assertEqual((st, sess[:32]), (0, hashlib.sha3_256(b"aegis-session-id-v1" + r["session_key"]).digest()))
+        with self.assertRaises(fleet.TranscriptRefused):     # used up
+            fleet.provision(ep, self.d, self.dev.gw_sk, "gid", {}, timeout=30, quote=v["quote"])
+
+    def test_3_the_sizes_the_partition_reserves(self):
+        ch = bytes(range(32))
+        for n, want in ((TOKEN_MAX, 0), (TOKEN_MAX + 1, PSA_ERROR_BUFFER_TOO_SMALL), (1, 0)):
+            self.dev.set_token(bytes([0xa5]) * n)
+            st, ev, _ = self.dev.msg(QUOTE_EAT, ch, o0=EAT_OUT_MAX)
+            self.assertEqual(st, want, n)
+            if want == 0:
+                s = cose.verify1(ev, self.dev.pk)
+                self.assertEqual(eat.read_evidence(s.payload, self.dev.pk)["platform_token"], bytes([0xa5]) * n)
+                if n == TOKEN_MAX:
+                    self.assertEqual(len(ev), EAT_OUT_MAX)       # the largest object is exactly what is reserved
+        for in0, o0 in ((ch[:31], EAT_OUT_MAX), (ch + b"\0", EAT_OUT_MAX), (ch, EAT_OUT_MAX - 1), (b"", EAT_OUT_MAX)):
+            self.assertEqual(self.dev.msg(QUOTE_EAT, in0, o0=o0), (PSA_ERROR_INVALID_ARGUMENT, b"", b""))
+
+    def test_4_every_seed_passes_with_the_option(self):
+        seeds = sorted(glob.glob(os.path.join(self.sp.SEEDS, "*")))
+        self.assertGreaterEqual(len(seeds), 30)
+        for path in seeds:
+            r = subprocess.run([self.exe, path], capture_output=True, text=True)
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, "1 inputs, no finding"),
+                             os.path.basename(path) + ": " + r.stderr)
+
+    def test_5_raw_quote_eat_messages_go_through_the_model(self):
+        """op 0 (raw) with type 7: the harness checks the object and its T1 through the following KEM_INIT."""
+        ch = bytes([0x5a]) * 32
+
+        def op(code, payload):
+            return bytes([code, len(payload) & 0xFF, len(payload) >> 8]) + payload
+
+        def raw(type_, l0, o0, o1, data):
+            return op(0, bytes([type_]) + l0.to_bytes(2, "little") + b"\0\0" + o0.to_bytes(2, "little") +
+                      o1.to_bytes(2, "little") + data)
+        inputs = {
+            "bound": raw(7, 32, EAT_OUT_MAX, 0, ch) + op(1, ch) + op(2, bytes(33)),
+            "refused-sizes": raw(7, 32, EAT_OUT_MAX - 1, 0, ch) + op(1, ch),
+            "eat-then-quote": raw(7, 32, EAT_OUT_MAX, 0, ch) + op(4, ch) + op(1, ch) + op(2, bytes(33)),
+            "quote-then-eat": op(4, ch) + raw(7, 32, EAT_OUT_MAX, 0, ch) + op(1, ch) + op(2, bytes(33)),
+            "rng-fails": op(6, b"\0\1") + raw(7, 32, EAT_OUT_MAX, 0, ch) + op(1, ch),
+        }
+        for name, data in inputs.items():
+            path = os.path.join(self.d, "in-" + name)
+            with open(path, "wb") as f:
+                f.write(data)
+            r = subprocess.run([self.exe, path], capture_output=True, text=True)
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, "1 inputs, no finding"), name + ": " + r.stderr)
+
+    def test_6_off_by_default(self):
+        dev = Partition(self.exe_off, lambda ch: self.tf.make_token(self.iak, ch))
+        try:
+            self.assertEqual(dev.pk, self.dev.pk)
+            self.assertEqual(dev.msg(QUOTE_EAT, bytes(32), o0=EAT_OUT_MAX), (PSA_ERROR_NOT_SUPPORTED, b"", b""))
+            self.assertEqual(dev.answer("PQEAT " + "00" * 32), "ERR pq %d" % PSA_ERROR_NOT_SUPPORTED)
+        finally:
+            dev.close()
 
 
 if __name__ == "__main__":
