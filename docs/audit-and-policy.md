@@ -21,9 +21,10 @@ month). This note defines both:
 | the standalone checker of both (third-party libraries only) | `tools/verify_audit.py` |
 | anchors kept off the gateway, and the log checked against them (bench PC) | `tools/audit_anchors.py` |
 
-**Status.** Software only: everything here is exercised by the host tests against simulated endpoints. No board
-was touched, and the gateway on the bench still runs `main`. **Both are off by default**: a policy without
-`"audit_log"` and a verifier without policy-signing keys run exactly as before ("Compatibility" below).
+**Status.** Everything here is exercised by the host tests against simulated endpoints, and the bench gateway has
+run with the audit log on and from a signed policy since 21 November 2026 ("Measured on the bench" below). **Both are
+off by default**: a policy without `"audit_log"` and a verifier without policy-signing keys run exactly as before
+("Compatibility" below).
 
 Both objects use the envelope of part A unchanged (`common/cose.py`: tagged COSE_Sign1, ML-DSA-65 = algorithm -49 of
 RFC 9964, `kid` = the signer's COSE Key Thumbprint, an empty unprotected header, deterministic CBOR), with a `typ`
@@ -228,9 +229,9 @@ verifier itself deletes segments only with `"max_segments"`, and then says so in
 An anchor only helps if someone keeps it where the gateway cannot write. `tools/audit_anchors.py` does that on the
 bench PC, over the same read-only SSH as `tools/bench_watch.py`:
 
-    tools/audit_anchors.py fetch --key identity.json --gateway 192.168.1.63    # keep the log's current last batch
-    tools/audit_anchors.py check --key identity.json --gateway 192.168.1.63    # copy the log, check it against all
-    tools/audit_anchors.py watch --key identity.json --gateway 192.168.1.63 \
+    tools/audit_anchors.py fetch --key identity.json --gateway 192.0.2.10    # keep the log's current last batch
+    tools/audit_anchors.py check --key identity.json --gateway 192.0.2.10    # copy the log, check it against all
+    tools/audit_anchors.py watch --key identity.json --gateway 192.0.2.10 \
         --interval 300 --check-every 12 --alert-cmd 'notify-send aegis-audit'
     tools/audit_anchors.py --selftest                                          # canned logs, no network
 
@@ -268,7 +269,7 @@ enable --now aegis-audit-anchors`; `loginctl enable-linger` so it runs without a
     [Unit]
     Description=Aegis audit-log anchors, kept off the gateway
     [Service]
-    ExecStart=%h/aegis/.venv/bin/python %h/aegis/tools/audit_anchors.py watch --key %h/.config/aegis/gateway-identity.json --gateway 192.168.1.63 --alert-cmd 'notify-send aegis-audit'
+    ExecStart=%h/aegis/.venv/bin/python %h/aegis/tools/audit_anchors.py watch --key %h/.config/aegis/gateway-identity.json --gateway 192.0.2.10 --alert-cmd 'notify-send aegis-audit'
     Restart=always
     RestartSec=60
     [Install]
@@ -596,8 +597,8 @@ libraries.
 7. **One signer is enough.** Any key of the signers file can sign any version; there is no threshold, no expiry of
    a policy and no signed revocation of a signer: a signer is removed by replacing the signers file on each
    verifier.
-8. **No board has run this**, and the write cost on the gateway's storage is computed, not measured. Before the
-   log is turned on there: one cycle's batch on the PolarFire (one ML-DSA-65 signature in software), and the
-   growth of `STATE_DIR/audit/` over a week.
+8. **The write cost is file sizes, not flash writes.** The bench gateway runs with the log on ("Measured on the
+   bench"), but its kernel exposes no per-process write counter, and the growth of `STATE_DIR/audit/` has been
+   followed over its first hour, not over a week.
 9. **The log is local.** There is no transparency log, no witness and no gossip between verifiers; an anchor is a
    file someone has to keep.

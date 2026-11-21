@@ -42,8 +42,9 @@ P-256 key is never hashed this way); a key's **thumbprint** is something else, t
 
 ### `aegis.trust` (the verdict's `trust`)
 
-What holds the key that signed the evidence and who measured the software. Set by `fleet.py attest` from the entry's
-kind and the profile or key the evidence names; nothing else is ever written.
+What holds the key that signed the evidence and who measured the software. Set by `attest()` in
+`gateway/aegisd/fleet.py` from the entry's kind and the profile or key the evidence names; nothing else is ever
+written.
 
 | Value | Where it comes from | What it means |
 |---|---|---|
@@ -64,7 +65,7 @@ policy rules refuse).
 
 | Value | Meaning |
 |---|---|
-| `endorsed` | the entry says `"endorsement": "required"` and a record signed by an endorser the policy trusts names this device, its family and exactly the pinned key (`common/endorsement.py check`) |
+| `endorsed` | the entry says `"endorsement": "required"` and a record signed by an endorser the policy trusts names this device, its family and exactly the pinned key (`check()` in `common/endorsement.py`) |
 | `trust-on-first-use` | no endorsement asked for: the key is whatever `fleet.py enroll-pq` was first given |
 | `refused` | an endorsement is required and the record was refused (missing, another key, an untrusted or revoked endorser, expired, not the pinned record, too old). The endpoint is never admitted and is not contacted |
 

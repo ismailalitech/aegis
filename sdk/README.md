@@ -40,10 +40,10 @@ The ports to chips live with their build systems:
 
 | Device | Platform file | Secure world | Transport | State |
 |---|---|---|---|---|
-| STM32H573, TF-M | `endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c` | TF-M secure partition | PSA messages, one per operation | built, PC-tested against the image in the field, byte for byte |
-| RW612, TF-M | `endpoints/rw612/tfm/aegis_pq/aegis_pq.c` | TF-M secure partition | lines through one PSA message | secure image built, not on a board |
+| STM32H573, TF-M | `endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c` | TF-M secure partition | PSA messages, one per operation | on both boards (SPE 9de76167; board 2 on its build with standard evidence since 21 November 2026), PC-tested against the image before the SDK, byte for byte |
+| RW612, TF-M | `endpoints/rw612/tfm/aegis_pq/aegis_pq.c` | TF-M secure partition | lines through one PSA message | on the board (secure image 0.3.2) |
 | RW612, single image | `endpoints/rw612/prover/src/main.c` | none (the whole firmware) | lines over TCP | source only (no Zephyr workspace on the build PC) |
-| ZynqMP, OP-TEE | `endpoints/zynqmp/optee/ta/aegis_ta.c` | trusted application | lines through one TA command | TA 0.2.0 built into OP-TEE, PC-tested with the bridge on a stand-in for OP-TEE against the gateway's code (`tests/host/test_zynqmp_ta_port.py`, `optee/tests/run.sh`); not on the board yet (`docs/zynqmp-sdk-port.md`) |
+| ZynqMP, OP-TEE | `endpoints/zynqmp/optee/ta/aegis_ta.c` | trusted application | lines through one TA command | TA 0.2.0 built into OP-TEE, PC-tested with the bridge on a stand-in for OP-TEE against the gateway's code (`tests/host/test_zynqmp_ta_port.py`, `optee/tests/run.sh`); on the board since 20 November 2026 (`docs/zynqmp-sdk-port.md`) |
 | Linux | `sdk/ports/linux/aegis_port_linux.c` | none (a process) | lines over TCP | PC-tested; the Linux endpoints on the bench still run the Python prover, `endpoints/zybo/aegis_linux_prover.py` |
 | PC | `sdk/ports/host/aegis_port_host.c` | none | lines over TCP | the tests and the fuzzers run it |
 
@@ -265,8 +265,8 @@ Nothing of these is in version 1; the seams are marked in `src/aegis_proto.c`.
   (`tools/verify_evidence.py`). The profile, the memory it needs (a work buffer of at least 1962 bytes) and what the
   transcript hashes for such a quote are in [`docs/evidence-format.md`](../docs/evidence-format.md). Without the
   flag the core is byte for byte what it was. The STM32H573 partition has a PSA message for it (`QUOTE_EAT`) when
-  built with `-DAEGIS_EAT_COSE=ON`, and an image is built with it ("STM32 EAT image" in that document); what remains
-  is running it on the boards.
+  built with `-DAEGIS_EAT_COSE=ON`, and STM32 board 2 runs an image built with it ("STM32 EAT image" in that
+  document); what remains is the other ports.
 - **A measurement-dependent key** (see Limits): `identity_public_key` and `identity_sign`.
 
 ## Tests

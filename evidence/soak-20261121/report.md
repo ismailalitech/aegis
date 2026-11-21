@@ -7,7 +7,7 @@
 | started | 2026-11-20T21:55:38+01:00 |
 | planned end | 2026-11-21T00:55:38+01:00 (3 h) |
 | finished | yes |
-| gateway | 192.168.1.63 |
+| gateway | 192.168.x.x |
 | endpoints | stm32h573-dk-2, frdm-rw612, zynqmp-te0808 |
 | absent / quarantined by design (ignored) | stm32h573-dk (342 verdict lines), arduino-uno (0 verdict lines) |
 | credential lifetime expected | 600 s |

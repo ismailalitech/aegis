@@ -45,7 +45,7 @@ What has run on the bench, each with the record or test that shows it:
   [`evidence/stm32-kemfix/fuzzing.txt`](evidence/stm32-kemfix/fuzzing.txt); since the SDK one harness,
   `tests/fuzz/fuzz_sdk_core.c`, which CI runs in the RW612, STM32 and EAT modes), a red-team harness
   (`tests/redteam/`) and a regression run check it. `tools/regression.sh --board --with-expiry` has 14 stages; its
-  first stage, the host suite in `tests/host/`, runs about 450 tests. The last full runs, at the start, middle and end
+  first stage, the host suite in `tests/host/`, runs about 530 tests. The last full runs, at the start, middle and end
   of the soak below, passed 14 of 14 each with the ZynqMP connected
   ([`evidence/soak-20261121/NOTE.md`](evidence/soak-20261121/NOTE.md)); the run before, without the ZynqMP:
   [`evidence/console/regression-14of14-20261119.txt`](evidence/console/regression-14of14-20261119.txt).
@@ -87,8 +87,10 @@ namespaces only ([`tests/host/test_enforcement.sh`](tests/host/test_enforcement.
 
 ## Running it
 
-The documentation is indexed in [`docs/README.md`](docs/README.md); what is in this release, how it was checked
-and its known limits are in [`docs/release-notes-1.0.md`](docs/release-notes-1.0.md).
+The documentation is indexed in [`docs/README.md`](docs/README.md). What is in Aegis, how it was checked and its
+known limits are in [`docs/release-notes-1.0.md`](docs/release-notes-1.0.md); what changed since, in
+[`docs/release-notes-1.1.md`](docs/release-notes-1.1.md) and [`docs/release-notes-1.2.md`](docs/release-notes-1.2.md)
+(the current release).
 
 Without any hardware: [`container/`](container/README.md) runs the verifier, a simulated device built on the Prover
 SDK, the standalone evidence and audit checkers and the host test suite from one command; or on the PC itself,
@@ -102,7 +104,7 @@ With the boards, copy `bench.env.example` to `bench.env` and set your addresses.
                                # and --with-expiry for the endpoints' session end (about 3 minutes more)
     tools/demo.sh              # the live demo (needs the boards and an STM32 programmer)
     sudo tests/host/test_enforcement.sh   # the enforcement rules in network namespaces
-    tests/fuzz/run.sh                     # fuzz the RW612 partition's protocol code (STM32=1: the STM32 partition)
+    tests/fuzz/run.sh                     # fuzz the Prover SDK's protocol core (STM32=1: the STM32 port; EAT=1: with EAT)
     tools/bench_watch.py --gateway <addr> # log when the gateway or an endpoint goes quiet (--once: one check)
     tools/soak.py run --gateway <addr>    # the 24-hour soak (docs/soak-and-watchdogs.md; selftest: no hardware)
     tools/audit_anchors.py watch --key K --gateway <addr>  # keep audit-log anchors off the gateway (--selftest)
@@ -114,9 +116,10 @@ Evidence, the verifier's attestation results and endorsement records also exist 
 and EAR in COSE_Sign1 signed with ML-DSA-65 (RFC 9964). `fleet.py export-evidence` writes an evidence pack that
 `tools/verify_evidence.py` checks with third-party libraries only (pycose, cbor2, cryptography), without this
 repository's code: [`docs/evidence-format.md`](docs/evidence-format.md). On the device it is an option of the SDK that
-is off by default; the boards on the bench do not run it yet.
+is off by default; STM32 board 2 has run an image built with it since 21 November 2026
+([`endpoints/stm32h573/README.md`](endpoints/stm32h573/README.md), "STM32 EAT image").
 
-Two more options, both off by default and so far run on the PC only
+Two more options, both off by default; the bench gateway has run with both since 21 November 2026
 ([`docs/audit-and-policy.md`](docs/audit-and-policy.md)): the verifier can keep a signed, hash-chained audit log of
 its decisions (`"audit_log": true` in the policy; an entry when something changes, nothing in a cycle where nothing
 did), and it can be made to run only from a policy signed by an operator's key that is not on the gateway, with a

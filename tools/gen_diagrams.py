@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Generate the animated SVG diagrams of the documentation from docs/diagrams/diagrams.yaml.
+"""Generate the animated SVG diagrams of the documentation from the YAML files in docs/diagrams/.
 
 Every diagram is boxes and arrows (or lanes on a time axis) drawn on a small dark card. While it plays, the
 boxes and arrows light up one after the other in the order given by `steps`, so a reader sees the sequence
 and not only the picture. The files are self-contained SVG (no script), animate with CSS, and show the plain
 picture when the reader prefers reduced motion. The generated files are committed;
-`tools/check_content.py` fails if they are out of date.
+`--check` (run in CI) fails if they are out of date.
 
 usage: tools/gen_diagrams.py [--check]
 """

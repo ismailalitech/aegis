@@ -105,7 +105,7 @@ pattern, and the heartbeat status reports the high-water mark: `stack=19368/3276
 derivation in ELS, quotes, ML-KEM exchanges and heartbeats (59 %, 13 KB to spare). TF-M sets the stack limit register
 to the stack's base, so an overflow would fault rather than write into another partition.
 
-## The session's end (0.2.2, built; not yet on the board)
+## The session's end (0.2.2; on the board since 19 November 2026)
 
 The partition ends a session itself, the credential's lifetime plus a sixteenth after the `PQKEMFIN`, on the secure
 SysTick (`docs/endpoint-expiry.md`). The non-secure image is unchanged, byte for byte, so only `SPE` changes in the

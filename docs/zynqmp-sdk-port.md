@@ -1,5 +1,9 @@
 # ZynqMP: the trusted application on the Prover SDK (transcript v2, endorsement)
 
+**Status: done.** TA 0.2.0 has run on the board since 20 November 2026, with transcript v2 and `"endorsement":
+"required"` ("Result on the bench" at the end). The sections before that are the plan as written before the card
+swap, kept as the record of how it was done.
+
 The ZynqMP endpoint (`zynqmp-te0808`, kind `aegis-tee`, profile `aegis-zynqmp-optee-v1`) is admitted with the
 PUF-bound key, but its session is unbound and its key is not endorsed. The reason: the card still runs TA 0.1.1,
 built before the Prover SDK, and that TA does not speak transcript v2. TA 0.2.0 is the same trusted application

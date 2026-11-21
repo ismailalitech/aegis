@@ -24,8 +24,10 @@ a third party reads with a COSE library and a public key:
 
 **Status.** Everything here is exercised by the host tests against simulated devices, against the SDK's core built
 for the PC and against the STM32H573 partition built for the PC with the option. An STM32H573 secure and non-secure
-image with the option is built ("STM32 EAT image" below) and **not yet run on a board**; the gateway on the bench
-still runs `main`. The older formats stay the default and stay accepted ("Compatibility" below).
+image with the option is built ("STM32 EAT image" below); since 21 November 2026 STM32 board 2 runs it, with
+`"evidence_format": "eat-cose-v1"` in its policy entry, and an evidence pack exported on the bench verifies with
+`tools/verify_evidence.py`. The other boards answer `PQCHAL` only. The older formats stay the default and stay
+accepted ("Compatibility" below).
 
 ## The standards, and the versions used
 
@@ -494,8 +496,8 @@ test of the standalone checker was skipped for want of its libraries.
 
 1. **EAR and AR4SI are drafts.** Numbers and the profile string may change before publication; -33 to -35 are this
    project's own reasons and mean nothing to a generic AR4SI consumer beyond "warning".
-2. **No board has run this.** The bench images answer `PQCHAL` only. An STM32H573 image with the option is built
-   ("STM32 EAT image"); it changes the SPE and NSPE measurements and needs a regression on the boards.
+2. **One board runs this.** STM32 board 2 runs the image with the option ("STM32 EAT image") since 21 November
+   2026; the other bench images answer `PQCHAL` only, and no other port's build enables it.
 3. **The nested PSA token's inner signature** is checked by the verifier, not by the standalone checker.
 4. **Reference values are still the policy's `allowed` list**, named in a result by the policy file's hash. A CoRIM
    would be the standard form; it is not part of this work.

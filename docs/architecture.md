@@ -143,6 +143,9 @@ SPE b876213a, and RW612 0.3.1, SPE b48d2ecf):
 | ZynqMP (OP-TEE TA) | | source; `optee/tests/run.sh` runs the TA with the core on a stand-in for OP-TEE (also in CI); no `.ta` built on this PC |
 | Linux | `sdk/ports/linux`, a prover in C with the Python prover's command line, profile and measurements | PC-tested with the gateway's code (`tests/host/test_sdk_linux_port.py`); the bench's Linux endpoints keep the Python prover |
 
+Since then the STM32 image (SPE 9de76167; on board 2 its build with standard evidence), the RW612's 0.3.2 and the
+ZynqMP's TA 0.2.0 (since 20 November 2026, [zynqmp-sdk-port.md](zynqmp-sdk-port.md)) run on the bench.
+
 ## Trust anchors
 
 | Anchor | Holder | Strength on this bench |
@@ -279,7 +282,7 @@ from before the transcript, the endpoint is still attested and admitted, and get
 | STM32H573 (TF-M) | `aegis_pq_attest.c`; non-secure prover 0.6.0 unchanged | on both boards since 20 November 2026: image `...-freshkem-transcript`, SPE 3183f74a, same MCUboot version (2.3.0) and signer as the image before (67a452b1); deepest stack path by GCC's figures 18712 bytes (18720 before); both boards report `sstack=18880/26624` (18888 before). `transcript_swap_check.py` live, reset and swap to 67a452b1 (`evidence/transcript-v2/`) |
 | RW612 (TF-M) | `aegis_proto.c` in the secure image, 0.3.0 | image built (SPE 76f89751; the non-secure image is byte for byte 0.2.2's, NSPE 24979a1f), on the board since 20 November 2026; bound exchange accepted, replays and foreign credentials refused (`evidence/transcript-v2/ts-live-rw612.txt`) |
 | RW612 (single image) | the same `aegis_proto.c` | source only (no Zephyr workspace on the build PC) |
-| ZynqMP (OP-TEE TA) | the same `aegis_proto.c` | on the board since 21 November 2026 (TA 0.2.0, BOOT.BIN e540d774, `zynqmp-sdk-port.md`); `optee/tests/run.sh` checks the TA's transcript on the PC |
+| ZynqMP (OP-TEE TA) | the same `aegis_proto.c` | on the board since 20 November 2026 (TA 0.2.0, BOOT.BIN e540d774, `zynqmp-sdk-port.md`); `optee/tests/run.sh` checks the TA's transcript on the PC |
 | Linux prover | `aegis_linux_prover.py` 0.3.0 (needs `common/transcript.py` beside it) | source only; its own `PROVER` measurement changes with the file |
 
 On a board: `tests/board/transcript_swap_check.py` (its text says what each step shows).
