@@ -1,7 +1,7 @@
 # Two chips, two keys (17 November 2026)
 
 Question: is the endpoint's ML-DSA-65 key really bound to the chip, or would any STM32H573 with the same firmware have
-it? Answered with a second STM32H573I-DK (ST-LINK `002E0039...`) set up exactly like the endpoint (`003D002F...`).
+it? Answered with a second STM32H573I-DK set up exactly like the endpoint.
 
 ## Setting up the second board
 

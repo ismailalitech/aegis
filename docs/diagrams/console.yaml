@@ -302,11 +302,11 @@
   height: 384
   lines:
   - $ PQKEY and CHAL on both boards; fleet.py once with each pinned key
-  - board 1 (networked endpoint), ST-LINK 003D002F...
+  - board 1 (networked endpoint)
   - '  Aegis ML-DSA-65 public key (PQKEY): 1952 bytes, sha256 29b953e6571dbd36...'
   - '  PSA token, same challenge 89020f0b...: instance ID 01078c18f110f432ff780cd8dae58069...'
   - '  PSA implementation ID a0a1a2a3a4a5a6a7a8a9aaabacadaeaf...'
-  - board 2 (second chip), ST-LINK 002E0039...
+  - board 2 (second chip)
   - '  Aegis ML-DSA-65 public key (PQKEY): 1952 bytes, sha256 c9e2aa6e8157ac94...'
   - '  PSA token, same challenge 89020f0b...: instance ID 01078c18f110f432ff780cd8dae58069...'
   - '  PSA implementation ID a0a1a2a3a4a5a6a7a8a9aaabacadaeaf...'

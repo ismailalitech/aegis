@@ -208,18 +208,18 @@ them), for example the main checkout after this branch is merged. In this order:
    `tools/bench_watch.py` detached with the soak's endpoints. It defaults to them now; with
    `--alert-cmd 'notify-send aegis'` it also alerts:
 
-       setsid nohup python3 $PWD/tools/bench_watch.py --gateway 192.168.1.63 \
+       setsid nohup python3 $PWD/tools/bench_watch.py --gateway 192.0.2.10 \
            --expect stm32h573-dk-2,frdm-rw612,zynqmp-te0808 >/dev/null 2>&1 &
 
 2. **Dry run.** `tools/soak.py selftest` (ten simulated days on a canned gateway, healthy and with faults, about 10 s), then
-   `tools/soak.py run --dry-run --gateway 192.168.1.63 --stm32 <stm32h573-dk-2's host:port>`. It prints the sampling
+   `tools/soak.py run --dry-run --gateway 192.0.2.10 --stm32 <stm32h573-dk-2's host:port>`. It prints the sampling
    script, the regression command and its environment, and parses one canned sample.
-3. **One read-only sample by hand** (optional): pipe the printed script to `ssh root@192.168.1.63 sh -s` and look at
+3. **One read-only sample by hand** (optional): pipe the printed script to `ssh root@192.0.2.10 sh -s` and look at
    the answer.
 4. **Short lifetime** (recommended): apply it as above, wait for `credential lifetime 600 s` in the journal.
 5. **Start the soak**, detached:
 
-       setsid nohup .venv/bin/python tools/soak.py run --gateway 192.168.1.63 --stm32 <host:port> \
+       setsid nohup .venv/bin/python tools/soak.py run --gateway 192.0.2.10 --stm32 <host:port> \
            --cred-lifetime 600 --expiry-every-h 4 --console-dir <console_logger dir> \
            > logs/soak-runner.out 2>&1 &
 

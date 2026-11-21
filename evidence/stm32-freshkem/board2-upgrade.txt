@@ -2,7 +2,7 @@
 new image: SPE 67a452b1adaa5038632b0aece77c88a83ecc1aa73f42f0c1684e33d2c8268136
 == 2. backup to ~/aegis/backups/stm32h573/20261120-081913-stm32h573-dk-2-before-upgrade
 running image: SPE 02549860e419cd9486cce08fb09f2b76285b9bd3e0a270cbbd1d922b463ca2f0 (same version and signer as the new one)
-== 3. policy: allow the new SPE (root@192.168.1.63:/root/aegis/gateway/policy/fleet.json.bak-20261120-081913)
+== 3. policy: allow the new SPE (root@192.168.x.x:/root/aegis/gateway/policy/fleet.json.bak-20261120-081913)
 allowed for stm32h573-dk-2: [('NSPE', '1f4110fd8b2a'), ('SPE', '02549860e419'), ('SPE', '67a452b1adaa')]
 == 4. write the secure slot
 written and verified, reset at 2026-11-20 07:19:32 (gateway time)

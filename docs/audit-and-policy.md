@@ -228,9 +228,9 @@ verifier itself deletes segments only with `"max_segments"`, and then says so in
 An anchor only helps if someone keeps it where the gateway cannot write. `tools/audit_anchors.py` does that on the
 bench PC, over the same read-only SSH as `tools/bench_watch.py`:
 
-    tools/audit_anchors.py fetch --key identity.json --gateway 192.168.1.63    # keep the log's current last batch
-    tools/audit_anchors.py check --key identity.json --gateway 192.168.1.63    # copy the log, check it against all
-    tools/audit_anchors.py watch --key identity.json --gateway 192.168.1.63 \
+    tools/audit_anchors.py fetch --key identity.json --gateway 192.0.2.10    # keep the log's current last batch
+    tools/audit_anchors.py check --key identity.json --gateway 192.0.2.10    # copy the log, check it against all
+    tools/audit_anchors.py watch --key identity.json --gateway 192.0.2.10 \
         --interval 300 --check-every 12 --alert-cmd 'notify-send aegis-audit'
     tools/audit_anchors.py --selftest                                          # canned logs, no network
 
@@ -268,7 +268,7 @@ enable --now aegis-audit-anchors`; `loginctl enable-linger` so it runs without a
     [Unit]
     Description=Aegis audit-log anchors, kept off the gateway
     [Service]
-    ExecStart=%h/aegis/.venv/bin/python %h/aegis/tools/audit_anchors.py watch --key %h/.config/aegis/gateway-identity.json --gateway 192.168.1.63 --alert-cmd 'notify-send aegis-audit'
+    ExecStart=%h/aegis/.venv/bin/python %h/aegis/tools/audit_anchors.py watch --key %h/.config/aegis/gateway-identity.json --gateway 192.0.2.10 --alert-cmd 'notify-send aegis-audit'
     Restart=always
     RestartSec=60
     [Install]
