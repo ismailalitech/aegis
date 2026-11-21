@@ -328,7 +328,77 @@ class Criteria(unittest.TestCase):
         self.assertNotIn("rate", run(0.941)[0])      # the STM32's LSI, measured on the bench
         self.assertIn("rate", run(1.09)[0])
         self.assertIn("rate", run(0.85)[0])
-        self.assertAlmostEqual(run(1.0)[1]["rate_dttl"] / run(1.0)[1]["rate_dt"], 1.0, places=3)
+        self.assertAlmostEqual(soak.ep_rate(run(1.0)[1])["rate"], 1.0, places=3)
+
+    @staticmethod
+    def stm32_soak(rate=1.0, jitter_every=0, first_ttl=1790, hours=3.0):
+        """The STM32 in the 3 h soak of 2026-11-20: a heartbeat line every 34 s, a 600 s session issued every ~5 min
+        (its first heartbeat at ttl 604), the first session a 3600 s one with first_ttl left when the regression's
+        shorter one replaces it. jitter_every: every that many lines the journal stamps one line 10 s late and the
+        endpoint's next ttl falls 10 s more (dt 44 against 34, then 34 against 44), as seen at 23:40. Fed to
+        check_endpoint in 5 min samples; returns (FAIL keys of every sample, track)."""
+        tr, fails, lines = soak.new_ep_track(), set(), []
+        t, hb, ttl, n, late = float(T0), 900, float(first_ttl), 0, False
+
+        def line(cred):
+            return "%.3f gw python3[1]: 10:00:00 stm32h573-dk-2 ADMITTED  [credential: %s] [endorsed by bench-pc]" % (
+                t, cred)
+        while t < T0 + hours * 3600:
+            if ttl < 368 or (n == 6 and first_ttl > 700):
+                lines.append(line("issued session %s... bound to quote 6527cc818995... (transcript v2)" % (
+                    "%012x" % n)))
+                t += 34.0
+                ttl = 604.0 + (ttl % 1)
+            hb, n = hb + 1, n + 1
+            stamp = t
+            if late:
+                late = False
+                ttl -= 10 * rate
+            elif jitter_every and n % jitter_every == 0:
+                stamp, late = t + 10, True
+            lines.append("%.3f gw python3[1]: 10:00:00 stm32h573-dk-2 ADMITTED  [credential: valid, heartbeat %d "
+                         "(uptime_s=%d;link=1;fw=0.6.0;sstack=18872/26624;ttl=%d)] [endorsed by bench-pc]" % (
+                             stamp, hb, t - T0 + 34000, int(ttl)))
+            if late:
+                t += 10
+            t += 34.0 + (n % 3) * 0.2
+            ttl -= (34.0 + (n % 3) * 0.2) * rate
+            if len(lines) >= 9:
+                cur, prev = cur_prev(journal=lines, creds=[])
+                fails |= keys(soak.check_endpoint("stm32h573-dk-2", tr, cur, prev, soak.BOUNDS, 600, 300))
+                lines = []
+        return fails, tr
+
+    def test_clock_rate_real_soak_pattern_passes(self):
+        # the 3 h soak's false FAIL (1.535 s/s): a session issued with a shorter lifetime between two heartbeats
+        # (ttl 1790 -> 604 in 184 s) and the journal's 10 s stamp jitter must not count as a fast clock
+        fails, tr = self.stm32_soak(jitter_every=40)
+        self.assertNotIn("rate", fails)
+        est = soak.ep_rate(tr)
+        self.assertAlmostEqual(est["rate"], 1.0, delta=0.02)
+        self.assertGreaterEqual(est["left_out"], 4)  # the jitter pairs
+        # jitter on every 7th line still does not move the estimate out of the bounds
+        fails, tr = self.stm32_soak(jitter_every=7)
+        self.assertNotIn("rate", fails)
+        self.assertAlmostEqual(soak.ep_rate(tr)["rate"], 1.0, delta=0.02)
+
+    def test_clock_rate_fast_or_slow_clock_fails(self):
+        for rate in (1.09, 1.20, 0.85):
+            fails, tr = self.stm32_soak(rate=rate, jitter_every=40)
+            self.assertIn("rate", fails, rate)
+            self.assertAlmostEqual(soak.ep_rate(tr)["rate"], rate, delta=0.02)
+        self.assertNotIn("rate", self.stm32_soak(rate=0.941, jitter_every=40)[0])  # the STM32's LSI
+
+    def test_clock_rate_needs_enough_pairs(self):
+        tr = soak.new_ep_track()
+        tr["rate_pairs"] = [[600, 900]] * 5  # 3000 s, but five pairs
+        self.assertIsNone(soak.ep_rate(tr))
+        tr["rate_pairs"] = [[34, 50]] * 50   # many pairs, but 1700 s
+        self.assertIsNone(soak.ep_rate(tr))
+        tr["rate_pairs"] = [[34, 50]] * 60
+        self.assertAlmostEqual(soak.ep_rate(tr)["rate"], 50 / 34.0)
+        del tr["rate_pairs"]                  # a track from a run saved before rate_pairs existed
+        self.assertIsNone(soak.ep_rate(tr))
 
     def test_console(self):
         fs = soak.console_findings("2026-11-20 03:00:00 [ 1.0] ok\n2026-11-20 03:00:01 Kernel panic - not syncing\n")
