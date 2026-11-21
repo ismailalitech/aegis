@@ -38,6 +38,12 @@ target_include_directories(tfm_partitions INTERFACE ${AEGIS_GEN})
 target_compile_definitions(tfm_psa_rot_partition_aegis_pq PRIVATE
     MLD_CONFIG_FILE="aegis_mldsa_config.h"
 )
+# standard evidence (docs/evidence-format.md): message QUOTE_EAT and the core's option; off by default, and the image
+# without it is the one built before the option existed
+option(AEGIS_EAT_COSE "Answer QUOTE_EAT: the quote as an EAT in a COSE_Sign1" OFF)
+if(AEGIS_EAT_COSE)
+    target_compile_definitions(tfm_psa_rot_partition_aegis_pq PRIVATE AEGIS_EAT_COSE=1)
+endif()
 # one .su file per object: each function's stack frame, which tools/stack_estimate.py adds up along the call graph
 target_compile_options(tfm_psa_rot_partition_aegis_pq PRIVATE -fstack-usage)
 target_link_libraries(tfm_psa_rot_partition_aegis_pq PRIVATE
