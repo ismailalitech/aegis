@@ -210,6 +210,7 @@ as before and says so once.
                 ? "aegis.warnings": [ 1*8 tstr .size (1..300) ],   ; the verdict's warning, the vector's details
                 ? "aegis.disabled": true,                ; the entry says "disabled": true
                 ? "aegis.min-trust": tstr,               ; the trust floor the verdict was held to
+                ? "aegis.pack-signed": true,             ; in every 1.2 result: this verifier signs its pack manifests
                 ? ( "aegis.audit-log": bstr .size 16,    ; the audit log's last batch on disk when this was signed:
                     "aegis.audit-batch": uint,           ;   all three or none
                     "aegis.audit-head": bstr .size 32 ) },
@@ -234,9 +235,9 @@ How a verdict becomes a vector (`common/eat.py`, `appraisal`):
 
 The status is `affirming` only if the endpoint is admitted, every value in the vector is affirming and the verdict
 carries no warning; `warning` if it is admitted otherwise; `contraindicated` if evidence was appraised, or the key's
-endorsement refused, and the endpoint is not admitted (an endpoint below its policy's `min_trust` is one: its
-evidence was appraised and is not enough for it); `incomplete` if there was nothing to appraise (an entry the policy
-says is `"disabled"` is one: it is not asked). **It is never
+endorsement refused, and the endpoint is not admitted; `incomplete` if there was nothing to appraise (an entry the
+policy says is `"disabled"` is one: it is not asked; an entry whose `min_trust` it can never meet is another: the
+policy refuses it before asking). **It is never
 better than the verdict**: not admitted is never affirming or warning. A reader (`common/eat.py`, the checker)
 refuses a result whose `aegis.admitted` and status disagree in either direction: admitted under contraindicated or
 incomplete, or not admitted under affirming or warning (`test_the_status_is_never_better_than_the_verdict`,
@@ -247,8 +248,8 @@ status, and the policy's `ni` name if it knows which policy it expects. A result
 
 ### Aegis 1.2: what a result says besides
 
-Four verifier claims (in 1006) were added in Aegis 1.2. Each is optional and is written only when it has something
-to say, so a policy that uses none of the features below gets results with none of them. A 1.1 reader
+Verifier claims (in 1006) added in Aegis 1.2. Each is optional for a reader. `aegis.pack-signed` is in every result
+a 1.2 verifier signs; the others are written only when they have something to say. A 1.1 reader
 (`common/eat.py`, `tools/verify_evidence.py` of v1.1.0) skips verifier claims it does not know and accepts these
 results; a 1.2 reader accepts a 1.1 result and reports the claims as absent
 (`test_the_1_1_result_reader_accepts_a_1_2_result`, `test_the_1_1_checker_verifies_a_1_2_pack_and_the_1_2_checker_a_1_1_result`).
@@ -258,7 +259,8 @@ A 1.2 reader refuses a claim that is there and not of its form, as it does for e
 |---|---|---|
 | `aegis.warnings` | 1 to 8 texts of 1 to 300 characters | the verdict has a warning, or the vector has details (1011). First the verdict's warning text as the journal shows it, then each vector detail as `"<category>: <text>"` (`instance-identity: ...`, `executables: ...`), cut to the bounds. Unlike 1010 (ear.status-details), it is there whatever the status, so an admitted endpoint's cautions are in one place |
 | `aegis.disabled` | `true` | the policy entry says `"disabled": true` (docs/audit-and-policy.md). The status is then `incomplete` and 1010 says `disabled by policy`. A reader refuses it with `aegis.admitted` true |
-| `aegis.min-trust` | a trust label | the entry has a trust floor (its own `"min_trust"` or the policy's): the floor the verdict was held to, met or not. Not met: the status is `contraindicated` and 1010 says `trust X below min_trust Y` |
+| `aegis.min-trust` | a trust label | the entry has a trust floor (its own `"min_trust"` or the policy's): the floor the verdict was held to, met or not. A floor the entry's kind and keys can never meet is a policy error: status `incomplete`, 1010 says `policy: entry N can NEVER meet min_trust Y: ...`. A label below the floor at run time (which the policy check should have made impossible) is `contraindicated`, `trust X below min_trust Y` |
+| `aegis.pack-signed` | `true` | always, from a 1.2 verifier: a pack exported with this result carries `manifest.cose` ("The signed manifest" below). A reader refuses any other value |
 | `aegis.audit-log`, `aegis.audit-batch`, `aegis.audit-head` | 16 bytes; a number from 1; 32 bytes | the policy keeps an audit log and its directory holds a batch: the log's id, the number of its **last batch record on disk when this result was signed**, and the SHA-256 of that record. All three or none |
 
 **Which head.** The fleet loop signs a verdict's result before it tells the audit log about the decision
@@ -380,12 +382,15 @@ The checker, after every other check of the pack:
 |---|---|
 | `manifest.cose` verifies under the verifier key, names this manifest's bytes, this result, the manifest's endpoint and time | `"export_time": {"time": ..., "signed": true}` |
 | `manifest.cose` is there and any of that fails (another key, another `typ`, a bit changed, another pack's, the manifest edited, a claim outside the format) | **not verified** |
-| no `manifest.cose`, and the manifest does not name one (a pack exported by 1.1) | verified; `"export_time": {"time": ..., "signed": false, "note": "export time not signed ..."}` |
+| no `manifest.cose`, the manifest does not name one, and the result has no `aegis.pack-signed` (a pack of 1.1) | verified; `"export_time": {"time": ..., "signed": false, "note": "export time not signed ..."}` |
 | no `manifest.cose`, and the manifest names one | not verified (it was removed) |
+| no `manifest.cose`, and the signed result says `aegis.pack-signed` | **not verified**, with or without `--require-signed-export`: the result is a 1.2 verifier's, whose packs are always signed, so the signature was removed |
 | no `manifest.cose`, with `--require-signed-export` | not verified |
 
-Removing both `manifest.cose` and the manifest's `"signed_manifest"` makes a 1.2 pack look like a 1.1 one; that is
-what `--require-signed-export` is for. The signed time is the verifier's clock, as every time it signs.
+So a 1.2 pack cannot be passed off as a 1.1 one by removing `manifest.cose` and `"signed_manifest"`: its result,
+which is signed, says otherwise (`test_a_1_2_pack_whose_signature_was_removed_is_refused`). What can still be shown
+without a signed time is a pack whose result came from a 1.1 verifier. `--require-signed-export` refuses that too.
+The signed time is the verifier's clock, as every time it signs.
 
 What it does not do, and says so in its report: the keys in a pack are there for convenience, and without the
 thumbprints on the command line the report marks each key `NOT CHECKED`; whoever relies on a pack compares them with

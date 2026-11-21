@@ -462,7 +462,7 @@ the enforcement hook runs `quarantine`, a stored session is revoked (`credential
 endpoint this verifier issues credentials to), the signed result says `aegis.disabled` with status `incomplete`
 (nothing was appraised; not `contraindicated`, which says that evidence was found wanting), and the audit log records
 a `refuse` with `disabled` when the decision changes. `fleet.py check` lists the entry as `DISABLED` and does not count
-it as a mistake (exit status 0). `"disabled": false` is the entry as before. Any other value (`"yes"`, `1`, `null`)
+it as a mistake (exit status 0); `fleet.py session` skips it, as it does not contact it either. `"disabled": false` is the entry as before. Any other value (`"yes"`, `1`, `null`)
 is a policy error: the entry is refused without being contacted, and `check` says so with exit status 1.
 
 It is the way to take a device out of the fleet without losing its entry (keys, endorsement pin, address): removing
@@ -489,16 +489,29 @@ also loses the platform's own signature as a second witness), code on the device
 is). A verdict with **no** label (kind `psa` with its own key; `aegis-pq` without an ES256 key) meets no floor.
 
 `"min_trust"` in an entry, or at the policy's top level for every entry that does not set its own (the entry's own
-replaces the fleet's, as with `max_endorsement_age_s`, and `check` says when it differs), is a floor: a verdict whose
-label is weaker than the floor, or that has none, is QUARANTINED with the reason `trust X below min_trust Y` (`X` is
-`none` without a label). It is checked every cycle, on the label of that cycle's quote, after the other rules; the
-verdict carries `"min_trust"`, the result `aegis.min-trust` and status `contraindicated` (the evidence was appraised
-and is not enough for this entry), the audit log `min_trust`. A value that is not one of the five labels, exactly, is
-a policy error: the entry is refused without being contacted, not run without a floor.
+replaces the fleet's, as with `max_endorsement_age_s`, and `check` says when it differs), is a floor.
 
-`fleet.py check` works out the labels an entry can get from its kind, its pinned profile and its ES256 key file, and
-reports, without contacting anything, each floor that can **never** be met (`min_trust trustzone can NEVER be met:
-this entry's trust is software`, exit status 1), or which label meets it.
+**A floor the entry can never meet is a policy error.** The label of an entry's verdicts follows from its kind, its
+pinned profile and its ES256 key file (`fleet.py`, `possible_trust`). If no label it can get meets its floor, the
+entry is refused by the policy rules (`policy_errors`) without being contacted, every cycle, with
+`policy: entry N can NEVER meet min_trust Y: its trust is X (strongest first: ...)`; the result's status is
+`incomplete`, and `fleet.py check` prints the same line as `REFUSED` with exit status 1. The mistake is the policy's,
+and it is said as the policy's, not as a quarantine that looks like the endpoint's fault.
+
+**An entry without a trust label cannot have a floor**: kind `psa` with its own ES256 key, and `aegis-pq` without
+`iak_pub_pem`, meet none, so any floor, its own or the policy's top-level one, refuses the entry. A fleet with such
+entries cannot use a top-level `min_trust`; give the other entries a floor each instead. No label is made up for them.
+
+**An entry cannot opt out of a top-level floor.** `"min_trust": null` (or any value that is not one of the five
+labels, exactly) is a policy error, not "no floor": the entry is refused rather than run without the floor the
+policy set. The lowest floor an entry can have is `"development-shared-key"`, which every labelled verdict meets;
+that is how one entry says "no floor beyond having a label". For no floor at all, leave `min_trust` out of the top
+level and set it per entry.
+
+At run time the floor is checked again, every cycle, on the label of that cycle's quote: a verdict below it would be
+QUARANTINED with `trust X below min_trust Y` and status `contraindicated`. With the policy rules above this does not
+happen; it is there should a label ever differ from what the configuration says. The verdict carries `"min_trust"`
+(also when the entry is refused for it), the result `aegis.min-trust`, the audit log `min_trust`.
 
 ## Threat model
 
