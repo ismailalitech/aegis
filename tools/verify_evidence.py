@@ -24,7 +24,8 @@ that document, not from common/eat.py.
         trust it; without it the keys of the pack are used and their thumbprints printed for you to compare.
         manifest.cose (Aegis 1.2) is the verifier's signature over manifest.json and the export time: checked under
         the verifier key, and a pack whose signature fails does not verify. A pack without it (exported by Aegis 1.1)
-        verifies, and the report says "export time not signed"; --require-signed-export refuses such a pack.
+        verifies, and the report says "export time not signed"; --require-signed-export refuses such a pack. A pack
+        whose result says aegis.pack-signed (every result of a 1.2 verifier) and has no manifest.cose is refused.
   verify_evidence.py evidence FILE --key KEY [--nonce HEX]
   verify_evidence.py result FILE --key KEY
   verify_evidence.py endorsement FILE --key KEY
@@ -290,6 +291,9 @@ def aegis_1_2_claims(ver):
         need(ver["aegis.disabled"] is True and ver.get("aegis.admitted") is False,
              "attestation result: aegis.disabled is not true, or comes with an admission")
         out["disabled"] = True
+    if "aegis.pack-signed" in ver:
+        need(ver["aegis.pack-signed"] is True, "attestation result: aegis.pack-signed is not true")
+    out["pack_signed"] = "aegis.pack-signed" in ver
     if "aegis.min-trust" in ver:
         floor = ver["aegis.min-trust"]
         need(isinstance(floor, str) and 1 <= len(floor) <= 64, "attestation result: aegis.min-trust is not a label")
@@ -340,14 +344,17 @@ def check_legacy_endorsement(data, pub):
             "quote_sha3_256": body.get("evidence", {}).get("token_sha3_256")}
 
 
-def check_pack_signature(d, man, man_bytes, result_bytes, verifier_pub, require):
+def check_pack_signature(d, man, man_bytes, result_bytes, verifier_pub, require, result_says=False):
     """manifest.cose: the verifier's signature over manifest.json and the export time. Returns the report's
-    "export_time"."""
+    "export_time". result_says: the signed result carries aegis.pack-signed (its verifier signs every pack manifest),
+    so a pack without manifest.cose had it removed."""
     path = os.path.join(d, PACK_SIGNATURE)
     named = man.get("signed_manifest")
     need(named in (None, PACK_SIGNATURE), "pack: the manifest names a signature file other than %s" % PACK_SIGNATURE)
     if not os.path.exists(path):
         need(named is None, "pack: the manifest names %s and the pack has none" % PACK_SIGNATURE)
+        need(not result_says, "pack: the result says its verifier signs the manifest of every pack "
+                              "(aegis.pack-signed) and the pack has no %s: it was removed" % PACK_SIGNATURE)
         need(not require, "pack: the export time is not signed (no %s: a pack from before Aegis 1.2, or one whose "
                           "signature was removed), and --require-signed-export was given" % PACK_SIGNATURE)
         return {"time": man.get("exported"), "signed": False,
@@ -461,7 +468,7 @@ def check_pack(d, trust, require_signed_export=False):
     # last, so that each finding above is reported as itself: a pack whose manifest.json was edited to fit is
     # then caught here, by the verifier's signature over it
     report["export_time"] = check_pack_signature(d, man, man_bytes, files["attestation-result.cbor"], keys["verifier"],
-                                                 require_signed_export)
+                                                 require_signed_export, res["pack_signed"])
     return report
 
 

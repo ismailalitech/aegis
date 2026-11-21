@@ -89,6 +89,9 @@ C_AUDIT_HEAD = "aegis.audit-head"   # bstr .size 32: SHA-256 of that batch recor
 C_WARNINGS = "aegis.warnings"       # [+ tstr]: the verdict's warning, then each vector detail as "category: text"
 C_DISABLED = "aegis.disabled"       # true: the policy entry says "disabled": true; never with aegis.admitted true
 C_MIN_TRUST = "aegis.min-trust"     # tstr: the trust floor (policy "min_trust") the verdict was held to
+# true in every result of a 1.2 verifier: a pack this verifier exports with this result carries manifest.cose, so a
+# reader refuses such a pack without one (it was removed) instead of reporting the time "not signed" as for 1.1
+C_PACK_SIGNED = "aegis.pack-signed"
 MAX_WARNINGS, MAX_WARNING_LEN = 8, 300
 VERIFIER_DEVELOPER_NAME = "https://github.com/ismailalitech/aegis"
 VERIFIER_BUILD_NAME = "aegis-fleet-verifier 1 (evidence eat-cose-v1, results %s)" % EAR_DRAFT
@@ -375,6 +378,7 @@ def ear_payload(verdict, facts, policy, iat, exp=None, label=None):
         ver["aegis.evidence-sha256"] = facts["evidence_sha256"]                  # the evidence file of the pack
     if verdict.get("enforcement"):
         ver["aegis.enforcement"] = verdict["enforcement"]
+    ver[C_PACK_SIGNED] = True
     warnings = warning_texts(verdict, vdetails)
     if warnings:
         ver[C_WARNINGS] = warnings
@@ -435,7 +439,7 @@ def _read_ear(payload):
 
 def _read_aegis_1_2(ver):
     """The verifier claims Aegis 1.2 added, each optional (a 1.1 result has none): {"audit_head", "warnings",
-    "disabled", "min_trust"}, None where absent. Present and not of its form: Refused."""
+    "disabled", "min_trust", "pack_signed"}, None (False) where absent. Present and not of its form: Refused."""
     head = None
     parts = [k for k in (C_AUDIT_LOG, C_AUDIT_BATCH, C_AUDIT_HEAD) if k in ver]
     if parts:
@@ -455,7 +459,10 @@ def _read_aegis_1_2(ver):
     floor = ver.get(C_MIN_TRUST)
     if C_MIN_TRUST in ver and not _is_text(floor, 64):
         raise Refused("%s is not a trust label" % C_MIN_TRUST)
-    return {"audit_head": head, "warnings": warnings, "disabled": disabled is True, "min_trust": floor}
+    if C_PACK_SIGNED in ver and ver[C_PACK_SIGNED] is not True:
+        raise Refused("%s is not true" % C_PACK_SIGNED)
+    return {"audit_head": head, "warnings": warnings, "disabled": disabled is True, "min_trust": floor,
+            "pack_signed": C_PACK_SIGNED in ver}
 
 
 def read_ear(data, verifier_pk, now=None):
