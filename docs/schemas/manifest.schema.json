@@ -2,8 +2,8 @@
  "$schema": "https://json-schema.org/draft/2020-12/schema",
  "$id": "tag:github.com,2026:ismailalitech/aegis/schemas/evidence-pack-manifest/v1",
  "title": "Aegis evidence pack manifest (aegis-evidence-pack-v1)",
- "description": "manifest.json of a pack written by `fleet.py export-evidence POLICY NAME` (gateway/aegisd/fleet.py export_evidence). Not signed: what it says is checked against the signed attestation result in the pack (tools/verify_evidence.py). Every key is always written. docs/data-formats.md, docs/evidence-format.md.",
- "$comment": "Aegis 1.1 as written. 1.2: a signed export time is being added to the pack: see docs/data-formats.md once v12-verifier lands.",
+ "description": "manifest.json of a pack written by `fleet.py export-evidence POLICY NAME` (gateway/aegisd/fleet.py export_evidence). Aegis 1.2 signs it: manifest.cose beside it is a COSE_Sign1 by the verifier key, typ application/vnd.aegis.evidence-pack+cbor, over {1: format, 2: endpoint, 3: exported, 4: SHA-256 of manifest.json as written, 5: SHA-256 of attestation-result.cbor} (common/evidence_pack.py). Every key is always written; signed_manifest since 1.2. docs/data-formats.md, docs/evidence-format.md.",
+ "$comment": "Aegis 1.2 as written. A pack of Aegis 1.1 has no signed_manifest and no manifest.cose, and its result summary only status, admitted, iat and exp: it also matches this schema.",
  "type": "object",
  "additionalProperties": false,
  "required": ["format", "endpoint", "kind", "exported", "evidence_format", "policy_sha256", "policy_id",
@@ -13,7 +13,7 @@
   "endpoint": {"$ref": "#/$defs/name", "description": "the policy entry's name"},
   "kind": {"$ref": "#/$defs/kind"},
   "exported": {"type": "integer", "minimum": 0,
-               "description": "Unix time of the export on the verifier's clock (not signed; the result's iat is)"},
+               "description": "Unix time of the export on the verifier's clock; signed in manifest.cose (claim 3) since Aegis 1.2"},
   "evidence_format": {
    "enum": ["eat-cose-v1", "aegis-quote-v1", "psa-token", null],
    "description": "eat-cose-v1: evidence.cbor (EAT in COSE_Sign1, ML-DSA-65); aegis-quote-v1: evidence.token + evidence.sig (the older PQCHAL quote); psa-token: evidence.token alone (kind psa, ES256); null: the entry was refused by the policy rules before a format was chosen"
@@ -28,12 +28,17 @@
    "type": "object",
    "additionalProperties": false,
    "required": ["status", "admitted", "iat", "exp"],
-   "description": "copied from the signed attestation result after its signature was checked",
+   "description": "copied from the signed attestation result after its signature was checked; the four Aegis 1.2 keys only where the result has the claim",
    "properties": {
     "status": {"$ref": "#/$defs/status"},
     "admitted": {"type": "boolean"},
     "iat": {"type": "integer", "minimum": 0},
-    "exp": {"type": ["integer", "null"], "minimum": 0}
+    "exp": {"type": ["integer", "null"], "minimum": 0},
+    "audit_head": {"$ref": "#/$defs/audit_head", "description": "the result's aegis.audit-log, -batch and -head in hex"},
+    "warnings": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 300},
+                 "description": "the result's aegis.warnings"},
+    "min_trust": {"$ref": "#/$defs/trust", "description": "the result's aegis.min-trust"},
+    "disabled": {"const": true, "description": "the result's aegis.disabled"}
    }
   },
   "key_thumbprints": {
@@ -53,6 +58,7 @@
    "required": ["attestation-result.cbor", "keys/verifier.cosekey"],
    "dependentRequired": {"evidence.sig": ["evidence.token"]}
   },
+  "signed_manifest": {"const": "manifest.cose", "description": "Aegis 1.2: the file that signs this manifest's bytes and the export time; absent in a pack of Aegis 1.1"},
   "verify": {"const": "tools/verify_evidence.py pack <this directory>"}
  },
  "$defs": {
@@ -62,6 +68,14 @@
    "description": "the policy entry's kind (psa when the entry names none). An entry of another kind is refused at the policy stage and gets no evidence."
   },
   "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+  "trust": {"enum": ["trustzone", "trustzone-devkey", "device-key", "software", "development-shared-key"]},
+  "audit_head": {
+   "type": "object", "additionalProperties": false, "required": ["log", "batch", "sha256"],
+   "description": "the verifier's audit log as it stood when the result was signed: its last batch record on disk",
+   "properties": {"log": {"type": "string", "pattern": "^[0-9a-f]{32}$", "description": "the log's 16-byte id"},
+                  "batch": {"type": "integer", "minimum": 1},
+                  "sha256": {"$ref": "#/$defs/sha256", "description": "SHA-256 of that batch record (the whole COSE_Sign1)"}}
+  },
   "status": {
    "enum": ["affirming", "warning", "contraindicated", "incomplete"],
    "description": "AR4SI tier of the attestation result: 2, 32, 96, 127"

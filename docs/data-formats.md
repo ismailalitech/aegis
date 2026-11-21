@@ -2,9 +2,10 @@
 # Data formats: what a consumer of Aegis evidence reads
 
 For a program that reads what an Aegis verifier writes (an inventory, a SIEM, a compliance report) without running
-Aegis code. Every statement here is taken from the code of Aegis 1.1 (`gateway/aegisd/fleet.py`, `common/eat.py`,
-`common/endorsement.py`, `common/psa_token.py`, `common/signed_policy.py`, `common/audit.py`,
-`sdk/src/aegis_proto.c`); where the code is the specification, its function is named. The design and the reasons are
+Aegis code. Every statement here is taken from the code of Aegis 1.2 (`gateway/aegisd/fleet.py`, `common/eat.py`,
+`common/evidence_pack.py`, `common/endorsement.py`, `common/psa_token.py`, `common/signed_policy.py`,
+`common/audit.py`, `sdk/src/aegis_proto.c`); where the code is the specification, its function is named. What 1.2
+added, and what a file of 1.1 lacks, is at the end ("Aegis 1.2"). The design and the reasons are
 in [`evidence-format.md`](evidence-format.md), [`enrolment.md`](enrolment.md) and
 [`audit-and-policy.md`](audit-and-policy.md); this page is the reference.
 
@@ -17,7 +18,7 @@ JSON Schema, draft 2020-12, in [`schemas/`](schemas/):
 
 | File | Written by | Schema |
 |---|---|---|
-| `manifest.json` of an evidence pack | `fleet.py export-evidence POLICY NAME` | [`schemas/manifest.schema.json`](schemas/manifest.schema.json) |
+| `manifest.json` of an evidence pack | `fleet.py export-evidence POLICY NAME` | [`schemas/manifest.schema.json`](schemas/manifest.schema.json); signed by `manifest.cose` beside it (CBOR, below) |
 | `STATE_DIR/fleet-state.json` (`/var/lib/aegis` on the gateway) | `fleet.py watch`, after every cycle | [`schemas/fleet-state.schema.json`](schemas/fleet-state.schema.json); one verdict: `#/$defs/verdict` |
 | `fleet.json`, the policy (plain, or inside a signed policy) | the operator | [`schemas/policy.schema.json`](schemas/policy.schema.json); one entry: `#/$defs/endpoint` |
 | an endorsement record, JSON form (`endorsements/<name>.json`, `endorsement.json` in a pack) | `provision/aegis_provision.py endorse` | [`schemas/endorsement.schema.json`](schemas/endorsement.schema.json) |
@@ -29,7 +30,9 @@ refuses a record or signers file with an unknown key. The policy is open, becaus
 not know (`"note"`, `"image"` in an `allowed` item); inside a known key it is strict, and a value it does not know is
 refused rather than read as the default (`fleet.py policy_errors`, `fleet.py check`). Enumerations are closed where
 the code has a closed set. The verdict's `reasons`, `warning` and `credential` are text for people, not a closed
-list: do not parse them.
+list: do not parse them. A verdict (fleet-state.json) carries `"disabled": true` for an entry the policy disables,
+`"min_trust"` with the floor it was held to, and, in `attestation_result`, `"audit_head": {"log", "batch",
+"sha256"}` (hex) when its signed result names the audit log's head.
 
 Hashes in JSON are lower-case hex. A "SHA-256 of a key" is always over the raw 1952-byte ML-DSA-65 public key (a
 P-256 key is never hashed this way); a key's **thumbprint** is something else, the COSE Key Thumbprint (RFC 9679) over
@@ -65,6 +68,25 @@ policy rules refuse).
 | `trust-on-first-use` | no endorsement asked for: the key is whatever `fleet.py enroll-pq` was first given |
 | `refused` | an endorsement is required and the record was refused (missing, another key, an untrusted or revoked endorser, expired, not the pinned record, too old). The endpoint is never admitted and is not contacted |
 
+### Trust floors (`min_trust`)
+
+A policy's `"min_trust"` (at the top level for every entry without its own, or in an entry) admits only a verdict
+whose label is the floor or a stronger one. The order, strongest first (`fleet.py TRUST_ORDER`):
+
+    trustzone > trustzone-devkey > device-key > software > development-shared-key
+
+A verdict without a label meets no floor. The value must be one of the five labels exactly: `null` or any other
+value refuses the entry (an entry cannot opt out of a top-level floor; the weakest floor is
+`development-shared-key`). A floor the entry's kind, profile and IAK file can never meet refuses the entry, before it
+is contacted (`fleet.py possible_trust`, `policy_errors`): an entry with no label at all (kind `psa` with its own IAK,
+`aegis-pq` without `iak_pub_pem`) can have no floor, and `aegis-rw612-els-v1` can have at most `device-key`,
+`aegis-linux-software-v1` at most `software`, the development profile only `development-shared-key`. The schema
+encodes these per entry; whether a top-level floor fits every entry that inherits it, `fleet.py check` says.
+[`audit-and-policy.md`](audit-and-policy.md) ("Disabled entries and trust floors") has the reasons.
+
+`"disabled": true` in an entry takes the endpoint out: not contacted, refused every cycle with the reason
+`disabled by policy`, status `incomplete`, its session revoked. Only `true` and `false` are accepted.
+
 ### Other closed values
 
 | Field | Values |
@@ -78,6 +100,8 @@ policy rules refuse).
 | `device_state`, `aegis.device-state` | `development`, `closed` (the operator's statement; nothing measures it) |
 | policy `heartbeat_mac` | `kmac256` (default), `sha3-256` |
 | policy `transcript`, `endorsement`, `evidence_format` | `v2`; `required`; `eat-cose-v1` |
+| policy `min_trust`, the verdict's `min_trust`, `aegis.min-trust` | the five trust labels, in the order above |
+| policy `disabled` | `true`, `false` |
 
 ## The attestation result (EAR) and its `aegis.*` claims
 
@@ -124,6 +148,13 @@ The appraisal:
 | `aegis.quote-sha3-256` | **bstr**, 32 bytes | SHA3-256 of the bytes the device's signature covers: for `aegis-quote-v1` the token itself (not the label), for `eat-cose-v1` the COSE Sig_structure `["Signature1", protected, h'', payload]`. The token hash of transcript v2's T1 |
 | `aegis.evidence-sha256` | **bstr**, 32 bytes | SHA-256 of the evidence file as received: `evidence.cbor`, or `evidence.token` (the detached `evidence.sig` is not covered) |
 | `aegis.enforcement` | tstr | `ok` or `FAILED`, when the policy's enforcement hook ran |
+| `aegis.pack-signed` | bool, always `true` | in every result of a 1.2 verifier: a pack exported with this result carries `manifest.cose`; a pack whose result says so and has none had it removed, and does not verify |
+| `aegis.warnings` | [+ tstr], 1 to 8 texts of 1 to 300 characters | the verdict's warning, then each vector detail (1011) as `"<category>: <text>"` (`instance-identity: ...`, `executables: ...`); whatever the status, so an admitted endpoint's cautions are in one place. Absent if there is none |
+| `aegis.disabled` | bool, `true` | the entry says `"disabled": true`; never with `aegis.admitted` true (status `incomplete`) |
+| `aegis.min-trust` | tstr, a trust label | the floor the verdict was held to, met or not |
+| `aegis.audit-log` | **bstr**, 16 bytes | the audit log's id, when the policy keeps a log and it holds a batch. These three claims come together or not at all |
+| `aegis.audit-batch` | uint, from 1 | the number of the log's **last batch record on disk when the result was signed**: a batch written before the result, never the one that records its decision |
+| `aegis.audit-head` | **bstr**, 32 bytes | SHA-256 of that batch record (the whole COSE_Sign1). `tools/verify_audit.py log DIR --key KEY --result FILE` checks that the batch is in the log, byte for byte |
 
 **1014**, per endorser:
 
@@ -134,8 +165,30 @@ The appraisal:
 | `aegis.device-state` | tstr | `development` or `closed` |
 | 6 | uint | when the record was issued (endorser's clock) |
 
-Note the mix, which is the code's: the two key and record hashes are hex text, the two evidence hashes are byte
-strings. No claim is SHA3 except `aegis.quote-sha3-256`.
+Note the mix, which is the code's: the key and record hashes are hex text; the evidence hashes, the audit log's id
+and its head are byte strings. No claim is SHA3 except `aegis.quote-sha3-256`. A 1.1 reader skips the verifier claims
+it does not know; a 1.2 reader refuses one that is there and not of its form.
+
+## The signed manifest (`manifest.cose`)
+
+Beside `manifest.json`, `export-evidence` writes `manifest.cose` (`common/evidence_pack.py`): the same COSE_Sign1
+envelope by the verifier's identity key, but with `typ` `application/vnd.aegis.evidence-pack+cbor` (each reader
+requires its own typ, so a pack statement is never taken for a result or an audit batch), payload in deterministic
+CBOR, exactly these keys:
+
+| Key | Type | Value |
+|---|---|---|
+| 1 | tstr | `"tag:github.com,2026:ismailalitech/aegis/evidence-pack/v1"` |
+| 2 | tstr, 1 to 64 | the endpoint: the manifest's `endpoint` |
+| 3 | uint | the export time on the verifier's clock: the manifest's `exported` |
+| 4 | bstr .size 32 | SHA-256 of `manifest.json`, byte for byte as written |
+| 5 | bstr .size 32 | SHA-256 of `attestation-result.cbor` |
+
+The manifest names it (`"signed_manifest": "manifest.cose"`) and does not list it in `files`. Through the
+manifest's hash the signature covers every file of the pack. `tools/verify_evidence.py pack` checks it last, under
+the verifier key; `--require-signed-export` refuses a pack without one ([`evidence-format.md`](evidence-format.md),
+"The signed manifest", has the table of cases). The manifest's `result` also copies, where the result has them,
+`audit_head` (hex), `warnings`, `min_trust` and `disabled`.
 
 ## The private claims (-82400 to -82408)
 
@@ -242,20 +295,27 @@ Check them without Aegis code: `tools/verify_evidence.py` (packs, results, evide
 ## Tests
 
 `tests/host/test_golden_vectors.py`: the schemas use only the keywords its small validator implements (no JSON
-Schema package is a dependency), their closed lists are the code's constants, the policy schema refuses what
-`fleet.py policy_errors` refuses, this page names every trust and enrolment value and every `aegis.*` claim the code
-writes; the committed vectors verify with the standalone checkers and match the schemas, and a fresh run of the
-generator makes the same structure.
+Schema package is a dependency), their closed lists are the code's constants (the trust order included), the policy
+schema refuses what `fleet.py policy_errors` refuses (`disabled`, `min_trust` and the floors an entry cannot meet
+among them), this page names every trust and enrolment value and every `aegis.*` claim the code
+writes; the committed vectors verify with the standalone checkers and match the schemas, every pack's
+`manifest.cose` verifies (with `--require-signed-export`, and with `common/evidence_pack.py`), every result's audit
+head is in the committed log (`verify_audit.py --result`), and a fresh run of the generator makes the same
+structure.
 
 ## Aegis 1.2
 
-Placeholders, to be filled where the change lands (branch v12-verifier):
+What 1.2 added to the files on this page; a file of Aegis 1.1 lacks each of them, and still matches the schemas,
+which make every one optional:
 
-- **Evidence pack**: a signed export time. 1.2: see docs/data-formats.md once v12-verifier lands.
-- **Attestation result**: the audit log's head named in the signed result, and the verdict's warnings and details
-  placed in it. 1.2: see docs/data-formats.md once v12-verifier lands.
-- **Policy**: entry keys `"disabled"` and `"min_trust"`. 1.2: see docs/data-formats.md once v12-verifier lands.
+- **Evidence pack**: `manifest.cose`, the verifier's signature over the manifest and the export time; the manifest's
+  `signed_manifest`, and in its `result` the summary keys `audit_head`, `warnings`, `min_trust`, `disabled`.
+- **Attestation result** (1006): `aegis.pack-signed`, `aegis.warnings`, `aegis.disabled`, `aegis.min-trust`,
+  `aegis.audit-log`, `aegis.audit-batch`, `aegis.audit-head`.
+- **Verdict**: `disabled`, `min_trust`, `attestation_result.audit_head`.
+- **Policy**: `"disabled"` in an entry, `"min_trust"` in an entry or at the top level. A 1.1 verifier ignores both:
+  it would contact a disabled entry and hold every entry to no floor.
+- **Audit log**: a `refuse` or `admit` entry's details may carry `disabled` and `min_trust`.
 
-Until then everything on this page is Aegis 1.1, and the schemas describe exactly what 1.1 writes: a consumer that
-validates a 1.2 manifest or verdict against them will see the new keys refused, which is the signal to take the 1.2
-schemas.
+The vectors in [`../tests/vectors/aegis-1.2/`](../tests/vectors/aegis-1.2/README.md) are a 1.2 verifier's: every
+pack is signed, every result names the audit log's head, four entries have a floor and one is disabled.

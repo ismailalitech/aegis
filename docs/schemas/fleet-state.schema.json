@@ -3,7 +3,7 @@
  "$id": "tag:github.com,2026:ismailalitech/aegis/schemas/fleet-state/v1",
  "title": "Aegis fleet verifier state file (fleet-state.json)",
  "description": "What `fleet.py watch` writes after every cycle to STATE_DIR/fleet-state.json (/var/lib/aegis on the gateway, ~/.local/state/aegis for a user on a PC; --state names another file): the verdict of every policy entry in that cycle. Written whole and renamed into place. `fleet.py once` prints the same verdicts as a JSON list. Not signed: the signed statement of a verdict is its attestation result (docs/evidence-format.md). The verdict object is #/$defs/verdict.",
- "$comment": "Aegis 1.1 as written (gateway/aegisd/fleet.py attest, credential_step, record_enforcement, issue_result, run_once). 1.2: the verdict's warnings and details also go into the signed result: see docs/data-formats.md once v12-verifier lands.",
+ "$comment": "Aegis 1.2 as written (gateway/aegisd/fleet.py attest, credential_step, record_enforcement, issue_result, run_once). A verdict of Aegis 1.1 has no disabled, min_trust or attestation_result.audit_head, and matches too.",
  "type": "object",
  "additionalProperties": false,
  "required": ["updated", "verdicts"],
@@ -39,6 +39,8 @@
      }
     },
     "trust": {"$ref": "#/$defs/trust"},
+    "disabled": {"const": true, "description": "Aegis 1.2: the entry says \"disabled\": true; it was not contacted, and the reasons begin with \"disabled by policy\""},
+    "min_trust": {"$ref": "#/$defs/trust", "description": "Aegis 1.2: the trust floor the verdict was held to (the entry's, or the policy's top-level one); a verdict whose trust does not meet it is refused (\"trust X below min_trust Y\")"},
     "warning": {"type": "string", "description": "set with an admission the operator must hear about (development key, development profile, unbound session); free text"},
     "measurements": {
      "type": "object",
@@ -56,7 +58,11 @@
      "oneOf": [
       {"type": "object", "additionalProperties": false, "required": ["status", "sha256", "file"],
        "properties": {"status": {"$ref": "#/$defs/status"}, "sha256": {"$ref": "#/$defs/sha256", "description": "SHA-256 of the COSE_Sign1"},
-                      "file": {"type": "string", "description": "STATE_DIR/attestation/<name>/result.cbor"}}},
+                      "file": {"type": "string", "description": "STATE_DIR/attestation/<name>/result.cbor"},
+                      "audit_head": {"type": "object", "additionalProperties": false, "required": ["log", "batch", "sha256"],
+                                     "description": "Aegis 1.2, with the audit log on and a batch on disk: the head the result names (aegis.audit-log, -batch, -head), in hex",
+                                     "properties": {"log": {"type": "string", "pattern": "^[0-9a-f]{32}$"}, "batch": {"type": "integer", "minimum": 1},
+                                                    "sha256": {"$ref": "#/$defs/sha256"}}}}},
       {"type": "object", "additionalProperties": false, "required": ["error"],
        "properties": {"error": {"type": "string", "description": "why no result could be signed; the verdict stands"}}}
      ]
@@ -69,7 +75,9 @@
     {"if": {"required": ["enforcement"], "properties": {"enforcement": {"const": "FAILED"}}},
      "then": {"required": ["enforce_error"]}},
     {"if": {"required": ["enrolment"], "properties": {"enrolment": {"const": "refused"}}},
-     "then": {"properties": {"admitted": {"const": false}}}}
+     "then": {"properties": {"admitted": {"const": false}}}},
+    {"if": {"required": ["disabled"]},
+     "then": {"properties": {"admitted": {"const": false}, "reasons": {"contains": {"const": "disabled by policy"}}}}}
    ]
   },
   "kind": {
@@ -78,7 +86,7 @@
   },
   "trust": {
    "enum": ["trustzone", "trustzone-devkey", "device-key", "software", "development-shared-key"],
-   "description": "closed list; docs/data-formats.md says what each means. Absent for kind psa unless its IAK is TF-M's development key, and for a verdict refused before the claims were read."
+   "description": "closed list, strongest first (the order min_trust compares by); docs/data-formats.md says what each means. Absent for kind psa unless its IAK is TF-M's development key, and for a verdict refused before the claims were read."
   },
   "enrolment": {
    "enum": ["endorsed", "trust-on-first-use", "refused"],
