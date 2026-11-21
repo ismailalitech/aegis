@@ -326,3 +326,21 @@ class Anchors(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SignersOption(unittest.TestCase):
+    def test_a_signed_policy_gets_its_signers_file_and_nothing_else_may_carry_a_space(self):
+        import importlib.util, os
+        spec = importlib.util.spec_from_file_location("audit_anchors", os.path.join(
+            os.path.dirname(__file__), "..", "..", "tools", "audit_anchors.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        v = {"gateway": "gw", "fleet": "/f.py", "policy": "/p.cose", "state_dir": "/s",
+             "signers_opt": " --policy-signers /k.json"}
+        self.assertIn("audit /p.cose --policy-signers /k.json --state-dir /s", m.render(m.FETCH_CMD, v))
+        v["signers_opt"] = ""
+        self.assertIn("audit /p.cose --state-dir /s", m.render(m.FETCH_CMD, v))
+        for bad in (" --policy-signers /k.json; rm -rf /", " --other /k.json", "x"):
+            v["signers_opt"] = bad
+            with self.assertRaises(SystemExit):
+                m.render(m.FETCH_CMD, v)
