@@ -264,8 +264,9 @@ Nothing of these is in version 1; the seams are marked in `src/aegis_proto.c`.
   "eat-cose-v1"` in the policy entry, and anyone with a COSE library and the device's public key can read it
   (`tools/verify_evidence.py`). The profile, the memory it needs (a work buffer of at least 1962 bytes) and what the
   transcript hashes for such a quote are in [`docs/evidence-format.md`](../docs/evidence-format.md). Without the
-  flag the core is byte for byte what it was. What remains: a PSA message for it in the STM32 partition, and images
-  built with it.
+  flag the core is byte for byte what it was. The STM32H573 partition has a PSA message for it (`QUOTE_EAT`) when
+  built with `-DAEGIS_EAT_COSE=ON`, and an image is built with it ("STM32 EAT image" in that document); what remains
+  is running it on the boards.
 - **A measurement-dependent key** (see Limits): `identity_public_key` and `identity_sign`.
 
 ## Tests

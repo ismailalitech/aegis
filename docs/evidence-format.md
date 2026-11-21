@@ -19,11 +19,13 @@ a third party reads with a COSE library and a public key:
 | the endorsement in this form | `common/endorsement.py` (`sign_cose`, `loads`) |
 | the verifier: policy key, results, `export-evidence` | `gateway/aegisd/fleet.py` |
 | the device: an option of the Prover SDK, off by default | `sdk/src/aegis_proto.c` (`AEGIS_EAT_COSE`) |
+| the STM32H573 image with the option (PSA message `QUOTE_EAT`) | `endpoints/stm32h573/` ("STM32 EAT image" below) |
 | the standalone checker (third-party libraries only) | `tools/verify_evidence.py` |
 
-**Status.** Software only: everything here is exercised by the host tests against simulated devices and against the
-SDK's core built for the PC. No board image has the option yet, and the gateway on the bench still runs `main`. The
-older formats stay the default and stay accepted ("Compatibility" below).
+**Status.** Everything here is exercised by the host tests against simulated devices, against the SDK's core built
+for the PC and against the STM32H573 partition built for the PC with the option. An STM32H573 secure and non-secure
+image with the option is built ("STM32 EAT image" below) and **not yet run on a board**; the gateway on the bench
+still runs `main`. The older formats stay the default and stay accepted ("Compatibility" below).
 
 ## The standards, and the versions used
 
@@ -326,8 +328,52 @@ difference.
   so `AEGIS_SDK_API_VERSION` did not.
 - At most 16 measurements; a label is 1 to 64 bytes, the version text at most 64.
 
-Not done: the STM32H573 partition has no PSA message for the new operation, and no port's build enables the flag. The
-reference port (`sdk/ports/host`) serves it over its socket when built with the flag, which is what the tests use.
+The reference port (`sdk/ports/host`) serves it over its socket when built with the flag. The STM32H573 partition
+has a PSA message for it when built with the flag (next section); no other port's build enables it.
+
+## STM32 EAT image
+
+The STM32H573I-DK's TF-M partition (`endpoints/stm32h573/tfm-aegis-partition/aegis_pq_attest.c`) and its non-secure
+prover (`endpoints/stm32h573/prover-ns/src/main.c`) take the option as a CMake switch, off by default:
+
+    endpoints/stm32h573/tfm-aegis-partition/build_tfm.sh -DAEGIS_EAT_COSE=ON      # OUT=<build directory>
+    SPE=<that build>/api_ns endpoints/stm32h573/prover-ns/build.sh -DAEGIS_EAT_COSE=ON
+
+- **PSA message `QUOTE_EAT` (type 7).** `in[0]` the 32-byte challenge; `out[0]` must take `EAT_OUT_MAX` = 4124
+  bytes and receives the COSE_Sign1, TF-M's PSA token for the challenge nested as the submodule `platform` (the kind
+  `aegis-pq` reads it so: the outer ML-DSA-65 signature and the token's ES256 signature, both nonces). Arguments of
+  another size answer `PSA_ERROR_INVALID_ARGUMENT`; the other statuses are `QUOTE`'s. A build without the option
+  answers `PSA_ERROR_NOT_SUPPORTED`. It is the quote a following `KEM_INIT` continues (transcript v2, T1 over the
+  Sig_structure).
+- **Line protocol.** The non-secure prover forwards `PQEAT <challenge>` and answers `PQEAT <len> <hex> END`, or
+  `ERR pq <status>`. Built without the option it answers `ERR bad-request`, as before.
+- **Memory.** The work buffer becomes `AEGIS_EAT_WORK_MIN` = 1962 bytes (728 more than `AEGIS_WORK_MIN`). The
+  claims around the largest token TF-M gives here (`0x250` = 592 bytes) are 744 bytes, so a token of 592 bytes fits
+  exactly and the object is then 4124 bytes; the object is made in the partition's credential buffer (6144 bytes,
+  used only within a `KEM_FINISH` message), so no buffer is added. Secure RAM +736 bytes (`.TFM_PSA_ROT_LINKER_BSS`
+  86144 to 86880), secure code +1440 bytes (`.TFM_PSA_ROT_LINKER` 49920 to 51360); about 17 KB of the secure RAM
+  region is still free.
+- **Stack.** The signature is made in the frames `QUOTE` uses: `tools/stack_estimate.py` gives 18704 bytes for the
+  deepest path with and without the option (`aegis_pq_service_sfn` + `aegis_prover_quote_eat` = 40 + 18664), so
+  the boards should report the same `sstack=18872/26624` as SPE 9de76167. The stack stays at 0x6800 = 26624.
+- **The default build is unchanged.** Built without the option from this source, the secure image's unsigned binary
+  is byte for byte the one of SPE `9de76167` (`tfm_s.bin` sha256 `4364531c...`), and the non-secure image measures
+  as the live prover 0.6.0 (NSPE `1f4110fd...`). The secure gateway veneers are at the same addresses in both
+  builds, so either secure image runs with either non-secure image.
+
+The images built on 21 November 2026 (in `~/aegis-tools/tfm-aegis-build-eat/images/`, not in the repository):
+
+| File | sha256 | Measurement |
+|---|---|---|
+| `tfm-s-v2.3.0-aegis-pq-sdk2-eat.hex` (secure slot) | `550dc43877a21e709454bd308c200e197b2cf5cc35bec42205ac011227de764f` | SPE `315dcc2fae21ac5ec7a6a69338f9c490b98f38953403c37a7cb624092b361bbe`, version 2.3.0, signer `e30466f6...` (same as 9de76167) |
+| `prover-ns-0.6.0-eat.hex` (non-secure slot) | `224ee58081bd5c8d6adeff64e658f84652786980bf38157f9cb2a65f8c9dea5f` | NSPE `acf8fc53323d1a80535fc8e7726692d2830fd1935b86917991ad3a6c413ed1f3`, signer `82a5b443...` |
+
+How to put them on a board, change the policy and roll back: `endpoints/stm32h573/README.md`. Tests:
+`tests/host/test_sdk_eat.py` (`Stm32Partition`): the partition with the option behind the non-secure prover's line
+protocol, appraised by `fleet.py` with a PSA token nested, a session bound to that quote, the reserved sizes, the
+STM32 fuzz seeds and raw `QUOTE_EAT` messages through the harness's model, and the default build answering
+`PSA_ERROR_NOT_SUPPORTED`. Not tested: the images on a board, and the non-secure prover's own code for `PQEAT` (it
+is compiled, not run; the test plays it in Python).
 
 ## Compatibility
 
@@ -348,6 +394,7 @@ older quote and the JSON record too, and says in its report that they are not CO
 |---|---|
 | envelope, evidence claims, verifier, results, COSE endorsement, pack and checker (simulated devices) | `tests/host/test_evidence_format.py` |
 | the SDK option: every encoding boundary with ASan/UBSan, the core behind a socket against `fleet.py`, a bound session, a pack | `sdk/tests/eat_check.c`, `tests/host/test_sdk_eat.py` |
+| the STM32H573 partition with the option: `QUOTE_EAT` behind the line protocol against `fleet.py`, a bound session, sizes, seeds | `tests/host/test_sdk_eat.py` (`Stm32Partition`), `tests/fuzz/stm32/fuzz_stm32_partition.c` |
 | the default build is unchanged | `tests/host/test_sdk_golden.py` |
 | hostile objects against the decoders, the verifier and the checker | `tests/redteam/fuzz_host.py` (stage `host-redteam`) |
 | the SDK core with the option under libFuzzer, with the harness's model of an EAT; the shared corpus through that build | `EAT=1 tests/fuzz/run.sh`, seeds `tests/fuzz/seeds/sdk-eat-*`, `tests/host/test_sdk_eat.py` (`Corpus`) |
@@ -359,8 +406,8 @@ test of the standalone checker was skipped for want of its libraries.
 
 1. **EAR and AR4SI are drafts.** Numbers and the profile string may change before publication; -33 to -35 are this
    project's own reasons and mean nothing to a generic AR4SI consumer beyond "warning".
-2. **No board has run this.** The bench images answer `PQCHAL` only; enabling the option changes each image's
-   measurement and needs a regression on the boards.
+2. **No board has run this.** The bench images answer `PQCHAL` only. An STM32H573 image with the option is built
+   ("STM32 EAT image"); it changes the SPE and NSPE measurements and needs a regression on the boards.
 3. **The nested PSA token's inner signature** is checked by the verifier, not by the standalone checker.
 4. **Reference values are still the policy's `allowed` list**, named in a result by the policy file's hash. A CoRIM
    would be the standard form; it is not part of this work.
