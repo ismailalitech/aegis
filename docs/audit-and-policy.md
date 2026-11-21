@@ -19,6 +19,7 @@ month). This note defines both:
 | the verifier's side of it; the key pin of an entry | `gateway/aegisd/fleet.py` (`load_policy`, `device_key`) |
 | the operator's side: the policy-signing key and `policy-sign` | `provision/aegis_provision.py` |
 | the standalone checker of both (third-party libraries only) | `tools/verify_audit.py` |
+| anchors kept off the gateway, and the log checked against them (bench PC) | `tools/audit_anchors.py` |
 
 **Status.** Software only: everything here is exercised by the host tests against simulated endpoints. No board
 was touched, and the gateway on the bench still runs `main`. **Both are off by default**: a policy without
@@ -195,6 +196,75 @@ standing one unchanged and drop one that has lapsed.
 the bench). The chain runs through the segments, so a segment that was copied away and checked can be deleted: the
 remaining log then begins at a later batch, which the checker accepts only with `--allow-pruned`, and says so. The
 verifier itself deletes segments only with `"max_segments"`, and then says so in the log (`pruned`, above).
+
+### Anchors off the gateway: `tools/audit_anchors.py`
+
+An anchor only helps if someone keeps it where the gateway cannot write. `tools/audit_anchors.py` does that on the
+bench PC, over the same read-only SSH as `tools/bench_watch.py`:
+
+    tools/audit_anchors.py fetch --key identity.json --gateway 192.168.1.63    # keep the log's current last batch
+    tools/audit_anchors.py check --key identity.json --gateway 192.168.1.63    # copy the log, check it against all
+    tools/audit_anchors.py watch --key identity.json --gateway 192.168.1.63 \
+        --interval 300 --check-every 12 --alert-cmd 'notify-send aegis-audit'
+    tools/audit_anchors.py --selftest                                          # canned logs, no network
+
+`--key` is the gateway verifier's public key, taken once from the gateway (`/var/lib/aegis/identity.json`) and kept
+on the PC; in any form `verify_audit.py` reads. The PC needs the checker's libraries (`pip install pycose==1.1.0
+'cbor2<6' cryptography`).
+
+- **`fetch`** runs `fleet.py audit POLICY --out` on the gateway through `--fetch-cmd` (default `ssh -n -o
+  BatchMode=yes root@{gateway} ...`, with `{fleet}`, `{policy}`, `{state_dir}` from `--fleet`, `--policy`,
+  `--state-dir`; values that are not plain host names or paths are refused). The record that comes back must be one
+  batch record, in deterministic encoding, signed by the given key, at most 16 kB; anything else is refused and
+  nothing is kept. A new record is written to `~/aegis-tools/audit-anchors/<sha256 of the key>/anchors/` (created
+  with `O_EXCL`, made read-only, never overwritten or deleted by the tool) and a line with its SHA-256 is appended to
+  `manifest.jsonl`. It is compared with what is kept first: a record that contradicts one kept (another batch under
+  a number already kept, a batch that does not continue the kept one before it, a lower batch number than one kept, a
+  log that was already followed by another) is **not** kept but saved in `conflicts/` as evidence and reported as
+  `rewritten` or `rollback`; a new log id is kept and reported as `replaced`.
+- **`check`** copies the whole log through `--log-cmd` (default: a tar of `STATE_DIR/audit/audit-*.cbor`, under
+  the writers' lock where the gateway has `flock`; or `--log-dir` for a copy already on the PC), checks it with
+  `verify_audit.py`'s reader, then against **every** kept anchor. It reports `truncated` (the log ends before a kept
+  batch, or ends in half a record twice in a row), `rewritten` (a kept batch number holds another record, or the
+  chain breaks), `gap` (batches missing), `replaced` (a kept log is not in the copy), `rollback` (the copy ends in
+  a log that a kept anchor's log followed), `stale` (the last promise lapsed; `--no-freshness`, `--at`). The store
+  itself is checked first: a kept file that differs from its manifest line, is missing, or is not listed is
+  `store`. The archive must hold segment files and nothing else.
+- **`watch`** fetches every `--interval` seconds (default 300) and checks every `--check-every` fetches (default 12:
+  once an hour; the copy is the whole log). It appends to `events.log` in the store and runs `--alert-cmd` with the
+  line as its argument, as `bench_watch.py` does, when the findings of `fetch` or `check` change (`ALERT ...`, and
+  `OK ...` when they clear).
+- Exit status 0 only if nothing was found; a JSON report on stdout.
+
+As a user service on the bench PC (`~/.config/systemd/user/aegis-audit-anchors.service`, then `systemctl --user
+enable --now aegis-audit-anchors`; `loginctl enable-linger` so it runs without a login):
+
+    [Unit]
+    Description=Aegis audit-log anchors, kept off the gateway
+    [Service]
+    ExecStart=%h/aegis/.venv/bin/python %h/aegis/tools/audit_anchors.py watch --key %h/.config/aegis/gateway-identity.json --gateway 192.168.1.63 --alert-cmd 'notify-send aegis-audit'
+    Restart=always
+    RestartSec=60
+    [Install]
+    WantedBy=default.target
+
+or from cron (`crontab -e`): `*/5 * * * * .../audit_anchors.py fetch --key ... --gateway ...` and
+`17 * * * * .../audit_anchors.py check --key ... --gateway ... || notify-send aegis-audit 'audit check failed'`.
+
+**What it proves.** From the first anchor kept on, the log can no longer be cut off at a record boundary, rolled
+back, deleted or written again from a kept batch or before (even with the verifier's key) without `check` saying
+so, and a `fetch` that is given an older or contradicting record says so at once. A kept anchor is the verifier's
+own signed statement, so the store can be shown to a third party with `verify_audit.py --anchor`.
+
+**What it does not.** It proves nothing about the time between the last anchor and a cut: batches written after
+the last fetch can be cut off unseen until the next fetch finds a lower number or another record (at a 300 s
+interval, up to 5 minutes of log, and nothing if the gateway is unreachable from then on: `unreachable` is reported,
+and `stale` once the promise lapses). It cannot see entries the key holder never wrote (limit 1). It trusts the PC:
+whoever can write the store can delete anchors (the manifest catches a changed or unlisted file, not a manifest cut
+short with its files). The key is taken on first use from the gateway; take it before anything could have happened.
+A log that is deliberately begun again (the audit directory deleted) is reported `replaced` until the old log's
+anchors are moved out of the store by hand. It does not handle `max_segments` pruning beyond `--allow-pruned`
+(anchors older than the copy are then counted, not compared).
 
 ### The writer
 
@@ -395,6 +465,7 @@ Nothing changes on any endpoint, in the SDK or on the wire; `tools/sdk_golden.py
 | the signer: its own key, export, sign, confirmation, `--pin-keys`, versions and the ledger | (`Signer`) |
 | the standalone checker: no shared code, the same reading as the verifier's, every refusal, anchor, head, freshness, pruning; a signed policy | (`Checker`) |
 | hostile logs, policy files and verdicts against both readers and the loader | `tests/redteam/fuzz_host.py` section 7 (stage `host-redteam`) |
+| anchors off the gateway: fetched from `fleet.py audit --out`, kept append-only, every finding; garbled anchors, another key, a replayed older anchor, a forked, truncated, gapped or replaced log, a hostile archive, a changed store | `tests/host/test_audit_anchors.py`; `tools/audit_anchors.py --selftest` |
 
 CI runs all of it in the host regression, and a step fails if a test of the checker was skipped for want of its
 libraries.
@@ -408,9 +479,9 @@ libraries.
 2. **Cutting off the end needs someone who looked.** Without an anchor or a journal line from after the cut, and
    before the promise lapses, a shorter log is a valid log. Without anchors kept off the gateway (or the journal's
    `--head` lines), truncation at a record boundary is undetectable: only the last record is checked, and batches
-   from `once`, the enrolment commands and `stop` carry no `due` time. Nothing takes anchors off the gateway by itself yet:
-   the PC verifier could fetch one with each gateway quote, and an attestation result could name the log's head.
-   Neither is done.
+   from `once`, the enrolment commands and `stop` carry no `due` time. `tools/audit_anchors.py watch` on the bench PC
+   takes them off ("Anchors off the gateway"); what was written after its last fetch is still unprotected, and it
+   must be running. An attestation result naming the log's head is not done.
 3. **The verifier's clock** is the only one. Times in the log are what the gateway thought the time was; a reader
    is told where the clock went back, not what the right time was. The promise is judged on the reader's clock.
 4. **Entries held in memory are lost with the process**: those waiting for `min_interval_s`, or for a disk that

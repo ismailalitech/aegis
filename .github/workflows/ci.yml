@@ -97,6 +97,13 @@ jobs:
           tail -n 4 $RUNNER_TEMP/audit.log
           if grep -q skipped $RUNNER_TEMP/audit.log; then echo "a test of the standalone checker was skipped"; exit 1; fi
 
+      - name: Audit-log anchors kept off the gateway (tools/audit_anchors.py; selftest and hostile input; no skips)
+        run: |
+          .venv/bin/python tools/audit_anchors.py --selftest
+          .venv/bin/python -m unittest -v tests.host.test_audit_anchors > $RUNNER_TEMP/anchors.log 2>&1 || { cat $RUNNER_TEMP/anchors.log; exit 1; }
+          tail -n 4 $RUNNER_TEMP/anchors.log
+          if grep -q skipped $RUNNER_TEMP/anchors.log; then echo "a test of the anchor collector was skipped"; exit 1; fi
+
       - name: Enforcement ruleset (three network namespaces, real hook and ruleset)
         run: sudo tests/host/test_enforcement.sh
 

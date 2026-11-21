@@ -86,6 +86,7 @@ With the boards, copy `bench.env.example` to `bench.env` and set your addresses.
     tests/fuzz/run.sh                     # fuzz the RW612 partition's protocol code (STM32=1: the STM32 partition)
     tools/bench_watch.py --gateway <addr> # log when the gateway or an endpoint goes quiet (--once: one check)
     tools/soak.py run --gateway <addr>    # the 24-hour soak (docs/soak-and-watchdogs.md; selftest: no hardware)
+    tools/audit_anchors.py watch --key K --gateway <addr>  # keep audit-log anchors off the gateway (--selftest)
 
 The verifier also runs on an ordinary Linux host instead of the gateway (`fleet.py --platform linux`, observe-only,
 attestation without credentials on the current images): `docs/pc-verifier.md`.
@@ -104,7 +105,8 @@ version that never goes back (`provision/aegis_provision.py policy-sign`). `tool
 third-party libraries only.
 Without anchors kept off the gateway (`fleet.py audit --out`, or the journal's `--head` lines), cutting the audit
 log off at a record boundary is undetectable: only the last record is checked, and batches from `once`, enrolment
-and `stop` carry no due time.
+and `stop` carry no due time. `tools/audit_anchors.py` keeps them on the bench PC and checks the log against all of
+them.
 
 ## Layout
 
