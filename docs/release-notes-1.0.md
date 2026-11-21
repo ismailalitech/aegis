@@ -119,14 +119,17 @@ and the verifier's signed audit log are checked by the standalone checkers.
 
 These hold for 1.0 as released; [`threat-model.md`](threat-model.md), section 5, is the full list.
 
-- **The EAT option is off in every board image.** EAT/COSE evidence and signed results run on the PC and in the
-  simulated device; no board on the bench runs them.
+- **The EAT option runs on one board.** STM32 board 2 runs the image with `AEGIS_EAT_COSE` (SPE `315dcc2f...`, NSPE
+  `acf8fc53...`, `"evidence_format": "eat-cose-v1"`), and its evidence pack verifies with `tools/verify_evidence.py`
+  ([`../endpoints/stm32h573/README.md`](../endpoints/stm32h573/README.md)). The RW612 and the ZynqMP images are built
+  without it.
 - **EAR and AR4SI are IETF drafts.** Their claim numbers and profile string can still change; a later draft's output
   is refused rather than misread ([`evidence-format.md`](evidence-format.md)).
 - **Root on the gateway** can still write the audit log again (shown only by an anchor kept off the gateway), leave
   entries out as they happen, and replace or remove the policy signers file
-  ([`threat-model.md`](threat-model.md), T26 and T27). The signed audit log and the signed policy have run on the PC
-  only.
+  ([`threat-model.md`](threat-model.md), T26 and T27). On the bench the audit log is on, the gateway runs from a
+  signed policy, and `tools/audit_anchors.py` keeps anchors on the PC; the costs measured there are in
+  [`audit-and-policy.md`](audit-and-policy.md), "Measured on the bench".
 - **Development keys.** The STM32s run in the Open state with TF-M's public development signing keys, and the RW612
   with development keys and no secure boot (the state of the bench). Anyone with the debugger can replace a secure
   image; the transcript does not defend against an image built by an attacker
