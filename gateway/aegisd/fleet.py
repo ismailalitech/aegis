@@ -88,10 +88,11 @@ third-party libraries only.
 
 Aegis 1.2 (docs/audit-and-policy.md, docs/evidence-format.md): an entry with "disabled": true is not contacted and is
 quarantined every cycle ("disabled by policy"); "min_trust" (per entry, or at the top level) quarantines a verdict whose
-trust label is weaker than the floor (TRUST_ORDER), and `check` names a floor an entry can never meet. A signed result
+trust label is weaker than the floor (TRUST_ORDER); a floor the entry's kind and keys can never meet (an entry
+without a trust label: any floor) is a policy error that refuses the entry. A signed result
 carries the verdict's warnings (aegis.warnings), the floor, whether the entry is disabled, and, with the audit log on,
-the log's last batch on disk when it was signed (aegis.audit-log/-batch/-head). export-evidence signs the pack's
-manifest and export time (manifest.cose). Without the new policy keys nothing of this changes a verdict.
+the log's last batch on disk when it was signed (aegis.audit-log/-batch/-head), and says that this verifier signs
+its packs (aegis.pack-signed). export-evidence signs the pack's manifest and export time (manifest.cose). Without the new policy keys nothing of this changes a verdict.
 """
 import argparse
 import base64
@@ -584,16 +585,19 @@ def trust_meets(trust, floor):
 
 def possible_trust(ep, base_dir):
     """The trust labels a verdict of this (valid) entry can carry, from its kind, profile and keys: a set holding
-    labels and None (no label). For `check`: a floor that none of them meets is never met."""
+    labels and None (no label). A floor that none of them meets is never met (policy_errors). base_dir None, or an
+    ES256 key file that cannot be read: both labels that file could give."""
     kind = ep.get("kind", "psa")
     if kind in PLAIN_KINDS:
         return {PLAIN_KINDS[kind].get(ep.get("profile"))}
     if not ep.get("iak_pub_pem"):
         return {None}               # aegis-pq without an ES256 key; psa always has one (policy_errors)
     try:
+        if base_dir is None and not os.path.isabs(str(ep["iak_pub_pem"])):
+            raise OSError("no policy directory to find the key file in")
         with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
             dev = pem_first_der(f.read()) == TFM_DEV_IAK_DER
-    except OSError:
+    except (OSError, TypeError):
         return {"trustzone", "trustzone-devkey"} if kind == "aegis-pq" else {"development-shared-key", None}
     if kind == "aegis-pq":
         return {"trustzone-devkey" if dev else "trustzone"}
@@ -665,7 +669,7 @@ def install_endorsement(policy, base_dir, record_path, force=False, policy_path=
         raise endorsement.Refused("the policy has %s entry named %r" % ("no" if not eps else "more than one", name[:40]))
     ep = eps[0]
     applied = effective_entry(policy, ep)
-    errors = policy_errors(applied)
+    errors = policy_errors(applied, base_dir)
     if errors:
         raise endorsement.Refused("; ".join(errors))
     if ep.get("kind") not in PQ_KINDS:
@@ -739,9 +743,10 @@ def install_endorsement(policy, base_dir, record_path, force=False, policy_path=
     return name, dict(body, record_sha256=record_name)
 
 
-def policy_errors(ep):
+def policy_errors(ep, base_dir=None):
     """Reasons an endpoint entry is refused before the endpoint is even asked (strict profiles). Empty if the entry
-    is acceptable."""
+    is acceptable. base_dir: the policy's directory, where the entry's ES256 key file is, for a trust floor the entry
+    can never meet (possible_trust); without it only what the entry says is judged."""
     kind = ep.get("kind", "psa")
     if not (isinstance(ep.get("name"), str) and ENTRY_NAME.match(ep["name"])):
         # it becomes part of file names: "../x" must not reach outside the policy's and the state's directories
@@ -809,6 +814,16 @@ def policy_errors(ep):
         # a floor this verifier does not know must not be taken as no floor
         errors.append("policy: unknown min_trust %r (known, strongest first: %s)" % (
             floor if isinstance(floor, (str, int, bool, type(None))) else type(floor).__name__, ", ".join(TRUST_ORDER)))
+    elif not errors and floor is not None:
+        # a floor this entry can never meet is a mistake in the policy, said as one, not a quarantine every cycle
+        # that looks like the endpoint's fault. An entry without a trust label cannot have a floor at all, and a
+        # fleet-wide floor applies to it as to every entry without one of its own
+        labels = possible_trust(ep, base_dir)
+        if not any(trust_meets(t, floor) for t in labels):
+            errors.append("policy: entry %s can NEVER meet min_trust %s: its trust is %s (strongest first: %s)%s" % (
+                ep["name"], floor, " or ".join(sorted(t or "none" for t in labels)), " > ".join(TRUST_ORDER),
+                "; an entry without a trust label cannot have a floor (its own, or the policy's top-level one)"
+                if labels == {None} else ""))
     return errors
 
 
@@ -861,7 +876,10 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None, facts=None)
     facts = {} if facts is None else facts
     facts.clear()
     facts["stage"] = "policy"
-    errors = policy_errors(ep)
+    errors = policy_errors(ep, base_dir)
+    floor = ep.get("min_trust")
+    if isinstance(floor, str) and floor in TRUST_ORDER:
+        verdict["min_trust"] = floor        # also when the entry is refused for it: the record says which floor
     if ep.get("disabled") is True:
         # the operator took the endpoint out: not asked, quarantined (and its session revoked) like any refusal
         verdict["disabled"] = True
@@ -870,9 +888,6 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None, facts=None)
     if errors:
         verdict["reasons"] += errors
         return verdict
-    floor = ep.get("min_trust")
-    if floor is not None:
-        verdict["min_trust"] = floor
     eat_format = ep.get("evidence_format") == EAT_COSE
     facts["format"] = EAT_COSE if eat_format else LEGACY_QUOTE if kind in PQ_KINDS else PSA_TOKEN
     if eat_format:
@@ -2197,8 +2212,8 @@ def main(argv=None):
     if a.cmd == "session":
         # compare this verifier's stored credential/session with what the endpoint's secure side reports
         for ep in policy["endpoints"]:
-            if not ep.get("provision"):
-                continue
+            if not ep.get("provision") or ep.get("disabled") is True:
+                continue            # a disabled entry is not contacted, by this command either
             meta = os.path.join(state_dir, "credentials", ep["name"] + ".json")
             mine = json.load(open(meta)) if os.path.exists(meta) else None
             try:
@@ -2214,7 +2229,7 @@ def main(argv=None):
         bad = 0
         for ep in policy["endpoints"]:
             ep = effective_entry(policy, ep)
-            errs, warns = policy_errors(ep), policy_warnings(ep)
+            errs, warns = policy_errors(ep, base), policy_warnings(ep)
             bad += bool(errs)
             if ep.get("disabled") is True:
                 # what the operator asked for, not a mistake: not counted. Its session is revoked, its enforcement
@@ -2289,11 +2304,11 @@ def main(argv=None):
         state_file))
     if not a.no_credentials:
         for ep in policy.get("endpoints", []):
-            if ep.get("provision") and ep.get("transcript") not in TRANSCRIPTS and not policy_errors(ep) \
+            if ep.get("provision") and ep.get("transcript") not in TRANSCRIPTS and not policy_errors(ep, base) \
                     and ep.get("disabled") is not True and not issuer_refusal(ep, state_dir, on_host):
                 log("aegis-fleet: %s: %s" % (ep.get("name"), binding_note(ep)), LOG_WARNING)
     for ep in policy.get("endpoints", []):
-        if ep.get("kind") in PQ_KINDS and ep.get("endorsement") is None and not policy_errors(ep) \
+        if ep.get("kind") in PQ_KINDS and ep.get("endorsement") is None and not policy_errors(ep, base) \
                 and ep.get("disabled") is not True:
             log("aegis-fleet: %s: enrolment: %s" % (ep.get("name"), TOFU_NOTE), LOG_WARNING)
         elif ep.get("disabled") is True:
