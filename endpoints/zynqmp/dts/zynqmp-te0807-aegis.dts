@@ -37,6 +37,16 @@
 		#size-cells = <2>;
 		ranges;
 
+		/* TF-A's BL31 (EL3). Built with SPD=opteed and no ZYNQMP_ATF_MEM_BASE, TF-A places it in DDR at
+		 * BL31_BASE 0x1000 with BL31_LIMIT 0x80000 (plat/xilinx/zynqmp/include/platform_def.h), not in OCM, and
+		 * this TF-A build does not add its own "tf-a" node. Without this node Linux takes 0x0-0x80000 as System
+		 * RAM and its page allocator can hand out BL31's pages. The whole range to BL31_LIMIT is reserved, so the
+		 * node stays right if BL31 grows; it costs 512 KiB. */
+		tf-a@0 {
+			reg = <0x0 0x0 0x0 0x80000>;
+			no-map;
+		};
+
 		optee_core@60000000 {
 			reg = <0x0 0x60000000 0x0 0x10000000>;
 			no-map;
