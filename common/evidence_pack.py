@@ -20,6 +20,7 @@ map with another key, or without one of these, is refused.
 Standard library only; ML-DSA through common/mldsa.py.
 """
 import hashlib
+import json
 
 import cbor
 import cose
@@ -58,8 +59,12 @@ def _read(data, pk, manifest_bytes, result_bytes):
     for k in (P_MANIFEST, P_RESULT):
         if not (isinstance(c[k], bytes) and len(c[k]) == 32):
             raise Refused("a hash in the pack's signed statement is not 32 bytes")
-    if manifest_bytes is not None and hashlib.sha256(manifest_bytes).digest() != c[P_MANIFEST]:
-        raise Refused("manifest.json is not the manifest the verifier signed")
+    if manifest_bytes is not None:
+        if hashlib.sha256(manifest_bytes).digest() != c[P_MANIFEST]:
+            raise Refused("manifest.json is not the manifest the verifier signed")
+        man = json.loads(bytes(manifest_bytes).decode())
+        if not (isinstance(man, dict) and man.get("endpoint") == c[P_ENDPOINT] and man.get("exported") == c[P_EXPORTED]):
+            raise Refused("the signed endpoint or export time is not the manifest's")
     if result_bytes is not None and hashlib.sha256(result_bytes).digest() != c[P_RESULT]:
         raise Refused("attestation-result.cbor is not the result the verifier signed into the pack")
     return {"endpoint": c[P_ENDPOINT], "exported": c[P_EXPORTED], "manifest_sha256": c[P_MANIFEST],
@@ -68,7 +73,7 @@ def _read(data, pk, manifest_bytes, result_bytes):
 
 def read(data, pk, manifest_bytes=None, result_bytes=None):
     """The signed statement in manifest.cose, checked under the verifier key pk and, if given, against the manifest's
-    and the result's bytes: {"endpoint", "exported", "manifest_sha256", "result_sha256", "kid"}. Refused or
+    bytes (its hash, and its "endpoint" and "exported") and the result's bytes: {"endpoint", "exported", "manifest_sha256", "result_sha256", "kid"}. Refused or
     cose.Refused, and nothing else, whatever the bytes are."""
     try:
         return _read(data, pk, manifest_bytes, result_bytes)

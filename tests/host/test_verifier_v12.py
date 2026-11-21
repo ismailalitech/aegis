@@ -564,6 +564,14 @@ class SignedPack(V12):
         self.assertEqual(c, {1: PACK_FORMAT, 2: "dev", 3: man["exported"], 4: hashlib.sha256(man_bytes).digest(),
                              5: hashlib.sha256(result).digest()})
         self.assertEqual(evidence_pack.read(signed, self.vpk, man_bytes, result)["exported"], man["exported"])
+        # the verifier's signature over this manifest's hash, but another time or endpoint than the manifest's
+        for k, x in ((3, man["exported"] + 1), (2, "other")):
+            bad = cose.sign1(self.vsk, self.vpk, cbor.dumps({**c, k: x}, sort=True), typ=PACK_TYP)
+            with self.assertRaises(evidence_pack.Refused):
+                evidence_pack.read(bad, self.vpk, man_bytes, result)
+            self.assertEqual(evidence_pack.read(bad, self.vpk)[{3: "exported", 2: "endpoint"}[k]], x)
+        with self.assertRaises(evidence_pack.Refused):
+            evidence_pack.read(signed, self.vpk, man_bytes, self.result("dev") + b"x")
         # the result of the manifest: what the signed result says besides
         self.assertEqual(man["result"]["warnings"], self.read("dev")["warnings"])
 
