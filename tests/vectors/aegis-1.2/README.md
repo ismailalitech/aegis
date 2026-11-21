@@ -19,14 +19,14 @@ compare these bytes.
 
 | Path | What it shows |
 |---|---|
-| [`policy/fleet.json`](policy/fleet.json) | the fleet policy: one entry per device, every kind and evidence format, and most keys an entry can have ([`policy.schema.json`](../../../docs/schemas/policy.schema.json)) |
+| [`policy/fleet.json`](policy/fleet.json) | the fleet policy: one entry per device, every kind and evidence format, and most keys an entry can have (Aegis 1.2: `min_trust` floors each entry meets, one `disabled` entry) ([`policy.schema.json`](../../../docs/schemas/policy.schema.json)) |
 | [`policy/fleet.cose`](policy/fleet.cose) | the same policy signed (COSE_Sign1, ML-DSA-65), version 1, audience `golden-fleet`, signer `golden-policy-signer` |
 | [`policy/policy-signers.json`](policy/policy-signers.json) | the verifier's signers file for it ([`policy-signers.schema.json`](../../../docs/schemas/policy-signers.schema.json)) |
 | [`policy/keys/`](policy/keys/) | the devices' ML-DSA-65 public keys in hex (`pq_pub_file`) and the TF-M attestation key (`tfm-iak.pub.pem`) |
 | [`policy/endorsers/`](policy/endorsers/) | the endorser's ML-DSA-65 public key in hex (`endorsers[].pk_file`) |
 | [`policy/endorsements/`](policy/endorsements/) | the installed records: `pq-quote.json` (JSON form, [`endorsement.schema.json`](../../../docs/schemas/endorsement.schema.json)), `pq-eat.cbor` and `rw612-tfm-eat.cbor` (COSE form) |
-| [`fleet-state.json`](fleet-state.json) | the verdicts of the first cycle as `fleet.py watch` writes them ([`fleet-state.schema.json`](../../../docs/schemas/fleet-state.schema.json)); the state directory is named `/var/lib/aegis` |
-| `packs/<name>/` | the evidence pack of each entry after that cycle, as `fleet.py export-evidence` writes it ([`manifest.schema.json`](../../../docs/schemas/manifest.schema.json)) |
+| [`fleet-state.json`](fleet-state.json) | the verdicts of the second cycle as `fleet.py watch` writes them ([`fleet-state.schema.json`](../../../docs/schemas/fleet-state.schema.json)); the state directory is named `/var/lib/aegis` |
+| `packs/<name>/` | the evidence pack of each entry after that cycle, as `fleet.py export-evidence` writes it: `manifest.json` ([`manifest.schema.json`](../../../docs/schemas/manifest.schema.json)) and `manifest.cose`, the verifier's signature over it and the export time. Every result names the audit log's head at that time (batch 1) |
 | [`audit/audit-000001.cbor`](audit/audit-000001.cbor) | the audit log of five cycles, one segment of 4 batches |
 | [`audit/anchor.cbor`](audit/anchor.cbor) | an anchor: batch 2, kept as `fleet.py audit --out` keeps one after the third cycle |
 | [`audit/verifier.mldsa65.pub`](audit/verifier.mldsa65.pub) | the verifier's identity key in hex: it signs the results and the batches |
@@ -45,6 +45,7 @@ compare these bytes.
 | [`packs/zynqmp-optee-quote/`](packs/zynqmp-optee-quote/) | aegis-quote-v1 | contraindicated | kind `aegis-tee`, profile `aegis-zynqmp-optee-v1`, the older claims map with a component the policy does not allow: not admitted, `contraindicated` (executables 33) |
 | [`packs/linux-host/`](packs/linux-host/) | aegis-quote-v1 | warning | kind `aegis-linux`, the older claims map: `warning`, trust `software` |
 | [`packs/offline-eat/`](packs/offline-eat/) | eat-cose-v1 | incomplete | kind `aegis-device` that did not answer: no evidence in the pack, `incomplete` |
+| [`packs/retired-device/`](packs/retired-device/) | none | incomplete | an entry with `"disabled": true`: not contacted, not admitted, `incomplete`, `aegis.disabled` in the result and no evidence format (`null` in the manifest) |
 
 ## The keys, by COSE Key Thumbprint
 
@@ -57,6 +58,7 @@ compare these bytes.
 | device `offline-eat` | `0d9d659f9b2807c933f3fab2f09addb687f45efe771c11f7a9129d0e7198abf7` |
 | device `pq-eat` | `bafc7fe945abee29dec98c138848e2f66f0b98b8b9d60e7162d71fb4a538bb5e` |
 | device `pq-quote` | `1e91826bc05263cfce9d65fd07d1dca72efa339aea9f870723b7ee8c9c33dcf1` |
+| device `retired-device` | `1d9af0a3fc4774a9a61b3370c286e57d9a5e7a2428936d83a5111b79afcd1c20` |
 | device `rw612-els-quote` | `eed650d25902e69a2f6819cef659b9ba40ff07cb493bb1cf9d9ec5820877bcf2` |
 | device `rw612-tfm-eat` | `1ea7c5f5652a79fe9fe7c0d87c686b0eec30568ecadf98593061a6a9f11351e4` |
 | device `zynqmp-devhuk-eat` | `df93a41e1bd6bb25d33aff287a32d2722c91380086991379b6b55e1f23a1097e` |
@@ -64,7 +66,8 @@ compare these bytes.
 
 ## Checking them
 
-    tools/verify_evidence.py pack packs/pq-eat --verifier-key ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f
+    tools/verify_evidence.py pack packs/pq-eat --verifier-key ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f --require-signed-export
+    tools/verify_audit.py log audit --key audit/verifier.mldsa65.pub --result packs/pq-eat/attestation-result.cbor --at 1795003690
     tools/verify_audit.py log audit --key audit/verifier.mldsa65.pub --anchor audit/anchor.cbor --at 1795003690
     tools/verify_audit.py policy policy/fleet.cose --key policy/policy-signers.json --audience golden-fleet
 

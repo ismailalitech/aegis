@@ -1,16 +1,16 @@
 {
  "logs": [
   {
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "kid": "ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f",
    "first_batch": 1,
    "first_entry": 1,
    "from": 1795000000,
    "last_batch": 4,
    "to": 1795003690,
-   "head": "4008d219b6fcd215d80848097c55469f507e69c86d506160897bd1e3b2b131b2",
-   "due": 1795007482,
-   "entries": 14
+   "head": "75913ad689e4967c500c6470dd54142d9b73ca51c1977c38e205ad065d0d10d4",
+   "due": 1795007487,
+   "entries": 15
   }
  ],
  "pruned": false,
@@ -27,7 +27,7 @@
    },
    "entry": 1,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -44,7 +44,7 @@
    },
    "entry": 2,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -52,16 +52,16 @@
    "event": "policy",
    "subject": null,
    "details": {
-    "sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
+    "sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
     "signed": true,
     "signer": "golden-policy-signer",
     "version": 1,
-    "file_sha256": "63fb973e145bd2b2c553d3157272d1d1193cbd8d90d97d5f29b1a8937f6dcd42",
+    "file_sha256": "63aa374ffe1d9c01a3b3e30f41f1d01ffa17bf5a7f38b7bed00f2488a2dc1dc7",
     "signer_key_sha256": "36bc6f38f3b590fef747705ada72095e37fa96da6ea204236d301087b0c9816a"
    },
    "entry": 3,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -77,12 +77,12 @@
      "SPE": "1111111111111111111111111111111111111111111111111111111111111111",
      "NSPE": "2222222222222222222222222222222222222222222222222222222222222222"
     },
-    "result_sha256": "27f59bed892c3a8d6204525fbc8cc243d048b403e0f8dc0366d7b66e68a5feed",
+    "result_sha256": "f38dd0526f96fbd0a2a25cf8353b2ebbcaa317c156375994298e4635a812ffff",
     "evidence_format": "psa-token"
    },
    "entry": 4,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -96,20 +96,21 @@
     "address": "192.0.2.11:7444",
     "endorser": "golden-endorser",
     "enrolment": "endorsed",
+    "min_trust": "trustzone",
     "enforcement": "ok",
     "measurements": {
      "SPE": "1111111111111111111111111111111111111111111111111111111111111111",
      "NSPE": "2222222222222222222222222222222222222222222222222222222222222222"
     },
-    "result_sha256": "a6595f891855ca62acb09921190942a67637c576eecbde6bd3f60c56f9107942",
-    "quote_sha3_256": "cca3d87ddfd90825d529de28d44b444b4c11a1584506b30b0604626843de9126",
+    "result_sha256": "5581383f509d71aa6fe678950937f118415f8d9cc96d0218e6af7203472e5f95",
+    "quote_sha3_256": "f6dd91ba303dd9ab4b5d0c6fb42515b0290f78efe9f2c7bb97aa22cd954a13b9",
     "evidence_format": "aegis-quote-v1",
     "device_key_sha256": "8e7a8e924ded363f05c74858c99fecd07c7407b824e4cf033a74da14eae3e405",
-    "endorsement_sha256": "ff2ba18046ee5359423a95f1e408d16e9114adce40140cd4398b095680737675"
+    "endorsement_sha256": "b6c0965746db445fab767d9d570a5ccf2f118105bfe319bfcdfbe592f35cc95a"
    },
    "entry": 5,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -128,15 +129,15 @@
      "SPE": "1111111111111111111111111111111111111111111111111111111111111111",
      "NSPE": "2222222222222222222222222222222222222222222222222222222222222222"
     },
-    "result_sha256": "df9a477d5220bec5af8fcf3a4e4878158647fade02fd2309e334cd5414af2982",
-    "quote_sha3_256": "af0f468c9cea7eee353e70a567980225a49d17b1437da26dfb1d2607a8b01d9f",
+    "result_sha256": "28523780047ebb3539defc7a9d0ca21f7b022a18c450231f0d2f935413ffa7b5",
+    "quote_sha3_256": "2a3a4cee2db67f60eab0ff7f842417dcbf3507518c69832229cb2aa20d15c0cc",
     "evidence_format": "eat-cose-v1",
     "device_key_sha256": "83298143b471ae4a88a8e91eb3726882c836fc22cb4f4adea42a723af2ee456e",
-    "endorsement_sha256": "5151ece64146455cbcdeb2835e0627fcdff777df0970da43482ca3ff5ae83877"
+    "endorsement_sha256": "92c9e85b2cbcf7215394b400c5bec519bd74c86e66c143f3c7735704eda50bcc"
    },
    "entry": 6,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -150,20 +151,21 @@
     "address": "192.0.2.13:7444",
     "endorser": "golden-endorser",
     "enrolment": "endorsed",
+    "min_trust": "trustzone",
     "enforcement": "ok",
     "measurements": {
      "SPE": "eb13febd231ae39dee8e2949a8cd44d2416d4ce7e2407d40a36211c710934052",
      "NSPE": "f8df4ecbe30f6f2022ada8438d914c9d6b5f184a78854138c2f59d30b0998b06"
     },
-    "result_sha256": "85e7bc9dad6399e0c20708848dbe9cccbead17b8363b0754030886587d9b76b7",
-    "quote_sha3_256": "6ce8f6cefa47f06044528cacd9417990695afc5f0b87528841424748bd4821ac",
+    "result_sha256": "afb4d1e14c313e2c7c0cc2ccb5751869abc7e50d96dd1e7f2ff9f7f5954d3f3b",
+    "quote_sha3_256": "b6182c067cda79331e791149a1bfdcc858c6fb4628cefea50e1dcb0bb68702e5",
     "evidence_format": "eat-cose-v1",
     "device_key_sha256": "74f16889d5f3f40146c630b0d03473ea3a98b5224a8c1b66d8e1e40e72ca2eb3",
-    "endorsement_sha256": "d1f1b746ab0998044dbe3c6f1ecf48778819dcf3274d515c7795a76f814aa66f"
+    "endorsement_sha256": "7c2376713b39e07609f2d5feee626c0b1251d726db8e5b97039e6fa57eca5e1b"
    },
    "entry": 7,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -180,14 +182,14 @@
     "measurements": {
      "APP": "220bcdeb984ac3ec3c7beedb440db8dcb575d5045c83f936cf679f8389a4d25d"
     },
-    "result_sha256": "48d398cff16c9172365722156a66cf140dec1329db7a2b360ec176d48fbab4ed",
-    "quote_sha3_256": "8e0cbd5c3270ea6e1d077379a6cf148b411f1c0b49f57fc05e176c8f662fb930",
+    "result_sha256": "616068c43686563ada9f951f4ef47244dee1cec9fa824c4300d30449fab6019f",
+    "quote_sha3_256": "53127b44df63a9e903649b4bca25976c57c9ce3e5151e21309ec4c607d5379b2",
     "evidence_format": "aegis-quote-v1",
     "device_key_sha256": "8a97118b869fff05974abf673f53d9756fffdf101d3d32482762eb24080a9ebd"
    },
    "entry": 8,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -201,18 +203,19 @@
     "address": "192.0.2.15:7444",
     "warning": "development profile aegis-zynqmp-optee-devhuk-v1 admitted only because allow_dev_profile is set: its key is the same on every chip",
     "enrolment": "trust-on-first-use",
+    "min_trust": "development-shared-key",
     "enforcement": "ok",
     "measurements": {
      "TA": "7d8d6924562e6ecf86c578a656eeb7a3b4c137483c8ad2ed80da3de0ca152077"
     },
-    "result_sha256": "431d1dbe9e06b2ea40d712ec3b348a0a89a23b95ab3f06fa369dd1b638a23c5d",
-    "quote_sha3_256": "fec4fbf026d5e3356d35cd15f7333066e4d6e0b42d53e56a6ad2828b0c3d2b0f",
+    "result_sha256": "38b6b22e54ef6b2a1133923d54c7f1b32e5522ea02416732807a8175ead7e29e",
+    "quote_sha3_256": "324bed10304cbf30aff78ffc6e4eee0f58b97befea8b87b138fef1ebdd1f17be",
     "evidence_format": "eat-cose-v1",
     "device_key_sha256": "6efbeae61771664976af94145d5a2534e6fc9a2a7900259723f3d99446edb39f"
    },
    "entry": 9,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -232,14 +235,14 @@
     "measurements": {
      "TA": "fc5193d58519f5e504445fa0f860523684a9d4308f90f74350d58d0a2aaa0413"
     },
-    "result_sha256": "bdd2409641a1abf4ade450cb72f8e0b3efa4ed75c39bcc96f2504532a815487e",
-    "quote_sha3_256": "f0d1888c8d392026479272bdc6b4dd102d19a47a3c363a3908f71cfcfd127886",
+    "result_sha256": "54980d48b170e252000f8ecd1980a33bf9fa8c902893e7aa9d37f196ceb96b05",
+    "quote_sha3_256": "a65c4fac4c09fad679a1f6262238ec3c1f66e3ab71f9949d78afab48bd9bee38",
     "evidence_format": "aegis-quote-v1",
     "device_key_sha256": "92b3b1c9cbe5789ad7e6da3ddcdc0b7e558b629402f5282d1e81b975b51928e2"
    },
    "entry": 10,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -252,19 +255,20 @@
     "trust": "software",
     "address": "192.0.2.17:7444",
     "enrolment": "trust-on-first-use",
+    "min_trust": "software",
     "enforcement": "ok",
     "measurements": {
      "KERNEL": "a4f87510abce4886db2553a1eaa5995ed5ae510785287e183b52152be009dda1",
      "PROVER": "2667d34501620788f1b1d5ed14468c3f4a8161ac7eb8daf6951e3ca497f93e41"
     },
-    "result_sha256": "275d193ce0420103680a4120eea15cf129cc23557bdf649b3c009e2044052b7e",
-    "quote_sha3_256": "3d46b5d37720ce53de7fadfbac5436722b9b9027328a6e62e3d257fed9c33d99",
+    "result_sha256": "2b0be00ccf3963460cba339cb0c08df1158d56616c83006076ccee7817254cd2",
+    "quote_sha3_256": "88394a49be3bda4ad782fd76abab6cd72123d4b195350ad32e3a5bc5aaed7a0c",
     "evidence_format": "aegis-quote-v1",
     "device_key_sha256": "0956085c3538dc28f885ee1941a63ac4b55d37a7e0a1f5d620a61ca8a1b21517"
    },
    "entry": 11,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -280,12 +284,32 @@
     ],
     "enrolment": "trust-on-first-use",
     "enforcement": "ok",
-    "result_sha256": "1f273b911cb1dcd45eaad0b3cef2497f7508b8c38c9bc78eabbc059612019a79",
+    "result_sha256": "5b224c22ea3ca445e345c2a3775c864bfa8543f3e14922ca489ed56a90a8c704",
     "evidence_format": "eat-cose-v1"
    },
    "entry": 12,
    "batch": 1,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
+   "signed": 1795000000
+  },
+  {
+   "time": 1795000000,
+   "event": "refuse",
+   "subject": "retired-device",
+   "details": {
+    "kind": "aegis-device",
+    "stage": "policy",
+    "address": "192.0.2.19:7444",
+    "reasons": [
+     "disabled by policy"
+    ],
+    "disabled": true,
+    "enforcement": "ok",
+    "result_sha256": "46167e7ce7fd54319c52b6d88e320aa0712522935bac8b3e5b226b89c4a2d0b4"
+   },
+   "entry": 13,
+   "batch": 1,
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000000
   },
   {
@@ -300,13 +324,14 @@
      "no attestation: [Errno 111] Connection refused"
     ],
     "enrolment": "trust-on-first-use",
+    "min_trust": "software",
     "enforcement": "ok",
-    "result_sha256": "92c75913e111c205c2464d168049dd3ccc315829d89b01494f1561a63f4a2884",
+    "result_sha256": "0fe10656abec04be8d933cbbe6c99f8b4ac3956d16f1cab0023e37ecbbdc7d44",
     "evidence_format": "aegis-quote-v1"
    },
-   "entry": 13,
+   "entry": 14,
    "batch": 2,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000060
   },
   {
@@ -319,19 +344,20 @@
     "trust": "software",
     "address": "192.0.2.17:7444",
     "enrolment": "trust-on-first-use",
+    "min_trust": "software",
     "enforcement": "ok",
     "measurements": {
      "KERNEL": "a4f87510abce4886db2553a1eaa5995ed5ae510785287e183b52152be009dda1",
      "PROVER": "2667d34501620788f1b1d5ed14468c3f4a8161ac7eb8daf6951e3ca497f93e41"
     },
-    "result_sha256": "afe356775bf7f28c0699952d960850f6457126b0945c08668e56317823aa2d66",
-    "quote_sha3_256": "0dc8c525618f390399eeb959d3ff5c9b4eb3c5a672c733426e04a1a22e9509fc",
+    "result_sha256": "9408bdbdd77fadab2d0ed4272338a35dd46820cfe982f877a085ce298c568e46",
+    "quote_sha3_256": "e41482bf1857482878b69116778ef31b0745cc02c8bd306041d8955ff5f75add",
     "evidence_format": "aegis-quote-v1",
     "device_key_sha256": "0956085c3538dc28f885ee1941a63ac4b55d37a7e0a1f5d620a61ca8a1b21517"
    },
-   "entry": 14,
+   "entry": 15,
    "batch": 3,
-   "log": "fde9d9612afbdcc64748387394a579f1",
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
    "signed": 1795000090
   }
  ],

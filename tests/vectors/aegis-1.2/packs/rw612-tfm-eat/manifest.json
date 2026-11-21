@@ -2,16 +2,22 @@
  "format": "aegis-evidence-pack-v1",
  "endpoint": "rw612-tfm-eat",
  "kind": "aegis-device",
- "exported": 1795000000,
+ "exported": 1795000030,
  "evidence_format": "eat-cose-v1",
- "policy_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
- "policy_id": "ni:///sha-256;YZ-RFktyoBiP487wEQtuyCdRXQ2R1BWUPBQet6xYey8",
- "policy_now_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
+ "policy_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
+ "policy_id": "ni:///sha-256;nRqbwygDdWJHDENmJcjAWJhGrDGs7df3DqgUjd26-qM",
+ "policy_now_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
  "result": {
   "status": "affirming",
   "admitted": true,
-  "iat": 1795000000,
-  "exp": 1795000192
+  "iat": 1795000030,
+  "exp": 1795000227,
+  "audit_head": {
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
+   "batch": 1,
+   "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+  },
+  "min_trust": "trustzone"
  },
  "key_thumbprints": {
   "verifier": "ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f",
@@ -19,12 +25,13 @@
   "endorser": "80662c11dc1fcb5779267ef0b31b190c93c0ff6ed9559a9074ea9bc7db42c98d"
  },
  "files": {
-  "attestation-result.cbor": "85e7bc9dad6399e0c20708848dbe9cccbead17b8363b0754030886587d9b76b7",
-  "endorsement.cbor": "d1f1b746ab0998044dbe3c6f1ecf48778819dcf3274d515c7795a76f814aa66f",
-  "evidence.cbor": "a499efec7df9c1fb436f9f95a914cc491bf56a308ed1e81c0a99973da257fca7",
+  "attestation-result.cbor": "d6464cd01027addc679a6f9550de7b915a3d7df372322b7545e8281811084845",
+  "endorsement.cbor": "7c2376713b39e07609f2d5feee626c0b1251d726db8e5b97039e6fa57eca5e1b",
+  "evidence.cbor": "03f22d643d0eeb53ad08dd29c5a39fd1f01c95877e7395ead74837a2161b83bf",
   "keys/device.cosekey": "bc95d8c1b3bbb7a45f2259da2ece77ba43534af6383f026da6af5f2bb8c9a8a6",
   "keys/endorser.cosekey": "c8cff1514ff096d3ce68fce24a797a763ad83d3fedd8d575661f6ad6c263b615",
   "keys/verifier.cosekey": "599d78bbefb93640761ac95073d5ecb851616dadf698b97dfb82d6aa76c01e86"
  },
+ "signed_manifest": "manifest.cose",
  "verify": "tools/verify_evidence.py pack <this directory>"
 }

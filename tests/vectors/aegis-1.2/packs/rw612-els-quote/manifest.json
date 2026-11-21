@@ -2,27 +2,37 @@
  "format": "aegis-evidence-pack-v1",
  "endpoint": "rw612-els-quote",
  "kind": "aegis-device",
- "exported": 1795000000,
+ "exported": 1795000030,
  "evidence_format": "aegis-quote-v1",
- "policy_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
- "policy_id": "ni:///sha-256;YZ-RFktyoBiP487wEQtuyCdRXQ2R1BWUPBQet6xYey8",
- "policy_now_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
+ "policy_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
+ "policy_id": "ni:///sha-256;nRqbwygDdWJHDENmJcjAWJhGrDGs7df3DqgUjd26-qM",
+ "policy_now_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
  "result": {
   "status": "warning",
   "admitted": true,
-  "iat": 1795000000,
-  "exp": 1795000192
+  "iat": 1795000030,
+  "exp": 1795000227,
+  "audit_head": {
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
+   "batch": 1,
+   "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+  },
+  "warnings": [
+   "instance-identity: the key is pinned without an endorsement: nothing names the device that holds it",
+   "executables: the components are measured by the measured software itself (trust: device-key)"
+  ]
  },
  "key_thumbprints": {
   "verifier": "ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f",
   "device": "eed650d25902e69a2f6819cef659b9ba40ff07cb493bb1cf9d9ec5820877bcf2"
  },
  "files": {
-  "attestation-result.cbor": "48d398cff16c9172365722156a66cf140dec1329db7a2b360ec176d48fbab4ed",
-  "evidence.sig": "6eeb7be0c0bca7fee14a3b0bda6cd40a445869ebe04b45c0967a3f7d8b03d838",
-  "evidence.token": "0ac6139bdd74443720e841f2012c9fbfbe06e2395b229afdf6e7e1d4a71152cb",
+  "attestation-result.cbor": "60d95d0e7cd2fb7501ad9c42b46e252f5bbed33c223ca1e910a980b20283ad8a",
+  "evidence.sig": "c046c00abef9d9b05c9a3fce67316a128ed6744a4c02d854c3158fabb527f940",
+  "evidence.token": "aa653421893e514f1807ba8f45912a6a3823c8e5462229810fa60d263822b3f3",
   "keys/device.cosekey": "e50c87907cf3c78e8d175a603d6d59da5b232c7f91d4aabba9b424e8b3717803",
   "keys/verifier.cosekey": "599d78bbefb93640761ac95073d5ecb851616dadf698b97dfb82d6aa76c01e86"
  },
+ "signed_manifest": "manifest.cose",
  "verify": "tools/verify_evidence.py pack <this directory>"
 }

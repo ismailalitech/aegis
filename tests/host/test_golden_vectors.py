@@ -36,6 +36,7 @@ import cbor  # noqa: E402
 import cose  # noqa: E402
 import eat  # noqa: E402
 import endorsement  # noqa: E402
+import evidence_pack  # noqa: E402
 import fleet  # noqa: E402
 import signed_policy  # noqa: E402
 
@@ -56,6 +57,7 @@ EXPECTED = {
     "zynqmp-optee-quote": ("contraindicated", False, "trustzone", "trust-on-first-use"),
     "linux-host": ("warning", True, "software", "trust-on-first-use"),
     "offline-eat": ("incomplete", False, None, "trust-on-first-use"),
+    "retired-device": ("incomplete", False, None, None),
 }
 
 
@@ -107,7 +109,7 @@ class SchemaError(Exception):
 
 ANNOTATIONS = {"$schema", "$id", "$comment", "$defs", "title", "description", "default", "examples"}
 KEYWORDS = {"type", "enum", "const", "pattern", "minLength", "maxLength", "minimum", "maximum", "exclusiveMinimum",
-            "minItems", "maxItems", "items", "properties", "required", "additionalProperties", "propertyNames",
+            "minItems", "maxItems", "items", "contains", "properties", "required", "additionalProperties", "propertyNames",
             "dependentRequired", "allOf", "anyOf", "oneOf", "not", "if", "then", "else", "$ref"}
 TYPES = {"object": lambda v: isinstance(v, dict), "array": lambda v: isinstance(v, list),
          "string": lambda v: isinstance(v, str), "boolean": lambda v: isinstance(v, bool), "null": lambda v: v is None,
@@ -135,7 +137,7 @@ def check_schema(s, path="#"):
     unknown = set(s) - KEYWORDS - ANNOTATIONS
     if unknown:
         raise SchemaError("%s: keywords this validator does not implement: %s" % (path, sorted(unknown)))
-    for k in ("items", "additionalProperties", "propertyNames", "not", "if", "then", "else"):
+    for k in ("items", "contains", "additionalProperties", "propertyNames", "not", "if", "then", "else"):
         if k in s:
             check_schema(s[k], "%s/%s" % (path, k))
     for k in ("properties", "$defs"):
@@ -186,6 +188,8 @@ def validate(s, v, root=None, where="$"):
         if "items" in s:
             for i, x in enumerate(v):
                 errs += validate(s["items"], x, root, "%s[%d]" % (where, i))
+        if "contains" in s and all(validate(s["contains"], x, root, where) for x in v):
+            errs.append("%s: no item matches contains" % where)
     if isinstance(v, dict):
         for k in s.get("required", []):
             if k not in v:
@@ -236,6 +240,9 @@ def conditional(entry, kind):
     return None
 
 
+NULL = object()      # a JSON null in a policy case (None there means: the key is left out)
+
+
 class Schemas(unittest.TestCase):
     NAMES = ("manifest", "fleet-state", "policy", "endorsement", "policy-signers")
 
@@ -279,6 +286,21 @@ class Schemas(unittest.TestCase):
         self.assertIn("accepted[profile]", src)
         self.assertEqual(set(state["$defs"]["trust"]["enum"]), written)
         self.assertEqual(set(state["$defs"]["enrolment"]["enum"]), {fleet.ENDORSED, fleet.TOFU, fleet.NOT_ENDORSED})
+        # Aegis 1.2: the trust floors, in the code's order everywhere a label is named
+        for where in (state["$defs"]["trust"], pol["$defs"]["trust"], man["$defs"]["trust"]):
+            self.assertEqual(where["enum"], list(fleet.TRUST_ORDER))
+        self.assertEqual(ep["properties"]["min_trust"]["$ref"], "#/$defs/trust")
+        self.assertEqual(pol["properties"]["min_trust"]["$ref"], "#/$defs/trust")
+        for profile in profiles:
+            label = next(d[profile] for d in fleet.PLAIN_KINDS.values() if profile in d)
+            meets = [f for f in fleet.TRUST_ORDER if fleet.trust_meets(label, f)]
+            floors = [c["then"]["properties"]["min_trust"] for c in ep["allOf"]
+                      if c["if"].get("properties", {}).get("profile", {}).get("const") == profile
+                      and "min_trust" in c["then"].get("properties", {})]
+            got = (floors[0].get("enum") or [floors[0]["const"]]) if floors else list(fleet.TRUST_ORDER)
+            self.assertEqual(got, meets, profile)
+        self.assertIs(state["$defs"]["verdict"]["properties"]["disabled"]["const"], True)
+        self.assertIn('"contains": {"const": "%s"}' % fleet.DISABLED_REASON, json.dumps(state))
         self.assertEqual(set(state["$defs"]["status"]["enum"]), set(eat.TIER_NAMES.values()))
         self.assertEqual(set(man["$defs"]["status"]["enum"]), set(eat.TIER_NAMES.values()))
         v = state["$defs"]["verdict"]["properties"]
@@ -302,18 +324,18 @@ class Schemas(unittest.TestCase):
         with open(DOC) as f:
             doc = f.read()
         for name in self.NAMES:
-            self.assertIn("(schemas/%s.schema.json)" % name, doc)
+            self.assertTrue("(schemas/%s.schema.json)" % name in doc, name)
         state = schema("fleet-state")["$defs"]
         for value in state["trust"]["enum"] + state["enrolment"]["enum"]:
-            self.assertIn("| `%s` |" % value, doc)
+            self.assertTrue("| `%s` |" % value in doc, value)
         for claim in ("aegis.endpoint", "aegis.kind", "aegis.admitted", "aegis.evidence-format", "aegis.trust",
                       "aegis.enrolment", "aegis.session-binding", "aegis.device-key-sha256", "aegis.quote-sha3-256",
                       "aegis.evidence-sha256", "aegis.enforcement", "aegis.record-sha256", "aegis.device-state"):
-            self.assertIn("`%s`" % claim, doc)
+            self.assertTrue("`%s`" % claim in doc, claim)
         # and every aegis.* claim the code writes is one of those
         with open(os.path.join(ROOT, "common", "eat.py")) as f:
             for claim in set(re.findall(r'"(aegis\.[a-z0-9-]+)"', f.read())):
-                self.assertIn("`%s`" % claim, doc)
+                self.assertTrue("`%s`" % claim in doc, claim)
 
     def test_the_policy_schema_refuses_what_the_verifier_refuses(self):
         """For entries that differ in one key: the schema and fleet.policy_errors() agree."""
@@ -347,10 +369,30 @@ class Schemas(unittest.TestCase):
             ({"kind": "psa", "iak_pub_pem": "iak.pem", "evidence_format": "eat-cose-v1"}, False),
             ({"kind": "aegis-pq", "profile": None}, True),
             ({"kind": "aegis-linux", "profile": "aegis-linux-software-v1"}, True),
+            # Aegis 1.2
+            ({"disabled": True}, True),
+            ({"disabled": False}, True),
+            ({"disabled": "yes"}, False),
+            ({"disabled": 1}, False),
+            ({"min_trust": "trustzone"}, True),
+            ({"min_trust": "development-shared-key"}, True),
+            ({"min_trust": NULL}, False),
+            ({"min_trust": "hardware"}, False),
+            ({"kind": "aegis-linux", "profile": "aegis-linux-software-v1", "min_trust": "software"}, True),
+            ({"kind": "aegis-linux", "profile": "aegis-linux-software-v1", "min_trust": "device-key"}, False),
+            ({"kind": "aegis-device", "profile": "aegis-rw612-els-v1", "min_trust": "device-key"}, True),
+            ({"kind": "aegis-device", "profile": "aegis-rw612-els-v1", "min_trust": "trustzone-devkey"}, False),
+            ({"profile": "aegis-zynqmp-optee-devhuk-v1", "allow_dev_profile": True, "min_trust": "software"}, False),
+            ({"profile": "aegis-zynqmp-optee-devhuk-v1", "allow_dev_profile": True,
+              "min_trust": "development-shared-key"}, True),
+            ({"kind": "aegis-pq", "profile": None, "min_trust": "software"}, False),      # no ES256 key: no label
+            ({"kind": "aegis-pq", "profile": None, "iak_pub_pem": "/nonexistent.pem", "min_trust": "trustzone"}, True),
+            ({"kind": "psa", "pq_pub_file": None, "profile": None, "iak_pub_pem": "/nonexistent.pem",
+              "min_trust": "trustzone"}, False),
         ]
         entry = {"$defs": schema("policy")["$defs"], "$ref": "#/$defs/endpoint"}
         for change, ok in cases:
-            e = {k: v for k, v in dict(good, **change).items() if v is not None}
+            e = {k: (None if v is NULL else v) for k, v in dict(good, **change).items() if v is not None}
             self.assertEqual(fleet.policy_errors(e) == [], ok, (change, fleet.policy_errors(e)))
             self.assertEqual(validate(entry, e) == [], ok, (change, validate(entry, e)))
         top = schema("policy")
@@ -417,8 +459,33 @@ class Vectors(unittest.TestCase):
                 trust += ["--device-key", self.thumb("device/" + name)]
             if "keys/endorser.cosekey" in man["files"]:
                 trust += ["--endorser-key", self.thumb("endorser")]
-            rc, rep = checker(EVIDENCE_CHECKER, "pack", pack, *trust)
+            rc, rep = checker(EVIDENCE_CHECKER, "pack", pack, *trust, "--require-signed-export")
             self.assertEqual((rc, rep["verified"]), (0, True), (name, rep))
+            # Aegis 1.2: manifest.json and the export time are signed by the verifier (manifest.cose)
+            self.assertEqual((rep["export_time"]["signed"], rep["export_time"]["time"]), (True, man["exported"]), name)
+            self.assertEqual(man["signed_manifest"], evidence_pack.SIGNATURE_FILE)
+            self.assertNotIn(evidence_pack.SIGNATURE_FILE, man["files"])
+            with open(os.path.join(pack, "manifest.json"), "rb") as f:
+                man_bytes = f.read()
+            with open(os.path.join(pack, "manifest.cose"), "rb") as f:
+                signed = f.read()
+            with open(os.path.join(pack, "attestation-result.cbor"), "rb") as f:
+                result = f.read()
+            vpk = self.gen.mldsa_keys("verifier")[0]
+            st = evidence_pack.read(signed, vpk, man_bytes, result)
+            self.assertEqual((st["endpoint"], st["exported"]), (name, man["exported"]))
+            self.assertEqual(cose.parse(signed).typ, evidence_pack.TYP)
+            with self.assertRaises(evidence_pack.Refused):
+                evidence_pack.read(signed, vpk, man_bytes.replace(b'"exported": ', b'"exported":  '), result)
+            ear = eat.read_ear(result, vpk)
+            self.assertTrue(ear["pack_signed"])
+            self.assertEqual(ear["audit_head"]["batch"], 1, name)
+            self.assertEqual(man["result"]["audit_head"]["sha256"], ear["audit_head"]["sha256"].hex())
+            self.assertEqual(man["result"].get("warnings"), ear["warnings"], name)
+            self.assertEqual(man["result"].get("min_trust"), state[name].get("min_trust"), name)
+            self.assertEqual(ear["disabled"], name == "retired-device")
+            if EXPECTED[name][0] == "warning":
+                self.assertTrue(ear["warnings"], name)
             status, admitted, label, enrolment = EXPECTED[name]
             res = rep["attestation_result"]
             self.assertEqual((res["status"], res["admitted"]), (status, admitted), name)
@@ -432,7 +499,8 @@ class Vectors(unittest.TestCase):
         self.assertEqual(validate(schema("fleet-state"), load(self.d, "fleet-state.json")), [])
         policy = load(self.d, "policy", "fleet.json")
         self.assertEqual(validate(schema("policy"), policy), [])
-        self.assertEqual([fleet.policy_errors(fleet.effective_entry(policy, e)) for e in policy["endpoints"]],
+        base = os.path.join(self.d, "policy")
+        self.assertEqual([fleet.policy_errors(fleet.effective_entry(policy, e), base) for e in policy["endpoints"]],
                          [[]] * len(policy["endpoints"]))
         self.assertEqual({e.get("kind", "psa") for e in policy["endpoints"]}, set(fleet.KNOWN_KINDS))
         for path in (("policy", "endorsements", "pq-quote.json"), ("packs", "pq-quote", "endorsement.json")):
@@ -486,15 +554,22 @@ class Vectors(unittest.TestCase):
         rc, out = checker(AUDIT_CHECKER, "log", a, "--key", os.path.join(a, "verifier.mldsa65.pub"),
                           "--at", str(rep["logs"][-1]["due"] + 1))
         self.assertEqual(rc, 1, out)
-        # the log names what the packs hold: each first decision names its result's hash
         events = [e for e in rep["entries"] if e["event"] in ("admit", "refuse")]
         self.assertEqual([e["event"] for e in events][-2:], ["refuse", "admit"])        # the Linux host went away
         self.assertEqual(events[-2]["subject"], "linux-host")
         first = {e["subject"]: e for e in reversed(events[:len(EXPECTED)])}
-        for name in EXPECTED:
-            man = load(self.d, "packs", name, "manifest.json")
-            self.assertEqual(first[name]["details"]["result_sha256"], man["files"]["attestation-result.cbor"], name)
-            self.assertEqual(first[name]["event"], "admit" if EXPECTED[name][1] else "refuse")
+        self.assertEqual({n: first[n]["event"] for n in EXPECTED},
+                         {n: "admit" if EXPECTED[n][1] else "refuse" for n in EXPECTED})
+        self.assertIs(first["retired-device"]["details"]["disabled"], True)
+        self.assertEqual(first["linux-host"]["details"]["min_trust"], "software")
+        # Aegis 1.2: each pack's result names the log's head when it was signed (batch 1), and that batch is in the log
+        results = [os.path.join(self.d, "packs", n, "attestation-result.cbor") for n in sorted(EXPECTED)]
+        rc, out = checker(AUDIT_CHECKER, "log", a, "--key", os.path.join(a, "verifier.mldsa65.pub"), "--at", at,
+                          *[x for r in results for x in ("--result", r)])
+        self.assertEqual((rc, out["verified"]), (0, True), out)
+        named = [r for r in out["anchors"] if "result" in r]
+        self.assertEqual(len(named), len(results))
+        self.assertEqual({(r["log"], r["batch"]) for r in named}, {(rep["logs"][0]["log"], 1)})
 
     def test_the_signed_policy_verifies_and_holds_the_policy(self):
         base = os.path.join(self.d, "policy")

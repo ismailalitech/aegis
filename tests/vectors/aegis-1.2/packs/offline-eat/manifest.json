@@ -2,25 +2,31 @@
  "format": "aegis-evidence-pack-v1",
  "endpoint": "offline-eat",
  "kind": "aegis-device",
- "exported": 1795000000,
+ "exported": 1795000030,
  "evidence_format": "eat-cose-v1",
- "policy_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
- "policy_id": "ni:///sha-256;YZ-RFktyoBiP487wEQtuyCdRXQ2R1BWUPBQet6xYey8",
- "policy_now_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
+ "policy_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
+ "policy_id": "ni:///sha-256;nRqbwygDdWJHDENmJcjAWJhGrDGs7df3DqgUjd26-qM",
+ "policy_now_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
  "result": {
   "status": "incomplete",
   "admitted": false,
-  "iat": 1795000000,
-  "exp": 1795000192
+  "iat": 1795000030,
+  "exp": 1795000227,
+  "audit_head": {
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
+   "batch": 1,
+   "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+  }
  },
  "key_thumbprints": {
   "verifier": "ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f",
   "device": "0d9d659f9b2807c933f3fab2f09addb687f45efe771c11f7a9129d0e7198abf7"
  },
  "files": {
-  "attestation-result.cbor": "1f273b911cb1dcd45eaad0b3cef2497f7508b8c38c9bc78eabbc059612019a79",
+  "attestation-result.cbor": "d32edc012891c86692c466a0fcef6d8cd500904016d84e3c78f5866bd6835a03",
   "keys/device.cosekey": "ee52624d77d50e0996439a29920d014a824d36a757ee1ce76c477da8e53c606f",
   "keys/verifier.cosekey": "599d78bbefb93640761ac95073d5ecb851616dadf698b97dfb82d6aa76c01e86"
  },
+ "signed_manifest": "manifest.cose",
  "verify": "tools/verify_evidence.py pack <this directory>"
 }

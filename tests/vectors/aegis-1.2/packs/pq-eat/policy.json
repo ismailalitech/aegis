@@ -68,7 +68,8 @@
    "provision": true,
    "heartbeat_mac": "kmac256",
    "note": "the older quote (PQCHAL), endorsed by a JSON record; a session would be bound to the attestation (transcript v2)",
-   "endorsement_sha256": "ff2ba18046ee5359423a95f1e408d16e9114adce40140cd4398b095680737675"
+   "min_trust": "trustzone",
+   "endorsement_sha256": "b6c0965746db445fab767d9d570a5ccf2f118105bfe319bfcdfbe592f35cc95a"
   },
   {
    "name": "pq-eat",
@@ -96,7 +97,7 @@
    "endorsement": "required",
    "endorsement_file": "endorsements/pq-eat.cbor",
    "note": "standard evidence (PQEAT) nesting TF-M's token, endorsed by a COSE record",
-   "endorsement_sha256": "5151ece64146455cbcdeb2835e0627fcdff777df0970da43482ca3ff5ae83877"
+   "endorsement_sha256": "92c9e85b2cbcf7215394b400c5bec519bd74c86e66c143f3c7735704eda50bcc"
   },
   {
    "name": "rw612-tfm-eat",
@@ -120,7 +121,8 @@
    "endorsement": "required",
    "endorsement_file": "endorsements/rw612-tfm-eat.cbor",
    "max_endorsement_age_s": 31536000,
-   "endorsement_sha256": "d1f1b746ab0998044dbe3c6f1ecf48778819dcf3274d515c7795a76f814aa66f"
+   "min_trust": "trustzone",
+   "endorsement_sha256": "7c2376713b39e07609f2d5feee626c0b1251d726db8e5b97039e6fa57eca5e1b"
   },
   {
    "name": "rw612-els-quote",
@@ -153,7 +155,8 @@
    ],
    "evidence_format": "eat-cose-v1",
    "allow_dev_profile": true,
-   "note": "development profile: one key for every chip, admitted with a warning"
+   "note": "development profile: one key for every chip, admitted with a warning",
+   "min_trust": "development-shared-key"
   },
   {
    "name": "zynqmp-optee-quote",
@@ -190,7 +193,8 @@
     }
    ],
    "heartbeat_mac": "sha3-256",
-   "verifier_pin_sha256": "30aa069d4914214e607b430c887959f2d2dcea180af0d85abe13d0ee7b46dc1b"
+   "verifier_pin_sha256": "30aa069d4914214e607b430c887959f2d2dcea180af0d85abe13d0ee7b46dc1b",
+   "min_trust": "software"
   },
   {
    "name": "offline-eat",
@@ -212,6 +216,23 @@
    ],
    "evidence_format": "eat-cose-v1",
    "note": "does not answer: nothing to appraise"
+  },
+  {
+   "name": "retired-device",
+   "kind": "aegis-device",
+   "host": "192.0.2.19",
+   "port": 7444,
+   "pq_pub_file": "keys/retired-device.mldsa65.pub",
+   "pq_pub_sha256": "fd054d758ff157ad28b71f45f0ccc141af985c34b2c72520810e3e725685fa12",
+   "profile": "aegis-rw612-els-v1",
+   "allowed": [
+    {
+     "type": "APP",
+     "measurement_value": "220bcdeb984ac3ec3c7beedb440db8dcb575d5045c83f936cf679f8389a4d25d"
+    }
+   ],
+   "disabled": true,
+   "note": "taken out by the operator (Aegis 1.2): not contacted, quarantined"
   }
  ]
 }

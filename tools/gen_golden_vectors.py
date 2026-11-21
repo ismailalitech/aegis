@@ -8,7 +8,7 @@
 Everything is made in this process by the repository's own writers, with no network, no board and no bench data:
 simulated devices answer the fleet verifier (gateway/aegisd/fleet.py) in place of its TCP requests, and the files are
 what the verifier writes: the verdicts of one cycle (fleet-state.json), the evidence pack of every entry
-(export_evidence, as `fleet.py export-evidence`), the endorsement records (common/endorsement.py, installed with
+(export_evidence, as `fleet.py export-evidence`, with its signed manifest.cose), the endorsement records (common/endorsement.py, installed with
 `enroll-endorsed`'s function), the signed policy and its signers file (common/signed_policy.py), and the audit log
 of a few cycles with an anchor (fleet.py AuditTrail, common/audit.py).
 
@@ -215,6 +215,8 @@ def fleet_devices():
                [("PROVER", digest("linux-prover"), "SHA256 of aegis_linux_prover.py"),
                 ("KERNEL", digest("linux-kernel"), "SHA256 of vmlinuz")]),
         Device("offline-eat", "aegis-device", fleet.DEVICE_TFM_PROFILE, tfm, online=False),
+        Device("retired-device", "aegis-device", fleet.DEVICE_PROFILE,
+               [("APP", digest("rw612-app"), "SHA256 of the image in flash")]),
     ]
 
 
@@ -260,6 +262,12 @@ def policy_entries(devs, verifier_pk):
     by["zynqmp-optee-quote"]["note"] = "reports a trusted application the policy does not allow: refused"
     by["linux-host"].update(heartbeat_mac="sha3-256", verifier_pin_sha256=hashlib.sha256(verifier_pk).hexdigest())
     by["offline-eat"]["note"] = "does not answer: nothing to appraise"
+    by["retired-device"].update(disabled=True, note="taken out by the operator (Aegis 1.2): not contacted, quarantined")
+    # Aegis 1.2 trust floors, each one the entry meets (a floor an entry can never meet is a policy error)
+    by["pq-quote"]["min_trust"] = "trustzone"
+    by["rw612-tfm-eat"]["min_trust"] = "trustzone"
+    by["zynqmp-devhuk-eat"]["min_trust"] = "development-shared-key"
+    by["linux-host"]["min_trust"] = "software"
     return out
 
 
@@ -428,7 +436,11 @@ def _generate(out, clock, state, scratch):
                 heads.append((b.batch, b.head.hex(), clock.now))
             return verdicts
 
-        # cycle 1: every decision is logged, every verdict gets its signed result: the packs and the state file
+        # cycle 1: every decision is logged (batch 1)
+        cycle()
+        # cycle 2: nothing changed, nothing is written; every result now names the audit log's head (batch 1): the
+        # packs and the state file are this cycle's
+        clock.now += INTERVAL
         verdicts = cycle()
         os.makedirs(os.path.join(out, "packs"))
         manifests = {}
@@ -439,9 +451,6 @@ def _generate(out, clock, state, scratch):
         with open(os.path.join(out, "fleet-state.json"), "w") as f:
             json.dump(_clean_paths({"updated": int(clock.time()), "verdicts": verdicts}, state), f, indent=1)
             f.write("\n")
-        # cycle 2: nothing changed, nothing is written
-        clock.now += INTERVAL
-        cycle()
         # cycle 3: the Linux host does not answer: a "refuse" entry. The anchor is taken here, as `fleet.py audit
         # --out` takes one
         clock.now += INTERVAL
@@ -505,6 +514,8 @@ PACK_NOTES = {
                           "the policy does not allow: not admitted, `contraindicated` (executables 33)",
     "linux-host": "kind `aegis-linux`, the older claims map: `warning`, trust `software`",
     "offline-eat": "kind `aegis-device` that did not answer: no evidence in the pack, `incomplete`",
+    "retired-device": "an entry with `\"disabled\": true`: not contacted, not admitted, `incomplete`, "
+                      "`aegis.disabled` in the result and no evidence format (`null` in the manifest)",
 }
 
 
@@ -538,14 +549,14 @@ compare these bytes.
 
 | Path | What it shows |
 |---|---|
-| [`policy/fleet.json`](policy/fleet.json) | the fleet policy: one entry per device, every kind and evidence format, and most keys an entry can have ([`policy.schema.json`](../../../docs/schemas/policy.schema.json)) |
+| [`policy/fleet.json`](policy/fleet.json) | the fleet policy: one entry per device, every kind and evidence format, and most keys an entry can have (Aegis 1.2: `min_trust` floors each entry meets, one `disabled` entry) ([`policy.schema.json`](../../../docs/schemas/policy.schema.json)) |
 | [`policy/fleet.cose`](policy/fleet.cose) | the same policy signed (COSE_Sign1, ML-DSA-65), version %d, audience `%s`, signer `%s` |
 | [`policy/policy-signers.json`](policy/policy-signers.json) | the verifier's signers file for it ([`policy-signers.schema.json`](../../../docs/schemas/policy-signers.schema.json)) |
 | [`policy/keys/`](policy/keys/) | the devices' ML-DSA-65 public keys in hex (`pq_pub_file`) and the TF-M attestation key (`tfm-iak.pub.pem`) |
 | [`policy/endorsers/`](policy/endorsers/) | the endorser's ML-DSA-65 public key in hex (`endorsers[].pk_file`) |
 | [`policy/endorsements/`](policy/endorsements/) | the installed records: `pq-quote.json` (JSON form, [`endorsement.schema.json`](../../../docs/schemas/endorsement.schema.json)), `pq-eat.cbor` and `rw612-tfm-eat.cbor` (COSE form) |
-| [`fleet-state.json`](fleet-state.json) | the verdicts of the first cycle as `fleet.py watch` writes them ([`fleet-state.schema.json`](../../../docs/schemas/fleet-state.schema.json)); the state directory is named `%s` |
-| `packs/<name>/` | the evidence pack of each entry after that cycle, as `fleet.py export-evidence` writes it ([`manifest.schema.json`](../../../docs/schemas/manifest.schema.json)) |
+| [`fleet-state.json`](fleet-state.json) | the verdicts of the second cycle as `fleet.py watch` writes them ([`fleet-state.schema.json`](../../../docs/schemas/fleet-state.schema.json)); the state directory is named `%s` |
+| `packs/<name>/` | the evidence pack of each entry after that cycle, as `fleet.py export-evidence` writes it: `manifest.json` ([`manifest.schema.json`](../../../docs/schemas/manifest.schema.json)) and `manifest.cose`, the verifier's signature over it and the export time. Every result names the audit log's head at that time (batch 1) |
 | [`audit/%s`](audit/%s) | the audit log of five cycles, one segment of %d batches |
 | [`audit/anchor.cbor`](audit/anchor.cbor) | an anchor: batch %d, kept as `fleet.py audit --out` keeps one after the third cycle |
 | [`audit/verifier.mldsa65.pub`](audit/verifier.mldsa65.pub) | the verifier's identity key in hex: it signs the results and the batches |
@@ -565,7 +576,8 @@ compare these bytes.
 
 ## Checking them
 
-    tools/verify_evidence.py pack packs/pq-eat --verifier-key %s
+    tools/verify_evidence.py pack packs/pq-eat --verifier-key %s --require-signed-export
+    tools/verify_audit.py log audit --key audit/verifier.mldsa65.pub --result packs/pq-eat/attestation-result.cbor --at %d
     tools/verify_audit.py log audit --key audit/verifier.mldsa65.pub --anchor audit/anchor.cbor --at %d
     tools/verify_audit.py policy policy/fleet.cose --key policy/policy-signers.json --audience %s
 
@@ -577,7 +589,7 @@ The audit log promises its next batch: checked later than its last batch's `due`
 Make them again: `tools/gen_golden_vectors.py` (it replaces this directory).
 """ % (SEED_PREFIX.decode(), T0, POLICY_VERSION, FLEET, POLICY_SIGNER, STATE_NAME, s["segments"][0],
        s["segments"][0], len(s["heads"]), s["anchor_batch"], s["checked_at"], "\n".join(rows), keys,
-       s["keys"]["verifier"], s["checked_at"], FLEET,
+       s["keys"]["verifier"], s["checked_at"], s["checked_at"], FLEET,
        "\n".join("    batch %d at %d" % (b, t) for b, _, t in s["heads"]))
     with open(os.path.join(out, "README.md"), "w") as f:
         f.write(text)

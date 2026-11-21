@@ -2,25 +2,34 @@
  "format": "aegis-evidence-pack-v1",
  "endpoint": "psa-tfm",
  "kind": "psa",
- "exported": 1795000000,
+ "exported": 1795000030,
  "evidence_format": "psa-token",
- "policy_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
- "policy_id": "ni:///sha-256;YZ-RFktyoBiP487wEQtuyCdRXQ2R1BWUPBQet6xYey8",
- "policy_now_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
+ "policy_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
+ "policy_id": "ni:///sha-256;nRqbwygDdWJHDENmJcjAWJhGrDGs7df3DqgUjd26-qM",
+ "policy_now_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
  "result": {
   "status": "warning",
   "admitted": true,
-  "iat": 1795000000,
-  "exp": 1795000192
+  "iat": 1795000030,
+  "exp": 1795000227,
+  "audit_head": {
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
+   "batch": 1,
+   "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+  },
+  "warnings": [
+   "instance-identity: the key is pinned without an endorsement: nothing names the device that holds it"
+  ]
  },
  "key_thumbprints": {
   "verifier": "ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f"
  },
  "files": {
-  "attestation-result.cbor": "27f59bed892c3a8d6204525fbc8cc243d048b403e0f8dc0366d7b66e68a5feed",
-  "evidence.token": "d4380f9bd38757134771b53336c5722289ff827fc6c8d5ccf4ee482e63c60a9d",
+  "attestation-result.cbor": "88a25026e9be0db6cf457b8bd04fcda76321740a6e10ed299b283e5000448492",
+  "evidence.token": "859ce37cdc70908ef3fd0abaa23208f2dfbf8c487267a019f4eda726945b5163",
   "keys/device-iak.pem": "3a33001ee4e0528322f6f28d18b3f264254c868a6b3876532ecdad06759ac379",
   "keys/verifier.cosekey": "599d78bbefb93640761ac95073d5ecb851616dadf698b97dfb82d6aa76c01e86"
  },
+ "signed_manifest": "manifest.cose",
  "verify": "tools/verify_evidence.py pack <this directory>"
 }

@@ -2,16 +2,22 @@
  "format": "aegis-evidence-pack-v1",
  "endpoint": "pq-quote",
  "kind": "aegis-pq",
- "exported": 1795000000,
+ "exported": 1795000030,
  "evidence_format": "aegis-quote-v1",
- "policy_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
- "policy_id": "ni:///sha-256;YZ-RFktyoBiP487wEQtuyCdRXQ2R1BWUPBQet6xYey8",
- "policy_now_sha256": "619f91164b72a0188fe3cef0110b6ec827515d0d91d415943c141eb7ac587b2f",
+ "policy_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
+ "policy_id": "ni:///sha-256;nRqbwygDdWJHDENmJcjAWJhGrDGs7df3DqgUjd26-qM",
+ "policy_now_sha256": "9d1a9bc328037562470c436625c8c0589846ac31acedd7f70ea8148dddbafaa3",
  "result": {
   "status": "affirming",
   "admitted": true,
-  "iat": 1795000000,
-  "exp": 1795000192
+  "iat": 1795000030,
+  "exp": 1795000227,
+  "audit_head": {
+   "log": "9baeed5c92111c5bf4162e631dfc9f43",
+   "batch": 1,
+   "sha256": "1395f0cd161723d14619060e521bdd943b6a11480bd1e26713a1c8b7027c5327"
+  },
+  "min_trust": "trustzone"
  },
  "key_thumbprints": {
   "verifier": "ae31ea0c573e569447b6b3d6622ed7af161a23d1a60521110ff4ed63360b563f",
@@ -19,14 +25,15 @@
   "endorser": "80662c11dc1fcb5779267ef0b31b190c93c0ff6ed9559a9074ea9bc7db42c98d"
  },
  "files": {
-  "attestation-result.cbor": "a6595f891855ca62acb09921190942a67637c576eecbde6bd3f60c56f9107942",
-  "endorsement.json": "b3c9799dd2c618e6493c9b0a463af5f4056361d08ea63a745934f2344e8d9ab1",
-  "evidence.sig": "35820dd4a34a61cd8138a3a5633c80535057f9f2258b24923afb7ba0a4df8590",
-  "evidence.token": "a354e0e2905218e1d5e8e1854102cbcbf32bb538990ead9a83d09b4f7b181f36",
+  "attestation-result.cbor": "86d6363d747e2f3d84cafbebf6b51cdbf23d575e0f26b1a93f932b3d808ea197",
+  "endorsement.json": "6a9d2067ec2c7925bff0a5f4d4f72e9aa4180ba1af75019c6d0db906600f861d",
+  "evidence.sig": "18f0352c88534fcd74c36db8d0024f697cae7b041dd693599e740d3cc7d56433",
+  "evidence.token": "f456b6d97ced2d3c8873255f921ffa4807c7dae9fd121be79bd13cfd1a7f07b6",
   "keys/device-iak.pem": "3a33001ee4e0528322f6f28d18b3f264254c868a6b3876532ecdad06759ac379",
   "keys/device.cosekey": "4efaddf1fb4387bad578535666f8f845cab04728532c239103fbd1c4d3fcce3b",
   "keys/endorser.cosekey": "c8cff1514ff096d3ce68fce24a797a763ad83d3fedd8d575661f6ad6c263b615",
   "keys/verifier.cosekey": "599d78bbefb93640761ac95073d5ecb851616dadf698b97dfb82d6aa76c01e86"
  },
+ "signed_manifest": "manifest.cose",
  "verify": "tools/verify_evidence.py pack <this directory>"
 }
