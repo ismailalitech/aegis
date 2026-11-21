@@ -45,7 +45,7 @@ evidence pack, the audit log).
 
 ## Expected output
 
-`docker run --rm --network none aegis-eval` prints (times, digests and ports differ):
+`docker run --rm --network none aegis-eval` prints (times, digests, ports and counts differ):
 
 ```
 Aegis evaluation, logs in /tmp/aegis-eval.XXXXXX

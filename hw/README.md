@@ -8,8 +8,16 @@
 
 It implements the FIPS 203/204 NTT and the FIPS 202 Keccak-f permutation. In
 simulation it matches the reference models in `model/`. It is not
-FIPS-validated. It has not yet been synthesized, timed or run on the board
-(see "Limits").
+FIPS-validated.
+
+This page was written before synthesis. Since then the core was built into
+the PolarFire fabric as design dv101 (16 November 2026: timing met at 50 MHz,
+about 11,844 4LUT, 3,087 DFF, 2 LSRAM and 26 Math blocks) and checked on the
+board against the C references and liboqs's known answers
+(`docs/phase2-notes.md`). Its successor, which keeps the sponge in the fabric
+(`rtl/aegis_sponge.v`, `rtl/aegis_pqc2.v`), has run on the board since
+17 November 2026: `docs/accelerator-v2.md`. The "Not synthesized" and "Not
+tested on hardware" limits below are the state before that.
 
 ## Files
 

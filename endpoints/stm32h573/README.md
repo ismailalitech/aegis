@@ -10,7 +10,8 @@ the TrustZone negative test. What was changed on the boards, and how to undo it:
 The same two images built with the option for standard evidence (`docs/evidence-format.md`, "STM32 EAT image"): the
 partition answers PSA message `QUOTE_EAT` (type 7) and the prover forwards `PQEAT <challenge>`, so the gateway can
 ask with `"evidence_format": "eat-cose-v1"`. The option is off by default; built without it, both images are the
-ones running now (SPE `9de76167...`, NSPE `1f4110fd...`).
+ones board 1 runs (SPE `9de76167...`, NSPE `1f4110fd...`). Board 2 has run the images below since 21 November 2026
+(SPE `315dcc2f...`, NSPE `acf8fc53...`), with `"evidence_format": "eat-cose-v1"` in its policy entry.
 
 Build (no board needed; under a minute):
 

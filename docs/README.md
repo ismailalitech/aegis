@@ -2,7 +2,9 @@
 # Aegis documentation
 
 Start with [`architecture.md`](architecture.md), then [`threat-model.md`](threat-model.md) for what is **not**
-claimed. What is in Aegis 1.0, how it was verified and its known limits: [`release-notes-1.0.md`](release-notes-1.0.md).
+claimed. What is in Aegis 1.0, how it was verified and its known limits: [`release-notes-1.0.md`](release-notes-1.0.md);
+what changed since: [`release-notes-1.1.md`](release-notes-1.1.md) and [`release-notes-1.2.md`](release-notes-1.2.md)
+(the current release).
 Every document below is in this directory unless a path says otherwise.
 
 ## Run it without hardware

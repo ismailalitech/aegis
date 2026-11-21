@@ -1,7 +1,6 @@
 # Endpoint hardening: hedged ML-DSA signing and KMAC heartbeats (deployed on the bench 17 November 2026)
 
-Status 2026-11-17: built and checked on the PC. **Not flashed, not tested on the STM32.** Do not merge before the board
-checks below pass.
+Status: checked on the PC first, then deployed on the STM32 on 17 November 2026 ("Deployed on the bench" below).
 
 ## Change 1: hedged ML-DSA signing (branch `hedged-signing`)
 
