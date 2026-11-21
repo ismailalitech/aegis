@@ -78,6 +78,18 @@ II_SHARED_KEY = -34          # a development profile whose key is the same on ev
 EX_BOOT_APPROVED = 3         # AR4SI: only recognized, approved executables were loaded during boot
 EX_UNRECOGNIZED = 33         # AR4SI: executables that are not recognized
 EX_SELF_MEASURED = -35       # non-standard warning: the approved set, but measured by the measured software itself
+CATEGORY_NAMES = {0: "instance-identity", 1: "configuration", 2: "executables", 3: "file-system", 4: "hardware",
+                  5: "runtime-opaque", 6: "storage-opaque", 7: "sourced-data"}
+# Aegis 1.2: verifier claims (in 1006) a 1.1 reader skips, as it skips every verifier claim it does not know
+# The audit log's head as three claims of one value each, all three or none: Aegis 1.1's checker prints the verifier
+# claims with byte strings at the top level made hex, and a byte string inside a list or map would stop it
+C_AUDIT_LOG = "aegis.audit-log"     # bstr .size 16: the log's id
+C_AUDIT_BATCH = "aegis.audit-batch"     # uint: the number of the log's last batch on disk when the result was signed
+C_AUDIT_HEAD = "aegis.audit-head"   # bstr .size 32: SHA-256 of that batch record
+C_WARNINGS = "aegis.warnings"       # [+ tstr]: the verdict's warning, then each vector detail as "category: text"
+C_DISABLED = "aegis.disabled"       # true: the policy entry says "disabled": true; never with aegis.admitted true
+C_MIN_TRUST = "aegis.min-trust"     # tstr: the trust floor (policy "min_trust") the verdict was held to
+MAX_WARNINGS, MAX_WARNING_LEN = 8, 300
 VERIFIER_DEVELOPER_NAME = "https://github.com/ismailalitech/aegis"
 VERIFIER_BUILD_NAME = "aegis-fleet-verifier 1 (evidence eat-cose-v1, results %s)" % EAR_DRAFT
 
@@ -314,9 +326,21 @@ def _short(texts, n=8, limit=300):
     return [str(t)[:limit] for t in texts[:n]] or None
 
 
+def warning_texts(verdict, vdetails):
+    """The claim aegis.warnings: the verdict's warning, then the vector's details as "category: text"; at most
+    MAX_WARNINGS texts of at most MAX_WARNING_LEN characters, none empty. None if there is nothing to say."""
+    texts = [verdict["warning"]] if verdict.get("warning") else []
+    for cat in sorted(vdetails):
+        texts += ["%s: %s" % (CATEGORY_NAMES.get(cat, cat), t) for t in vdetails[cat]]
+    out = [str(t)[:MAX_WARNING_LEN] for t in texts if str(t)][:MAX_WARNINGS]
+    return out or None
+
+
 def ear_payload(verdict, facts, policy, iat, exp=None, label=None):
     """The EAR claims (draft-ietf-rats-ear-06) for one verdict, as bytes. policy: policy_id() of the policy file the
-    verdict was reached under. One appraisal, under the submodule label of the endpoint's kind."""
+    verdict was reached under. One appraisal, under the submodule label of the endpoint's kind. facts["audit_head"]
+    ((log id, batch number, SHA-256 of that batch record): the audit log's last batch on disk when the result is
+    signed) becomes aegis.audit-head."""
     status, vector, vdetails = appraisal(verdict, facts)
     a = {EAR_STATUS: status, EAR_VECTOR: vector, EAR_POLICY_IDS: [policy]}
     why = list(verdict.get("reasons") or []) + ([verdict["warning"]] if verdict.get("warning") else [])
@@ -351,6 +375,16 @@ def ear_payload(verdict, facts, policy, iat, exp=None, label=None):
         ver["aegis.evidence-sha256"] = facts["evidence_sha256"]                  # the evidence file of the pack
     if verdict.get("enforcement"):
         ver["aegis.enforcement"] = verdict["enforcement"]
+    warnings = warning_texts(verdict, vdetails)
+    if warnings:
+        ver[C_WARNINGS] = warnings
+    if verdict.get("disabled") is True:
+        ver[C_DISABLED] = True
+    if verdict.get("min_trust"):
+        ver[C_MIN_TRUST] = str(verdict["min_trust"])[:64]
+    head = facts.get("audit_head")
+    if head:
+        ver[C_AUDIT_LOG], ver[C_AUDIT_BATCH], ver[C_AUDIT_HEAD] = bytes(head[0]), int(head[1]), bytes(head[2])
     a[EAR_VERIFIER_CLAIMS] = ver
     e = verdict.get("endorsement")
     if e:
@@ -391,11 +425,37 @@ def _read_ear(payload):
     if ver["aegis.admitted"] != (status in (AFFIRMING, WARNING)):
         raise Refused("%s, but the status is %s" % ("admitted" if ver["aegis.admitted"] else "not admitted",
                                                      TIER_NAMES[status]))
-    return {"iat": c[IAT], "exp": c.get(EXP), "verifier": dict(vid), "label": label, "status": TIER_NAMES[status],
-            "vector": dict(vector), "details": a.get(EAR_STATUS_DETAILS), "policy_ids": a.get(EAR_POLICY_IDS),
-            "nonce": a.get(NONCE), "attester_claims": a.get(EAR_ATTESTER_CLAIMS), "verifier_claims": ver,
-            "endorser_claims": a.get(EAR_ENDORSER_CLAIMS), "endpoint": ver["aegis.endpoint"],
-            "admitted": ver["aegis.admitted"]}
+    extra = _read_aegis_1_2(ver)
+    return dict({"iat": c[IAT], "exp": c.get(EXP), "verifier": dict(vid), "label": label, "status": TIER_NAMES[status],
+                 "vector": dict(vector), "details": a.get(EAR_STATUS_DETAILS), "policy_ids": a.get(EAR_POLICY_IDS),
+                 "nonce": a.get(NONCE), "attester_claims": a.get(EAR_ATTESTER_CLAIMS), "verifier_claims": ver,
+                 "endorser_claims": a.get(EAR_ENDORSER_CLAIMS), "endpoint": ver["aegis.endpoint"],
+                 "admitted": ver["aegis.admitted"], "vector_details": a.get(EAR_VECTOR_DETAILS)}, **extra)
+
+
+def _read_aegis_1_2(ver):
+    """The verifier claims Aegis 1.2 added, each optional (a 1.1 result has none): {"audit_head", "warnings",
+    "disabled", "min_trust"}, None where absent. Present and not of its form: Refused."""
+    head = None
+    parts = [k for k in (C_AUDIT_LOG, C_AUDIT_BATCH, C_AUDIT_HEAD) if k in ver]
+    if parts:
+        log, batch, digest = ver.get(C_AUDIT_LOG), ver.get(C_AUDIT_BATCH), ver.get(C_AUDIT_HEAD)
+        if not (len(parts) == 3 and isinstance(log, bytes) and len(log) == 16 and _is_uint(batch, 1 << 53)
+                and batch >= 1 and isinstance(digest, bytes) and len(digest) == 32):
+            raise Refused("%s, %s and %s are not a log id (16 bytes), a batch number and a SHA-256 (32 bytes), all "
+                          "three" % (C_AUDIT_LOG, C_AUDIT_BATCH, C_AUDIT_HEAD))
+        head = {"log": log, "batch": batch, "sha256": digest}
+    warnings = ver.get(C_WARNINGS)
+    if C_WARNINGS in ver and not (isinstance(warnings, list) and 0 < len(warnings) <= MAX_WARNINGS
+                                  and all(_is_text(w, MAX_WARNING_LEN) for w in warnings)):
+        raise Refused("%s is not 1 to %d texts of 1 to %d characters" % (C_WARNINGS, MAX_WARNINGS, MAX_WARNING_LEN))
+    disabled = ver.get(C_DISABLED)
+    if C_DISABLED in ver and (disabled is not True or ver["aegis.admitted"]):
+        raise Refused("%s is not true, or comes with an admission" % C_DISABLED)
+    floor = ver.get(C_MIN_TRUST)
+    if C_MIN_TRUST in ver and not _is_text(floor, 64):
+        raise Refused("%s is not a trust label" % C_MIN_TRUST)
+    return {"audit_head": head, "warnings": warnings, "disabled": disabled is True, "min_trust": floor}
 
 
 def read_ear(data, verifier_pk, now=None):
