@@ -720,7 +720,7 @@ class Results(Bench):
         for _ in range(4000):
             verdict = {"endpoint": "x", "admitted": r.random() < 0.5, "reasons": ["r"] if r.random() < 0.5 else []}
             for k, values in (("enrolment", ["endorsed", "trust-on-first-use", "refused"]),
-                              ("trust", ["software", "device-key", "trustzone", "development-shared-key"]),
+                              ("trust", ["software", "device-key", "trustzone", "trustzone-devkey", "development-shared-key"]),
                               ("warning", ["w"])):
                 if r.random() < 0.6:
                     verdict[k] = r.choice(values)
@@ -741,6 +741,16 @@ class Results(Bench):
             data = cose.sign1(self.vsk, self.vpk, eat.ear_payload(verdict, facts, "ni:///sha-256;x", 1000, 1060))
             got = eat.read_ear(data, self.vpk)
             self.assertEqual((got["admitted"], got["status"]), (verdict["admitted"], eat.TIER_NAMES[status]))
+
+    def test_a_development_attestation_key_is_said_in_the_result(self):
+        verdict = {"endpoint": "x", "admitted": True, "reasons": [], "enrolment": "endorsed",
+                   "trust": "trustzone-devkey"}
+        facts = {"stage": "appraised", "signature": True, "components_ok": True}
+        status, vector, details = eat.appraisal(verdict, facts)
+        self.assertEqual(vector[eat.V_EXECUTABLES], eat.EX_BOOT_APPROVED)
+        self.assertIn("development attestation key", " ".join(details[eat.V_EXECUTABLES]))
+        verdict["trust"] = "trustzone"
+        self.assertNotIn(eat.V_EXECUTABLES, eat.appraisal(verdict, facts)[2])
 
     def test_a_status_that_contradicts_the_verdict_is_refused(self):
         """Signed by the right key, but "admitted" under a failing status, or not admitted under affirming or warning:

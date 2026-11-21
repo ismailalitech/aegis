@@ -21,7 +21,10 @@ plain-claims endpoint without a pinned "profile" are refused without contacting
 them. The ZynqMP development profile (one OP-TEE key for every chip) is refused
 too unless its entry says "allow_dev_profile": true; it is then admitted with the
 trust label "development-shared-key" and a WARNING line. `fleet.py check POLICY`
-lists what a policy would refuse.
+lists what a policy would refuse. A kind "aegis-pq" endpoint (TF-M with the PQ partition) whose policy pins TF-M's
+published development attestation key gets the trust label "trustzone-devkey" and a warning (the token proves only
+what the ML-DSA-65 key vouches for: anyone has that ES256 key); with any other pinned key, "trustzone". A kind
+"psa" endpoint pinned to that key is labelled "development-shared-key", with a warning.
 
 Enforcement is a hook: if the policy names "enforce_cmd", it is run with the
 endpoint name and verdict after every decision (for example to add or remove a
@@ -84,6 +87,8 @@ signature per batch, by this verifier's identity key. A cycle in which nothing c
 third-party libraries only.
 """
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -113,6 +118,32 @@ PLAIN_KINDS = {"aegis-linux": {LINUX_PROFILE: "software"},
 # the endpoint's entry opts in with "allow_dev_profile": true (bench use).
 DEV_PROFILES = {TEE_DEVHUK_PROFILE}
 PQ_KINDS = ("aegis-pq",) + tuple(PLAIN_KINDS)
+# TF-M's published development initial attestation key (P-256, SubjectPublicKeyInfo DER; keys/tfm-dev-iak.pub.pem):
+# everyone has its private half. A token signed with it proves nothing by itself: kind aegis-pq is then labelled
+# "trustzone-devkey" (what the token says rests on the endpoint's ML-DSA-65 key), kind psa "development-shared-key".
+TFM_DEV_IAK_DER = base64.b64decode(
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEeeupDov0UKZ1FXatRZmwet+TjaO7"
+    "C9F9ADbtSaLQ/D+/zfqJVrVov9uGc+ZI2LWNkplVsUomwwgPNBF9lx1oZA==")
+DEV_IAK_WARNING = "the TF-M token is signed with TF-M's published development attestation key"
+
+
+def pem_first_der(pem):
+    """The DER bytes of the first PEM block, or None. Lines may be indented or end in CRLF."""
+    text = pem.decode("ascii", "replace") if isinstance(pem, (bytes, bytearray)) else pem
+    body, inside = [], False
+    for line in (x.strip() for x in text.splitlines()):
+        if line.startswith("-----BEGIN"):
+            inside, body = True, []
+        elif line.startswith("-----END"):
+            if inside:
+                try:
+                    return base64.b64decode("".join(body), validate=True)
+                except (binascii.Error, ValueError):
+                    return None
+            return None
+        elif inside and line:
+            body.append(line)
+    return None
 KNOWN_KINDS = ("psa",) + PQ_KINDS
 HEARTBEAT_MACS = ("kmac256", "sha3-256")
 DEFAULT_HEARTBEAT_MAC = "kmac256"   # every current endpoint image; SHA-3-only images need "heartbeat_mac": "sha3-256"
@@ -872,8 +903,18 @@ def attest(ep, ecdsa_verify, base_dir, timeout=10.0, endorsers=None, facts=None)
         elif ep.get("iak_pub_pem"):
             facts.setdefault("signature", False)    # kind psa: the ES256 signature is the only one
             with open(_path(base_dir, ep["iak_pub_pem"]), "rb") as f:
-                claims = psa_token.verify(tok, f.read(), ecdsa_verify)
+                iak_pem = f.read()
+            claims = psa_token.verify(tok, iak_pem, ecdsa_verify)
             facts["signature"] = True
+            dev_iak = pem_first_der(iak_pem) == TFM_DEV_IAK_DER
+            if kind == "aegis-pq":
+                verdict["trust"] = "trustzone-devkey" if dev_iak else "trustzone"
+                if dev_iak:
+                    verdict["warning"] = (DEV_IAK_WARNING + ": anyone can sign such a token; what it says rests "
+                                          "on the endpoint's ML-DSA-65 key")
+            elif dev_iak:
+                verdict["trust"] = "development-shared-key"
+                verdict["warning"] = (DEV_IAK_WARNING + ", its only signature: anyone can make such a token")
         else:
             # aegis-pq without an ES256 key: the ML-DSA-65 signature over the whole token was verified above
             claims = psa_token.parse(tok)[3]

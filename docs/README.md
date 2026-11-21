@@ -20,6 +20,7 @@ Every document below is in this directory unless a path says otherwise.
 | [`architecture.md`](architecture.md) | the protocol, the components and the reasons for them |
 | [`threat-model.md`](threat-model.md) | what is protected against, what is not |
 | [`release-notes-1.0.md`](release-notes-1.0.md) | Aegis 1.0: components, boards, standards, how it was verified, known limits |
+| [`release-notes-1.1.md`](release-notes-1.1.md) | Aegis 1.1: what changed since 1.0 (the TF-M trust label) |
 | [`whitepaper.md`](whitepaper.md) | the project in one paper |
 | [`datasheet.md`](datasheet.md) | the gateway in one page |
 | [`enrolment.md`](enrolment.md) | how a verifier comes to trust a device key: endorsed enrolment |
