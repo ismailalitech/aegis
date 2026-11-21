@@ -155,6 +155,17 @@ class Disabled(V12):
         self.assertTrue(any("unknown evidence_format" in r for r in v["reasons"]))
         self.assertEqual(dev.asked, [])
 
+    def test_the_session_command_does_not_contact_a_disabled_entry(self):
+        off, on = EatDevice(), EatDevice()
+        self.add("off", off, disabled=True, provision=True)
+        self.add("on", on, provision=True)
+        rc, out = run(fleet.main, ["session", self.pol, "--state-dir", self.state, "--platform", "linux"])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(off.asked, [])
+        self.assertTrue(on.asked and set(on.asked) == {"PQSESSION"}, on.asked)
+        self.assertNotIn('"endpoint": "off"', out)
+        self.assertIn('"endpoint": "on"', out)
+
     def test_check_lists_a_disabled_entry(self):
         self.add("off", EatDevice(), disabled=True)
         self.add("on", EatDevice())
@@ -192,24 +203,43 @@ class MinTrust(V12):
             self.assertFalse(any(fleet.trust_meets(t, f) for f in ORDER))
         self.assertFalse(fleet.trust_meets("trustzone", "nonsense"))
 
-    def test_a_verdict_below_its_floor_is_quarantined_every_cycle(self):
+    def test_a_floor_the_entry_can_never_meet_is_a_policy_error(self):
         tfm, els = EatDevice(), EatDevice(platform="aegis-rw612-els-v1")       # trustzone; device-key
         self.add("tfm", tfm, min_trust="trustzone")
         self.add("els", els, min_trust="trustzone")
         self.add("els-ok", els, min_trust="device-key")
         self.add("els-low", els, min_trust="software")
+        never = ("policy: entry els can NEVER meet min_trust trustzone: its trust is device-key (strongest first: "
+                 "trustzone > trustzone-devkey > device-key > software > development-shared-key)")
         for _ in range(2):
             vs = self.cycle()
             self.assertTrue(vs["tfm"]["admitted"], vs["tfm"]["reasons"])
             self.assertEqual((vs["tfm"]["trust"], vs["tfm"]["min_trust"]), ("trustzone", "trustzone"))
-            self.assertEqual((vs["els"]["admitted"], vs["els"]["reasons"]),
-                             (False, ["trust device-key below min_trust trustzone"]))
+            self.assertEqual((vs["els"]["admitted"], vs["els"]["reasons"], vs["els"]["min_trust"]),
+                             (False, [never], "trustzone"))
             self.assertTrue(vs["els-ok"]["admitted"] and vs["els-low"]["admitted"])
         r = self.read("els")
-        # contraindicated: the evidence was appraised and is not enough for this entry
-        self.assertEqual((r["status"], r["min_trust"], r["admitted"]), ("contraindicated", "trustzone", False))
-        self.assertIn("trust device-key below min_trust trustzone", r["details"])
+        # refused by the policy rules, not appraised: incomplete, and the result names the floor
+        self.assertEqual((r["status"], r["min_trust"], r["admitted"]), ("incomplete", "trustzone", False))
+        self.assertIn(never, r["details"])
         self.assertEqual(self.read("tfm")["min_trust"], "trustzone")
+        rc, out = self.check()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("els REFUSED: " + never, out)
+
+    def test_a_label_below_the_floor_at_run_time_is_quarantined_every_cycle(self):
+        """Defence in depth: should a verdict's label ever be one policy_errors did not foresee, the floor still holds,
+        and an appraised verdict below it is contraindicated."""
+        els = EatDevice(platform="aegis-rw612-els-v1")
+        self.add("els", els, min_trust="trustzone")
+        with mock.patch.object(fleet, "possible_trust", lambda ep, base: set(fleet.TRUST_ORDER)):
+            for _ in range(2):
+                v = self.cycle()["els"]
+                self.assertEqual((v["admitted"], v["reasons"]), (False, ["trust device-key below min_trust trustzone"]))
+        self.assertEqual(els.asked, ["PQEAT", "PQEAT"])
+        r = self.read("els")
+        self.assertEqual((r["status"], r["min_trust"]), ("contraindicated", "trustzone"))
+        self.assertIn("trust device-key below min_trust trustzone", r["details"])
 
     def test_the_fleet_wide_floor_and_an_entry_s_own(self):
         els = EatDevice(platform="aegis-rw612-els-v1")
@@ -218,27 +248,47 @@ class MinTrust(V12):
         self.policy["min_trust"] = "trustzone"
         self.save()
         vs = self.cycle()
-        self.assertEqual(vs["fleet-floor"]["reasons"], ["trust device-key below min_trust trustzone"])
+        self.assertEqual(len(vs["fleet-floor"]["reasons"]), 1)
+        self.assertIn("policy: entry fleet-floor can NEVER meet min_trust trustzone: its trust is device-key",
+                      vs["fleet-floor"]["reasons"][0])
         self.assertTrue(vs["own-floor"]["admitted"], vs["own-floor"]["reasons"])
         rc, out = self.check()
         self.assertEqual(rc, 1, out)
-        self.assertIn("min_trust trustzone can NEVER be met: this entry's trust is device-key", out)
+        self.assertIn("fleet-floor REFUSED: policy: entry fleet-floor can NEVER meet min_trust trustzone", out)
         self.assertIn("min_trust device-key: met by trust device-key (the entry's own floor; the policy's is "
                       "trustzone)", out)
+        # an entry cannot opt out of the fleet's floor: null is not "no floor"; the weakest label is the lowest floor
+        self.policy["endpoints"][0]["min_trust"] = None
+        self.save()
+        self.assertIn("policy: unknown min_trust None", self.cycle()["fleet-floor"]["reasons"][0])
+        self.policy["endpoints"][0]["min_trust"] = "development-shared-key"
+        self.save()
+        self.assertTrue(self.cycle()["fleet-floor"]["admitted"])
 
-    def test_a_verdict_without_a_label_meets_no_floor(self):
+    def test_an_entry_without_a_trust_label_cannot_have_a_floor(self):
         # kind psa with its own (not TF-M's development) key: no trust label
-        e = {"name": "psa", "host": "127.0.0.1", "port": tf.FakeEndpoint(self.iak).port, "iak_pub_pem": "iak.pem",
+        port = tf.FakeEndpoint(self.iak).port
+        e = {"name": "psa", "host": "127.0.0.1", "port": port, "iak_pub_pem": "iak.pem",
              "allowed": [{"type": "SPE", "measurement_value": tf.GOOD_S, "signer_id": tf.SIGNER},
                          {"type": "NSPE", "measurement_value": tf.GOOD_NS, "signer_id": tf.SIGNER}]}
         self.assertTrue(fleet.attest(e, te.VERIFY, self.d, 5)["admitted"])
-        v = fleet.attest(dict(e, min_trust="development-shared-key"), te.VERIFY, self.d, 5)
-        self.assertEqual((v["admitted"], v["reasons"]), (False, ["trust none below min_trust development-shared-key"]))
-        self.policy["endpoints"].append(dict(e, min_trust="development-shared-key"))
+        for floor in ORDER:
+            v = fleet.attest(dict(e, min_trust=floor), te.VERIFY, self.d, 5)
+            self.assertEqual((v["admitted"], len(v["reasons"])), (False, 1))
+            self.assertIn("policy: entry psa can NEVER meet min_trust %s: its trust is none" % floor, v["reasons"][0])
+            self.assertIn("an entry without a trust label cannot have a floor", v["reasons"][0])
+        # the fleet-wide floor reaches it too, and `check` says so; aegis-pq without an ES256 key alike
+        self.policy["endpoints"].append(e)
+        self.add("pq-nokey", EatDevice(), kind="aegis-pq", profile=None)
+        self.policy["min_trust"] = "development-shared-key"
         self.save()
+        vs = self.cycle()
+        for name in ("psa", "pq-nokey"):
+            self.assertIn("an entry without a trust label cannot have a floor", vs[name]["reasons"][0])
         rc, out = self.check()
         self.assertEqual(rc, 1, out)
-        self.assertIn("min_trust development-shared-key can NEVER be met: this entry's trust is none", out)
+        self.assertIn("psa REFUSED: policy: entry psa can NEVER meet min_trust development-shared-key", out)
+        self.assertIn("pq-nokey REFUSED: policy: entry pq-nokey can NEVER meet", out)
 
     def test_check_names_each_floor_that_can_never_be_met(self):
         dev = EatDevice()
@@ -255,10 +305,11 @@ class MinTrust(V12):
         rc, out = self.check()
         self.assertEqual(rc, 1, out)
         lines = out.splitlines()
-        for name, label in (("linux", "software"), ("tee-dev", "development-shared-key"), ("els", "device-key"),
-                            ("pq-nokey", "none")):
-            i = lines.index(next(x for x in lines if x.startswith(name + " ")))
-            self.assertIn("can NEVER be met: this entry's trust is %s" % label, lines[i + 1], name)
+        for name, floor, label in (("linux", "trustzone", "software"), ("tee-dev", "software", "development-shared-key"),
+                                   ("els", "trustzone-devkey", "device-key"), ("pq-nokey", "device-key", "none")):
+            line = next(x for x in lines if x.startswith(name + " "))
+            self.assertIn("REFUSED: policy: entry %s can NEVER meet min_trust %s: its trust is %s" % (
+                name, floor, label), line)
         for name, label in (("linux-ok", "software"), ("tfm", "trustzone"), ("pq", "trustzone")):
             i = lines.index(next(x for x in lines if x.startswith(name + " ")))
             self.assertIn("met by trust %s" % label, lines[i + 1], name)
@@ -492,8 +543,10 @@ class AuditHead(V12):
         self.assertEqual(mine, [
             ("admit", "dev", None, None, ()),
             ("admit", "dev", "trustzone", None, ()),
-            ("refuse", "els", "trustzone", None, ("trust device-key below min_trust trustzone",)),
-            ("refuse", "dev", None, True, ("disabled by policy",))])
+            ("refuse", "els", "trustzone", None, ("policy: entry els can NEVER meet min_trust trustzone: its trust is "
+                                                   "device-key (strongest first: trustzone > trustzone-devkey > "
+                                                   "device-key > software > development-shared-key)",)),
+            ("refuse", "dev", "trustzone", True, ("disabled by policy",))])
 
     def test_looking_at_the_head_keeps_what_the_writer_must_say(self):
         """Log.head() runs before every signed result: a torn end it cuts off is still said in the next batch."""
@@ -640,24 +693,72 @@ class SignedPack(V12):
         self.assertIn("other than manifest.cose", changed(manifest(lambda m: m.update(signed_manifest="../x"))))
 
     @NEEDS_LIBS
-    def test_a_pack_without_a_signature_verifies_and_says_its_time_is_not_signed(self):
-        """A pack exported by Aegis 1.1 (no manifest.cose, no "signed_manifest")."""
-        self.add("dev", EatDevice())
-        self.cycle()
-        out, man_bytes, _ = self.export()
+    def strip_signature(self, out, result_as_1_1=False):
+        """Make a pack look like one of Aegis 1.1: no manifest.cose, no "signed_manifest"; with result_as_1_1 also a
+        result without aegis.pack-signed (as a 1.1 verifier signed it)."""
         os.remove(os.path.join(out, "manifest.cose"))
-        man = json.loads(man_bytes)
+        with open(os.path.join(out, "manifest.json")) as f:
+            man = json.load(f)
         del man["signed_manifest"]
+        if result_as_1_1:
+            path = os.path.join(out, "attestation-result.cbor")
+            payload = cbor.loads(cose.parse(open(path, "rb").read()).payload)
+            del next(iter(payload[266].values()))[1006]["aegis.pack-signed"]
+            with open(path, "wb") as f:
+                f.write(cose.sign1(self.vsk, self.vpk, cbor.dumps(payload, sort=True)))
+            with open(path, "rb") as f:
+                man["files"]["attestation-result.cbor"] = hashlib.sha256(f.read()).hexdigest()
         with open(os.path.join(out, "manifest.json"), "w") as f:
             json.dump(man, f, indent=1)
+        return man
+
+    @NEEDS_LIBS
+    def test_a_1_1_pack_verifies_and_says_its_time_is_not_signed(self):
+        """A pack of Aegis 1.1: no manifest.cose, no "signed_manifest", a result without aegis.pack-signed."""
+        self.add("dev", EatDevice())
+        self.cycle()
+        out, _, _ = self.export()
+        self.assertTrue(self.read("dev")["pack_signed"])
+        man = self.strip_signature(out, result_as_1_1=True)
         trust = ["--verifier-key", thumb(self.vpk).hex(), "--device-key", thumb(te.PK).hex()]
         rc, rep = checker("pack", out, *trust)
         self.assertEqual((rc, rep["verified"]), (0, True), rep)
         self.assertEqual((rep["export_time"]["time"], rep["export_time"]["signed"]), (man["exported"], False))
         self.assertIn("export time not signed", rep["export_time"]["note"])
+        self.assertFalse(rep["attestation_result"]["pack_signed"])
         rc, rep = checker("pack", out, *trust, "--require-signed-export")
         self.assertEqual((rc, rep["verified"]), (1, False), rep)
         self.assertIn("not signed", rep["reason"])
+
+    @NEEDS_LIBS
+    def test_a_1_2_pack_whose_signature_was_removed_is_refused(self):
+        """The downgrade: manifest.cose and "signed_manifest" removed, the 1.2 result kept. Its aegis.pack-signed says
+        that its verifier signs every pack manifest, so the pack is refused without --require-signed-export."""
+        self.add("dev", EatDevice())
+        self.cycle()
+        out, _, _ = self.export()
+        self.strip_signature(out)
+        rc, rep = checker("pack", out, "--verifier-key", thumb(self.vpk).hex(), "--device-key", thumb(te.PK).hex())
+        self.assertEqual((rc, rep["verified"]), (1, False), rep)
+        self.assertIn("aegis.pack-signed", rep["reason"])
+        self.assertIn("it was removed", rep["reason"])
+
+    def test_every_1_2_result_says_its_packs_are_signed(self):
+        self.add("dev", EatDevice())
+        self.add("off", EatDevice(), disabled=True)
+        self.cycle()
+        for name in ("dev", "off"):
+            self.assertIs(self.ver(name)["aegis.pack-signed"], True)
+            self.assertTrue(self.read(name)["pack_signed"])
+        payload = cbor.loads(cose.parse(self.result("dev")).payload)
+        ver = next(iter(payload[266].values()))[1006]
+        for bad in (False, 1, "true", None):
+            ver["aegis.pack-signed"] = bad
+            with self.assertRaises(eat.Refused):
+                eat.read_ear(cose.sign1(self.vsk, self.vpk, cbor.dumps(payload, sort=True)), self.vpk)
+        del ver["aegis.pack-signed"]
+        self.assertFalse(eat.read_ear(cose.sign1(self.vsk, self.vpk, cbor.dumps(payload, sort=True)), self.vpk)
+                         ["pack_signed"])
 
     def test_one_key_three_objects_none_taken_for_another(self):
         """The verifier's key signs results, audit batches and pack statements: each reader requires its own typ."""
@@ -733,11 +834,13 @@ class Compatibility(V12):
         # a result as 1.1 wrote it (none of the new claims) reads in 1.2 with them absent
         payload = cbor.loads(cose.parse(self.result("dev")).payload)
         ver = next(iter(payload[266].values()))[1006]
-        for k in ("aegis.audit-log", "aegis.audit-batch", "aegis.audit-head", "aegis.warnings", "aegis.min-trust"):
+        for k in ("aegis.audit-log", "aegis.audit-batch", "aegis.audit-head", "aegis.warnings", "aegis.min-trust",
+                  "aegis.pack-signed"):
             del ver[k]
         old = cose.sign1(self.vsk, self.vpk, cbor.dumps(payload, sort=True))
         r = eat.read_ear(old, self.vpk)
-        self.assertEqual((r["audit_head"], r["warnings"], r["disabled"], r["min_trust"]), (None, None, False, None))
+        self.assertEqual((r["audit_head"], r["warnings"], r["disabled"], r["min_trust"], r["pack_signed"]),
+                         (None, None, False, None, False))
         p = os.path.join(self.d, "old.cbor")
         with open(p, "wb") as f:
             f.write(old)

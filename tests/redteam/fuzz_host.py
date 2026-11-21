@@ -47,8 +47,8 @@
      nothing else, and the checker (tools/verify_evidence.py) agrees on every one. A result whose new claims
      (aegis.audit-log/-batch/-head, aegis.warnings, aegis.disabled, aegis.min-trust) hold anything is read by
      eat.read_ear only if each is of its form, and the checker agrees. A policy entry whose "disabled" and
-     "min_trust" hold anything: attest() never raises, contacts the endpoint only where it may admit it, admits
-     exactly where the floor is met, and the result made of the verdict reads back and says "disabled".
+     "min_trust" hold anything: attest() never raises, contacts the endpoint only where it may admit it (not where
+     the floor can never be met by the entry's profile), admits exactly where the floor is met, and the result made of the verdict reads back and says "disabled".
 
   fuzz_host.py [iterations]     prints a JSON summary, exit 0 only if no property broke
 """
@@ -1169,7 +1169,8 @@ NEW_CLAIMS = {"aegis.audit-log": lambda: R.choice([bytes(16), bytes(15), "00" * 
               "aegis.audit-head": lambda: R.choice([bytes(32), bytes(33), None]),
               "aegis.warnings": lambda: R.choice([["w"], ["w"] * 8, ["w"] * 9, [], [""], ["x" * 301], "w", [1]]),
               "aegis.disabled": lambda: R.choice([True, False, 1, None]),
-              "aegis.min-trust": lambda: R.choice(["trustzone", "", "x" * 65, 3, None])}
+              "aegis.min-trust": lambda: R.choice(["trustzone", "", "x" * 65, 3, None]),
+              "aegis.pack-signed": lambda: R.choice([True, False, 1, None, "true"])}
 for _ in range(min(N, 600)):
     c = cbor.loads(cbor.dumps(good_ear_claims))
     ver = next(iter(c[266].values()))[1006]
@@ -1186,7 +1187,8 @@ for _ in range(min(N, 600)):
                 and (r["warnings"] is None or (1 <= len(r["warnings"]) <= 8 and all(
                     isinstance(w, str) and 1 <= len(w) <= 300 for w in r["warnings"])))
                 and (not r["disabled"] or not r["admitted"])
-                and (r["min_trust"] is None or (isinstance(r["min_trust"], str) and 1 <= len(r["min_trust"]) <= 64))):
+                and (r["min_trust"] is None or (isinstance(r["min_trust"], str) and 1 <= len(r["min_trust"]) <= 64))
+                and r["pack_signed"] == (ver.get("aegis.pack-signed") is True)):
             v12["result_misread"] += 1
             v12_broken("read_ear accepted a 1.2 claim not of its form: %r" % (ver,))
     except (eat.Refused, cose.Refused):
@@ -1220,10 +1222,11 @@ for i in range(min(N, 400)):
             ep[key] = R.choice(values) if R.random() < 0.85 else rand_cbor(1)
     valid = ("disabled" not in ep or isinstance(ep["disabled"], bool)) and (
         "min_trust" not in ep or (isinstance(ep["min_trust"], str) and ep["min_trust"] in fleet.TRUST_ORDER))
-    contact = valid and ep.get("disabled") is not True
     label = "development-shared-key" if devhuk else "trustzone"
-    want = contact and ("min_trust" not in ep or fleet.TRUST_ORDER.index(label) <=
-                        fleet.TRUST_ORDER.index(ep["min_trust"]))
+    # a floor the entry's profile can never meet is a policy error: the entry is not asked either
+    met = "min_trust" not in ep or (valid and fleet.TRUST_ORDER.index(label) <= fleet.TRUST_ORDER.index(ep["min_trust"]))
+    contact = valid and ep.get("disabled") is not True and met
+    want = contact
     platform = DEV_HUK if devhuk else fleet.TEE_PROFILE
 
     def make(ch, platform=platform):
