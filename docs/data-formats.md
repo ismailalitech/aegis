@@ -228,8 +228,8 @@ Both are COSE_Sign1 with ML-DSA-65; [`audit-and-policy.md`](audit-and-policy.md)
 
 - **Signed policy** (`fleet.cose`), typ `application/vnd.aegis.fleet-policy+cbor`, by a policy-signing key from
   `policy-signers.json`: `{1: "tag:github.com,2026:ismailalitech/aegis/policy/v1", 2: version, 3: issued, 4: the
-  policy JSON (bstr, byte for byte), 5: signer, ? 6: audience}`. Its SHA-256 is the one results and the audit log
-  name, signed or not.
+  policy JSON (bstr, byte for byte), 5: signer, ? 6: audience}`. The SHA-256 of the JSON inside is the policy hash
+  that results, packs and the audit log name, signed or not.
 - **Audit log** (`STATE_DIR/audit/audit-NNNNNN.cbor`), a CBOR sequence of batch records, typ
   `application/vnd.aegis.audit-batch+cbor`, by the verifier's identity key: `{1: format, 2: log id (bstr 16), 3: batch,
   4: SHA-256 of the previous record (32 zero bytes for batch 1), 5: time, 6: first entry, 7: [entries], ? 8: due}`,
@@ -238,6 +238,14 @@ Both are COSE_Sign1 with ML-DSA-65; [`audit-and-policy.md`](audit-and-policy.md)
 
 Check them without Aegis code: `tools/verify_evidence.py` (packs, results, evidence, endorsements) and
 `tools/verify_audit.py` (audit log, signed policy), which import only pycose, cbor2 and cryptography.
+
+## Tests
+
+`tests/host/test_golden_vectors.py`: the schemas use only the keywords its small validator implements (no JSON
+Schema package is a dependency), their closed lists are the code's constants, the policy schema refuses what
+`fleet.py policy_errors` refuses, this page names every trust and enrolment value and every `aegis.*` claim the code
+writes; the committed vectors verify with the standalone checkers and match the schemas, and a fresh run of the
+generator makes the same structure.
 
 ## Aegis 1.2
 
