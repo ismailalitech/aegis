@@ -19,23 +19,40 @@ What has run on the bench, each with the record or test that shows it:
   heartbeats (`endpoints/stm32h573/`;
   [`evidence/two-boards/board2-first-boot.txt`](evidence/two-boards/board2-first-boot.txt),
   [`evidence/stm32-sstack/heartbeat-sstack.txt`](evidence/stm32-sstack/heartbeat-sstack.txt)).
-- An NXP FRDM-RW612 runs the prover as a TF-M secure partition: its ML-DSA-65 key comes from the die key in ELS,
-  both flash partitions are measured before non-secure code runs, and the verdict says trustzone trust
+- An NXP FRDM-RW612 runs the prover as a TF-M secure partition (NXP's TF-M v2.1.4): its ML-DSA-65 key comes from the
+  die key in ELS, both flash partitions are measured before non-secure code runs, and the verdict says trustzone trust
   (`endpoints/rw612/tfm/`; [`evidence/rw612-tfm/trustzone-prover.txt`](evidence/rw612-tfm/trustzone-prover.txt)).
   The earlier single-image Zephyr prover is in `endpoints/rw612/prover/`.
 - A Zynq UltraScale+ endpoint (TE0807 module) runs the protocol in an OP-TEE trusted application, with Linux only
-  carrying the lines, and has been admitted (`endpoints/zynqmp/`;
-  [`evidence/zynqmp/optee-phase-a.txt`](evidence/zynqmp/optee-phase-a.txt)). It replaces the retired Zybo board;
-  the Zybo's Linux prover script (`endpoints/zybo/aegis_linux_prover.py`) is still the software-trust prover
+  carrying the lines (`endpoints/zynqmp/`; [`evidence/zynqmp/optee-phase-a.txt`](evidence/zynqmp/optee-phase-a.txt)).
+  Since 20 November 2026 the board runs TA 0.2.0, built on the Prover SDK: its sessions are bound to its quote
+  (transcript v2) and its key is endorsed, with `"endorsement": "required"` in its policy entry
+  ([`docs/zynqmp-sdk-port.md`](docs/zynqmp-sdk-port.md#result-on-the-bench-2026-11-20)). It replaces the retired Zybo
+  board; the Zybo's Linux prover script (`endpoints/zybo/aegis_linux_prover.py`) is still the software-trust prover
   ([`evidence/zynqmp/software-trust.txt`](evidence/zynqmp/software-trust.txt)).
+- The Prover SDK (`sdk/`, release 1.0.0, API version 1; [`docs/sdk-versioning.md`](docs/sdk-versioning.md)) is the
+  one protocol core every endpoint builds, with a platform layer per chip. The STM32 partition (SPE 9de76167), the
+  RW612 partition (0.3.2) and the ZynqMP TA (0.2.0) run it on the bench; the STM32 and RW612 images give the same
+  answers byte for byte as the images before the SDK ([`evidence/sdk-core/summary.txt`](evidence/sdk-core/summary.txt)).
+- Device keys are endorsed at the bench instead of trusted on first use: the two STM32s and the RW612 since
+  20 November 2026, with a substituted key and a missing record quarantined
+  ([`evidence/endorsed-enrolment/bench/live-switch.txt`](evidence/endorsed-enrolment/bench/live-switch.txt);
+  [`docs/enrolment.md`](docs/enrolment.md)), and the ZynqMP since its move to TA 0.2.0.
 - A non-secure image signed with the trusted key but changed is quarantined on its measurement
   ([`evidence/console/demo-journal.txt`](evidence/console/demo-journal.txt)), and an Arduino Uno that cannot attest
   is quarantined on every cycle ([`evidence/console/two-endpoints-demo.txt`](evidence/console/two-endpoints-demo.txt)).
 - Fuzzers for both secure partitions ([`evidence/rw612-tfm/fuzzing.txt`](evidence/rw612-tfm/fuzzing.txt),
-  [`evidence/stm32-kemfix/fuzzing.txt`](evidence/stm32-kemfix/fuzzing.txt)), a red-team harness (`tests/redteam/`)
-  and a regression run check it. `tools/regression.sh --board --with-expiry` has 14 stages; the last full run passed
-  14 of 14 ([`evidence/console/regression-14of14-20261119.txt`](evidence/console/regression-14of14-20261119.txt)).
-  Its first stage, the host suite in `tests/host/`, runs 87 tests.
+  [`evidence/stm32-kemfix/fuzzing.txt`](evidence/stm32-kemfix/fuzzing.txt); since the SDK one harness,
+  `tests/fuzz/fuzz_sdk_core.c`, which CI runs in the RW612, STM32 and EAT modes), a red-team harness
+  (`tests/redteam/`) and a regression run check it. `tools/regression.sh --board --with-expiry` has 14 stages; its
+  first stage, the host suite in `tests/host/`, runs about 450 tests. The last full runs, at the start, middle and end
+  of the soak below, passed 14 of 14 each with the ZynqMP connected
+  ([`evidence/soak-20261121/NOTE.md`](evidence/soak-20261121/NOTE.md)); the run before, without the ZynqMP:
+  [`evidence/console/regression-14of14-20261119.txt`](evidence/console/regression-14of14-20261119.txt).
+- A 3-hour soak on three live boards (the second STM32, the RW612 and the ZynqMP; credentials shortened to 600 s, an
+  expiry round every hour): 40 of 40 samples answered, 37 session renewals per endpoint, no quarantine, reset or
+  reboot ([`evidence/soak-20261121/`](evidence/soak-20261121/NOTE.md)). Its report says FAIL on one item, a false
+  clock-rate estimate of the runner, not of the board; the note explains it and the fix in `tools/soak.py`.
 - The gateway's identity and quote service also runs on an ordinary Linux host (`aegisd --platform linux`), with
   OpenSSL (3.5 or later) or liboqs as the ML-DSA/ML-KEM backend
   ([`tests/host/test_linux_host_verifier.py`](tests/host/test_linux_host_verifier.py)).
@@ -49,9 +66,10 @@ What has run on the bench, each with the record or test that shows it:
   It adds nothing against someone who can flash code of their own, which on this bench is anyone with the debugger
   (the RW612 has no secure boot; the STM32s are in the Open state with TF-M's public development signing keys): such
   an image holds the key and can sign a transcript for a quote it saw. Closing that needs a device key that depends
-  on the measured code. On both STM32s since 20 November 2026, including the swap to the previous image
-  ([`evidence/transcript-v2/`](evidence/transcript-v2/)); tested on the PC
-  ([`tests/host/test_transcript.py`](tests/host/test_transcript.py)); the RW612 (TF-M 0.3.0) since the same day; the gateway requires it for all three ([`evidence/transcript-v2/`](evidence/transcript-v2/)).
+  on the measured code. On both STM32s and the RW612 since 20 November 2026, including on an STM32 the swap to the
+  previous image ([`evidence/transcript-v2/`](evidence/transcript-v2/)); on the ZynqMP since TA 0.2.0
+  ([`docs/zynqmp-sdk-port.md`](docs/zynqmp-sdk-port.md)); tested on the PC
+  ([`tests/host/test_transcript.py`](tests/host/test_transcript.py)).
 
 One decision cycle, every 30 seconds per endpoint (the default `--interval` of `gateway/aegisd/fleet.py`):
 
@@ -69,7 +87,8 @@ namespaces only ([`tests/host/test_enforcement.sh`](tests/host/test_enforcement.
 
 ## Running it
 
-The documentation is indexed in [`docs/README.md`](docs/README.md).
+The documentation is indexed in [`docs/README.md`](docs/README.md); what is in this release, how it was checked
+and its known limits are in [`docs/release-notes-1.0.md`](docs/release-notes-1.0.md).
 
 Without any hardware: [`container/`](container/README.md) runs the verifier, a simulated device built on the Prover
 SDK, the standalone evidence and audit checkers and the host test suite from one command; or on the PC itself,
