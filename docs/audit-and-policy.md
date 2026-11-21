@@ -34,6 +34,7 @@ of their own in the protected header:
 | evidence, attestation result, endorsement | `application/eat+cwt` | device, verifier, endorser |
 | audit batch | `application/vnd.aegis.audit-batch+cbor` | verifier |
 | signed policy | `application/vnd.aegis.fleet-policy+cbor` | policy signer |
+| an evidence pack's signed statement (Aegis 1.2, [evidence-format.md](evidence-format.md)) | `application/vnd.aegis.evidence-pack+cbor` | verifier |
 
 `typ` is under the signature and every reader requires its own, so the verifier's signature on an attestation
 result is never a batch record and the other way round
@@ -78,7 +79,7 @@ The loop adds an entry **when something changes, not every cycle** (`fleet.py`, 
 | `start` | | the loop or a `once` run began. Every endpoint's decision is then logged once | command, platform, enforcing or not, the verifier's key hash |
 | `policy` | | the policy in use changed (first cycle included) | its SHA-256, the one before; for a signed policy its version, signer, signer key hash and the signed file's hash |
 | `policy-refused` | | a policy file was refused or could not be read; once per reason | why; the hash of the policy that stays in use |
-| `admit`, `refuse` | endpoint | the endpoint's decision is the first since `start`, or differs from its last one | kind, the address asked, how far the appraisal got (`stage`), device key hash, measurements, enrolment, trust, endorsement record and endorser, evidence format, enforcement result, the quote's hash, the attestation result's hash if one was issued; for `refuse` up to six reasons |
+| `admit`, `refuse` | endpoint | the endpoint's decision is the first since `start`, or differs from its last one | kind, the address asked, how far the appraisal got (`stage`), device key hash, measurements, enrolment, trust, endorsement record and endorser, evidence format, enforcement result, the quote's hash, the attestation result's hash if one was issued; `disabled` (true) and `min_trust` (the floor) where the policy sets them; for `refuse` up to six reasons (`disabled by policy`, `trust X below min_trust Y`, ...) |
 | `issue` | endpoint | a session credential was issued | session id, expiry, binding (`transcript-v2` or `unbound`) |
 | `revoke` | endpoint | a stored session was deleted, or replaced before its time (a failed heartbeat, another key, another binding) | session id, why, whether another one replaced it |
 | `expiry` | endpoint | a stored session reached the end of its life and was replaced | session id, its expiry |
@@ -90,7 +91,9 @@ The loop adds an entry **when something changes, not every cycle** (`fleet.py`, 
 A decision is remembered under the entry's name and address, so two entries that a policy names alike do not take
 turns in the log. **What makes a decision another decision:** admitted or not, the stage (`policy`, `endorsement`,
 `no-evidence`, `evidence`, `appraised`), the device key, the measurements, how the key is trusted (enrolment, trust
-label, endorsement record), the evidence format, and whether enforcement worked. The *words* of a refusal are
+label, endorsement record), the evidence format, whether enforcement worked, whether the entry is disabled, and its
+trust floor. So disabling an entry, or raising its floor above what it meets, is an entry of its own; an endpoint
+refused every cycle for the same floor is not logged again. The *words* of a refusal are
 recorded but are not part of it: some carry a time or an errno that differs from cycle to cycle, and an endpoint
 that stays refused for the same reason must not cost a batch per cycle
 (`test_a_decision_that_changes_is_an_entry_and_one_that_only_words_itself_differently_is_not`).
@@ -202,6 +205,18 @@ admission TTL as slack. A log whose last batch is past its `due` is **stale**: t
 cut off. The checker fails such a log by default (`--at TIME` checks as of an earlier time, for an archived copy;
 `--no-freshness` turns it off). A `once` run and the enrolment commands make no promise of their own; they repeat a
 standing one unchanged and drop one that has lapsed.
+
+**A result is an anchor too (Aegis 1.2).** With the audit log on, every attestation result the loop signs names the
+log's last batch record on disk at that moment (`aegis.audit-log`, `aegis.audit-batch`, `aegis.audit-head`;
+[evidence-format.md](evidence-format.md), "Aegis 1.2: what a result says besides"). The batch was written before the
+result, so it never holds the result's own decision: that goes into a later batch, at the end of the cycle or up to
+`min_interval_s` later, with the result's hash (`result_sha256`) when the decision changed. A result handed to a
+relying party therefore carries a head of the log with it:
+
+    tools/verify_audit.py log DIR --key KEY --result attestation-result.cbor
+
+fails unless that batch is in the log byte for byte (cut off before it, written again, replaced), and reports where
+the result's decision is, if the log has it. It costs the loop one `stat` of the last segment per result.
 
 **Rotation.** A new segment is begun when the current one would pass `segment_bytes` (1 MiB: three to four days on
 the bench). The chain runs through the segments, so a segment that was copied away and checked can be deleted: the
@@ -421,7 +436,8 @@ from the endorser's, with a record of its own kind. `policy-sign`:
 ### The checker
 
     pip install pycose==1.1.0 'cbor2<6' cryptography
-    tools/verify_audit.py log DIR --key KEY [--anchor FILE] [--head N:SHA256] [--at TIME] [--allow-pruned] [--entries]
+    tools/verify_audit.py log DIR --key KEY [--anchor FILE] [--head N:SHA256] [--result FILE] [--at TIME]
+                              [--allow-pruned] [--entries]
     tools/verify_audit.py policy FILE --key KEY [--audience FLEET] [--min-version N] [--extract OUT.json]
 
 Like `verify_evidence.py` it imports nothing of this repository, and its numbers were written from this document.
@@ -430,6 +446,72 @@ Like `verify_evidence.py` it imports nothing of this repository, and its numbers
 attestation result calls it), and can write out the JSON inside. It has no counter: `--min-version` is how a
 relying party says which version it expects at least. The host fuzzer holds the two readers of each format to each
 other.
+
+## Disabled entries and trust floors (Aegis 1.2)
+
+Two policy keys that only ever make the verifier stricter. Neither is in a policy unless the operator puts it there;
+a policy without them runs exactly as before.
+
+### `"disabled": true`
+
+    { "name": "frdm-rw612", "kind": "aegis-device", ..., "disabled": true }
+
+The entry stays in the policy and the endpoint is **not contacted**. Every cycle its verdict is QUARANTINED with the
+reason `disabled by policy` and `"disabled": true` (`fleet.py`, `attest`), so everything a quarantine does follows:
+the enforcement hook runs `quarantine`, a stored session is revoked (`credential_step`, as for any quarantined
+endpoint this verifier issues credentials to), the signed result says `aegis.disabled` with status `incomplete`
+(nothing was appraised; not `contraindicated`, which says that evidence was found wanting), and the audit log records
+a `refuse` with `disabled` when the decision changes. `fleet.py check` lists the entry as `DISABLED` and does not count
+it as a mistake (exit status 0); `fleet.py session` skips it, as it does not contact it either. `"disabled": false` is the entry as before. Any other value (`"yes"`, `1`, `null`)
+is a policy error: the entry is refused without being contacted, and `check` says so with exit status 1.
+
+It is the way to take a device out of the fleet without losing its entry (keys, endorsement pin, address): removing
+the entry also stops the loop from asking it, but leaves its session to run out and its enforcement to lapse with the
+TTL, and the audit log then says `remove`, not `refuse`.
+
+### `"min_trust"`: a floor on the trust label
+
+    { "min_trust": "device-key", "endpoints": [ { "name": "zybo", ..., "min_trust": "software" }, ... ] }
+
+Every admitted verdict carries a trust label (`fleet.py`, `attest`). They are ordered, strongest first:
+
+| Label | Who holds the identity key, and who measures | Kinds |
+|---|---|---|
+| `trustzone` | a secure world the measured software cannot reach holds the key and takes the measurements | `aegis-device` with `aegis-rw612-tfm-v1`; `aegis-tee` with the PUF profile; `aegis-pq` with its own ES256 key |
+| `trustzone-devkey` | as `trustzone` for the ML-DSA-65 key, but the platform's token is signed with TF-M's published development key, so what the token says rests on the ML-DSA-65 key alone | `aegis-pq` pinned to TF-M's development key |
+| `device-key` | the chip's key store derives the key, but the firmware measures itself: the key proves the chip, not the firmware | `aegis-device` with `aegis-rw612-els-v1` |
+| `software` | Linux holds the key and takes the measurements: whoever is root on the host has both | `aegis-linux` |
+| `development-shared-key` | the key is the same on every chip of that profile: a quote proves the firmware, not which device sent it | `aegis-tee` with the development HUK; `psa` pinned to TF-M's development key |
+
+The order follows what an attacker needs to forge a good quote: code in the secure world (the first two; the second
+also loses the platform's own signature as a second witness), code on the device (`device-key`), root on a host
+(`software`), or nothing device-specific at all (`development-shared-key`, which also does not say which device it
+is). A verdict with **no** label (kind `psa` with its own key; `aegis-pq` without an ES256 key) meets no floor.
+
+`"min_trust"` in an entry, or at the policy's top level for every entry that does not set its own (the entry's own
+replaces the fleet's, as with `max_endorsement_age_s`, and `check` says when it differs), is a floor.
+
+**A floor the entry can never meet is a policy error.** The label of an entry's verdicts follows from its kind, its
+pinned profile and its ES256 key file (`fleet.py`, `possible_trust`). If no label it can get meets its floor, the
+entry is refused by the policy rules (`policy_errors`) without being contacted, every cycle, with
+`policy: entry N can NEVER meet min_trust Y: its trust is X (strongest first: ...)`; the result's status is
+`incomplete`, and `fleet.py check` prints the same line as `REFUSED` with exit status 1. The mistake is the policy's,
+and it is said as the policy's, not as a quarantine that looks like the endpoint's fault.
+
+**An entry without a trust label cannot have a floor**: kind `psa` with its own ES256 key, and `aegis-pq` without
+`iak_pub_pem`, meet none, so any floor, its own or the policy's top-level one, refuses the entry. A fleet with such
+entries cannot use a top-level `min_trust`; give the other entries a floor each instead. No label is made up for them.
+
+**An entry cannot opt out of a top-level floor.** `"min_trust": null` (or any value that is not one of the five
+labels, exactly) is a policy error, not "no floor": the entry is refused rather than run without the floor the
+policy set. The lowest floor an entry can have is `"development-shared-key"`, which every labelled verdict meets;
+that is how one entry says "no floor beyond having a label". For no floor at all, leave `min_trust` out of the top
+level and set it per entry.
+
+At run time the floor is checked again, every cycle, on the label of that cycle's quote: a verdict below it would be
+QUARANTINED with `trust X below min_trust Y` and status `contraindicated`. With the policy rules above this does not
+happen; it is there should a label ever differ from what the configuration says. The verdict carries `"min_trust"`
+(also when the entry is refused for it), the result `aegis.min-trust`, the audit log `min_trust`.
 
 ## Threat model
 
@@ -446,6 +528,7 @@ from backup, an operator's mistake, a file-write flaw in something that runs bes
 | an older signed policy is put back (an endpoint that was removed, a measurement that was withdrawn) | the version counter | deleting the counter with the same access |
 | a key file beside a signed policy is replaced | `pq_pub_sha256`, `endorsement_sha256`, `pk_sha256` | entries without the pin; `iak_pub_pem` |
 | a policy signed for another fleet is copied here | `audience` | verifiers without one |
+| a device that should no longer be in the fleet, or a weaker kind of device, is admitted | `"disabled": true`; `"min_trust"`, per entry or fleet-wide; `check` names a floor that is never met | a policy without them |
 | a flapping or hostile endpoint makes the verifier write | entries only on change; at most one batch per `min_interval_s` (300 s); `max_segments` | without `max_segments` the directory grows for ever (about 1 to 1.5 MB a day at worst) |
 | hostile verdict content breaks the log | everything bounded and encoded before it is queued; fuzzed | |
 | **root on the gateway** | an anchor kept elsewhere shows a log written again; the policy-signing key is not on the gateway, so a new *signed* policy cannot be made there | root can replace the signers file, delete the counter, stop the log, or sign a log that leaves things out as they happen. As before, root on the gateway is outside what Aegis defends against |
@@ -457,6 +540,9 @@ from backup, an operator's mistake, a file-write flaw in something that runs bes
 | audit log | off: nothing written, no key opened, verdicts unchanged | `"audit_log": true` in the policy |
 | signed policy | off: the policy is the JSON file | a signers file on the verifier |
 | key pin | none | `"pq_pub_sha256"` in an entry |
+| disabled entry (1.2) | none: every entry is asked | `"disabled": true` in an entry |
+| trust floor (1.2) | none | `"min_trust"` in an entry or at the top level |
+| the log's head in results (1.2) | only when the audit log and results are both on | (both) |
 
 With all three off, `fleet.py` behaves as on `main`: the same verdicts, the same files in the state directory, the
 same journal lines; the modules of this note are not even imported
@@ -476,6 +562,7 @@ Nothing changes on any endpoint, in the SDK or on the wire; `tools/sdk_golden.py
 | the signer: its own key, export, sign, confirmation, `--pin-keys`, versions and the ledger | (`Signer`) |
 | the standalone checker: no shared code, the same reading as the verifier's, every refusal, anchor, head, freshness, pruning; a signed policy | (`Checker`) |
 | hostile logs, policy files and verdicts against both readers and the loader | `tests/redteam/fuzz_host.py` section 7 (stage `host-redteam`) |
+| Aegis 1.2: `disabled` and `min_trust` (the order, the fleet-wide floor, hostile values, `check`, the session revoked, the hook), their entries in the log, a result's audit head and `verify_audit.py --result`, a torn end found while looking at the head | `tests/host/test_verifier_v12.py`; `fuzz_host.py` section 8 |
 | anchors off the gateway: fetched from `fleet.py audit --out`, kept append-only, every finding; garbled anchors, another key, a replayed older anchor, a forked, truncated, gapped or replaced log, a hostile archive, a changed store | `tests/host/test_audit_anchors.py`; `tools/audit_anchors.py --selftest` |
 
 CI runs all of it in the host regression, and a step fails if a test of the checker was skipped for want of its
@@ -492,7 +579,9 @@ libraries.
    `--head` lines), truncation at a record boundary is undetectable: only the last record is checked, and batches
    from `once`, the enrolment commands and `stop` carry no `due` time. `tools/audit_anchors.py watch` on the bench PC
    takes them off ("Anchors off the gateway"); what was written after its last fetch is still unprotected, and it
-   must be running. An attestation result naming the log's head is not done.
+   must be running. Since Aegis 1.2 every attestation result names the log's head as it was when the result was
+   signed, so a relying party that keeps results keeps anchors; the head lags the result's own decision by up to a
+   cycle or `min_interval_s`.
 3. **The verifier's clock** is the only one. Times in the log are what the gateway thought the time was; a reader
    is told where the clock went back, not what the right time was. The promise is judged on the reader's clock.
 4. **Entries held in memory are lost with the process**: those waiting for `min_interval_s`, or for a disk that

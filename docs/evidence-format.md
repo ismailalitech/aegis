@@ -205,7 +205,15 @@ as before and says so once.
                 ? "aegis.trust", ? "aegis.enrolment", ? "aegis.session-binding", ? "aegis.device-key-sha256",
                 ? "aegis.quote-sha3-256": bstr,          ; T1's token hash
                 ? "aegis.evidence-sha256": bstr,         ; SHA-256 of the evidence as received
-                ? "aegis.enforcement" },
+                ? "aegis.enforcement",
+                ; Aegis 1.2, each optional ("Aegis 1.2: what a result says besides" below)
+                ? "aegis.warnings": [ 1*8 tstr .size (1..300) ],   ; the verdict's warning, the vector's details
+                ? "aegis.disabled": true,                ; the entry says "disabled": true
+                ? "aegis.min-trust": tstr,               ; the trust floor the verdict was held to
+                ? "aegis.pack-signed": true,             ; in every 1.2 result: this verifier signs its pack manifests
+                ? ( "aegis.audit-log": bstr .size 16,    ; the audit log's last batch on disk when this was signed:
+                    "aegis.audit-batch": uint,           ;   all three or none
+                    "aegis.audit-head": bstr .size 32 ) },
         ? 1014: { "<endorser>": { "aegis.record-sha256", "aegis.device-key-sha256", "aegis.device-state", 6: iat } }
       } } }
 
@@ -227,7 +235,9 @@ How a verdict becomes a vector (`common/eat.py`, `appraisal`):
 
 The status is `affirming` only if the endpoint is admitted, every value in the vector is affirming and the verdict
 carries no warning; `warning` if it is admitted otherwise; `contraindicated` if evidence was appraised, or the key's
-endorsement refused, and the endpoint is not admitted; `incomplete` if there was nothing to appraise. **It is never
+endorsement refused, and the endpoint is not admitted; `incomplete` if there was nothing to appraise (an entry the
+policy says is `"disabled"` is one: it is not asked; an entry whose `min_trust` it can never meet is another: the
+policy refuses it before asking). **It is never
 better than the verdict**: not admitted is never affirming or warning. A reader (`common/eat.py`, the checker)
 refuses a result whose `aegis.admitted` and status disagree in either direction: admitted under contraindicated or
 incomplete, or not admitted under affirming or warning (`test_the_status_is_never_better_than_the_verdict`,
@@ -235,6 +245,42 @@ incomplete, or not admitted under affirming or warning (`test_the_status_is_neve
 
 A relying party checks: the signature under the verifier key it trusts (by thumbprint), the profile, `exp`, the
 status, and the policy's `ni` name if it knows which policy it expects. A result is about 4.4 kB.
+
+### Aegis 1.2: what a result says besides
+
+Verifier claims (in 1006) added in Aegis 1.2. Each is optional for a reader. `aegis.pack-signed` is in every result
+a 1.2 verifier signs; the others are written only when they have something to say. A 1.1 reader
+(`common/eat.py`, `tools/verify_evidence.py` of v1.1.0) skips verifier claims it does not know and accepts these
+results; a 1.2 reader accepts a 1.1 result and reports the claims as absent
+(`test_the_1_1_result_reader_accepts_a_1_2_result`, `test_the_1_1_checker_verifies_a_1_2_pack_and_the_1_2_checker_a_1_1_result`).
+A 1.2 reader refuses a claim that is there and not of its form, as it does for every other claim.
+
+| Claim | Value | When |
+|---|---|---|
+| `aegis.warnings` | 1 to 8 texts of 1 to 300 characters | the verdict has a warning, or the vector has details (1011). First the verdict's warning text as the journal shows it, then each vector detail as `"<category>: <text>"` (`instance-identity: ...`, `executables: ...`), cut to the bounds. Unlike 1010 (ear.status-details), it is there whatever the status, so an admitted endpoint's cautions are in one place |
+| `aegis.disabled` | `true` | the policy entry says `"disabled": true` (docs/audit-and-policy.md). The status is then `incomplete` and 1010 says `disabled by policy`. A reader refuses it with `aegis.admitted` true |
+| `aegis.min-trust` | a trust label | the entry has a trust floor (its own `"min_trust"` or the policy's): the floor the verdict was held to, met or not. A floor the entry's kind and keys can never meet is a policy error: status `incomplete`, 1010 says `policy: entry N can NEVER meet min_trust Y: ...`. A label below the floor at run time (which the policy check should have made impossible) is `contraindicated`, `trust X below min_trust Y` |
+| `aegis.pack-signed` | `true` | always, from a 1.2 verifier: a pack exported with this result carries `manifest.cose` ("The signed manifest" below). A reader refuses any other value |
+| `aegis.audit-log`, `aegis.audit-batch`, `aegis.audit-head` | 16 bytes; a number from 1; 32 bytes | the policy keeps an audit log and its directory holds a batch: the log's id, the number of its **last batch record on disk when this result was signed**, and the SHA-256 of that record. All three or none |
+
+**Which head.** The fleet loop signs a verdict's result before it tells the audit log about the decision
+(`fleet.py`, `run_once`: `issue_result`, then `AuditTrail.decision`), and the log writes what it was told at the end
+of the cycle or, with `min_interval_s`, up to that long later. So the head a result names is a batch written
+**before** the result: never the one that records the result's own decision, which comes in a later batch (with the
+result's SHA-256 as `result_sha256`, when the decision changed). The head is read from disk under the log's lock at
+signing time (`audit.Log.head()`: a `stat` of the last segment when nothing else wrote), so it includes batches that
+another writer (an enrolment command) appended. The first result of a log that has no batch yet names none.
+
+What it gives a relying party: the result is tied to one log, and to a point in it. Given the log, `verify_audit.py
+log DIR --key KEY --result RESULT` requires that batch to be in the log, byte for byte (as an anchor or `--head`):
+a log cut off before it, written again from there or before, or replaced by another log, fails; the report also
+says where the result's own decision is, if the log has it. Whoever holds a result therefore holds an anchor of the
+log as of that result. The batch's time is the log's own lower bound on when the result was signed; the report says
+if the result's `iat` is earlier (the verifier's clock went back).
+
+Why three claims and not one array: the 1.1 checker prints the verifier claims with each byte string at the top
+level turned into hex, and a byte string inside a list or map would stop it from printing its report. Every new
+claim is a byte string, a number, a text, `true` or a list of texts for that reason.
 
 The verifier keeps each cycle's evidence as received and its result under `STATE_DIR/attestation/<name>/`
 (`evidence.cbor`, or `evidence.token` and `evidence.sig` for the older quote; `result.cbor`; `meta.json`), replaced
@@ -279,7 +325,8 @@ form: the first byte says which it is). JSON stays the tool's default.
 writes a new directory for one endpoint from the last cycle:
 
     manifest.json                 format aegis-evidence-pack-v1: every file's SHA-256, the policy's hash and ni name,
-                                  the result's status, the keys' thumbprints
+                                  the result's status, the keys' thumbprints, the export time ("exported")
+    manifest.cose                 Aegis 1.2: the verifier's signature over manifest.json and the export time
     evidence.cbor                 the EAT (or evidence.token + evidence.sig: the older quote; evidence.token alone: a PSA token)
     attestation-result.cbor       the EAR
     endorsement.cbor | .json      the entry's record, if it has one
@@ -295,6 +342,7 @@ lets pycose decode the message and build the Sig_structure, and gives the verifi
 
     pip install pycose==1.1.0 'cbor2<6' cryptography
     tools/verify_evidence.py pack DIR --verifier-key <thumbprint> --endorser-key <thumbprint> --device-key <thumbprint>
+                                      [--require-signed-export]
     tools/verify_evidence.py evidence FILE --key KEY [--nonce HEX]
     tools/verify_evidence.py result FILE --key KEY
     tools/verify_evidence.py endorsement FILE --key KEY
@@ -303,9 +351,46 @@ For a pack it checks every file against the manifest; the evidence under the dev
 verifier key and the endorsement under the endorser key; and that the three speak of the same thing: the result
 names this evidence file's hash, the quote hash, the device key, the nonce and the measurements of the evidence, the
 policy of the manifest, and the endorsement names this device, its key and the measurements of an admitted result.
-The manifest is not signed, so what the signed result names must be in the pack: the evidence file when the result
-has `aegis.evidence-sha256` (and `evidence.sig` with the older quote), and the endorsement when the result has endorser
-claims or `--endorser-key` was given. A pack with one of them left out does not verify.
+What the signed result names must be in the pack: the evidence file when the result has `aegis.evidence-sha256` (and
+`evidence.sig` with the older quote), and the endorsement when the result has endorser claims or `--endorser-key` was
+given. A pack with one of them left out does not verify. (Until Aegis 1.2 this was all that bound the files to each
+other: the manifest was not signed.)
+
+### The signed manifest (Aegis 1.2)
+
+A 1.1 pack's time was the manifest's `"exported"`, which nobody signed: a pack could be presented as made at any
+time. `export-evidence` now writes **`manifest.cose`** beside `manifest.json` (`common/evidence_pack.py`): a
+COSE_Sign1 by the verifier's identity key, in the envelope above, with a `typ` of its own,
+
+    typ "application/vnd.aegis.evidence-pack+cbor"
+    { 1: "tag:github.com,2026:ismailalitech/aegis/evidence-pack/v1",
+      2: endpoint   tstr               ; the manifest's "endpoint"
+      3: exported   uint               ; the verifier's clock when it made the pack: the manifest's "exported"
+      4: manifest   bstr .size 32      ; SHA-256 of manifest.json, byte for byte as written
+      5: result     bstr .size 32      ; SHA-256 of attestation-result.cbor
+    }
+
+Every key is required and no other is accepted. The manifest says `"signed_manifest": "manifest.cose"`, and is not
+itself in its `files` (it cannot name its own signature's hash). Through the manifest's hash the signature covers
+every file the manifest names. Since one key signs results, audit batches and pack statements, each reader requires
+its own `typ`: a pack statement is never read as a result or a batch, nor the other way round
+(`test_one_key_three_objects_none_taken_for_another`).
+
+The checker, after every other check of the pack:
+
+| The pack | Report |
+|---|---|
+| `manifest.cose` verifies under the verifier key, names this manifest's bytes, this result, the manifest's endpoint and time | `"export_time": {"time": ..., "signed": true}` |
+| `manifest.cose` is there and any of that fails (another key, another `typ`, a bit changed, another pack's, the manifest edited, a claim outside the format) | **not verified** |
+| no `manifest.cose`, the manifest does not name one, and the result has no `aegis.pack-signed` (a pack of 1.1) | verified; `"export_time": {"time": ..., "signed": false, "note": "export time not signed ..."}` |
+| no `manifest.cose`, and the manifest names one | not verified (it was removed) |
+| no `manifest.cose`, and the signed result says `aegis.pack-signed` | **not verified**, with or without `--require-signed-export`: the result is a 1.2 verifier's, whose packs are always signed, so the signature was removed |
+| no `manifest.cose`, with `--require-signed-export` | not verified |
+
+So a 1.2 pack cannot be passed off as a 1.1 one by removing `manifest.cose` and `"signed_manifest"`: its result,
+which is signed, says otherwise (`test_a_1_2_pack_whose_signature_was_removed_is_refused`). What can still be shown
+without a signed time is a pack whose result came from a 1.1 verifier. `--require-signed-export` refuses that too.
+The signed time is the verifier's clock, as every time it signs.
 
 What it does not do, and says so in its report: the keys in a pack are there for convenience, and without the
 thumbprints on the command line the report marks each key `NOT CHECKED`; whoever relies on a pack compares them with
@@ -384,6 +469,8 @@ is compiled, not run; the test plays it in Python).
 | standard evidence | `PQEAT` | accepted where the entry says `"evidence_format": "eat-cose-v1"` |
 | endorsement, JSON (`aegis-endorsement-v1`) | | accepted, the tool's default |
 | endorsement, COSE (`aegis-endorsement-cose-v1`) | | accepted |
+| pack without `manifest.cose` (exported by 1.1) | | verified, export time reported "not signed"; refused with `--require-signed-export` |
+| result without the 1.2 claims | | accepted; a 1.1 reader accepts a result with them |
 
 A result is issued for every one of them and a pack can be exported for every one of them; the checker verifies the
 older quote and the JSON record too, and says in its report that they are not COSE.
@@ -393,10 +480,11 @@ older quote and the JSON record too, and says in its report that they are not CO
 | What | Where |
 |---|---|
 | envelope, evidence claims, verifier, results, COSE endorsement, pack and checker (simulated devices) | `tests/host/test_evidence_format.py` |
+| Aegis 1.2: the signed manifest, the result's new claims (warnings, disabled, min-trust, the audit head) and both checkers on them, 1.1's reader and checker (from the `v1.1.0` tag) on what 1.2 writes | `tests/host/test_verifier_v12.py` |
 | the SDK option: every encoding boundary with ASan/UBSan, the core behind a socket against `fleet.py`, a bound session, a pack | `sdk/tests/eat_check.c`, `tests/host/test_sdk_eat.py` |
 | the STM32H573 partition with the option: `QUOTE_EAT` behind the line protocol against `fleet.py`, a bound session, sizes, seeds | `tests/host/test_sdk_eat.py` (`Stm32Partition`), `tests/fuzz/stm32/fuzz_stm32_partition.c` |
 | the default build is unchanged | `tests/host/test_sdk_golden.py` |
-| hostile objects against the decoders, the verifier and the checker | `tests/redteam/fuzz_host.py` (stage `host-redteam`) |
+| hostile objects against the decoders, the verifier and the checker | `tests/redteam/fuzz_host.py` (stage `host-redteam`; section 8 for the pack statement and the 1.2 claims) |
 | the SDK core with the option under libFuzzer, with the harness's model of an EAT; the shared corpus through that build | `EAT=1 tests/fuzz/run.sh`, seeds `tests/fuzz/seeds/sdk-eat-*`, `tests/host/test_sdk_eat.py` (`Corpus`) |
 
 CI runs all of it: the host regression, two minutes of the fuzz build with the option, and a step that fails if a

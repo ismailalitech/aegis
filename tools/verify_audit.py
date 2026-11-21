@@ -17,6 +17,9 @@ document, not from common/audit.py or common/signed_policy.py.
         byte for byte: a log cut off before it, or written again, fails. --head: the same from a journal line
         ("aegis-audit: batch N ... sha256 H"). Unless --no-freshness, a log whose last batch promised the next one
         before now (or before --at, Unix time) fails as stale: the verifier stopped, or the end was cut off.
+        --result: an attestation result of this verifier (Aegis 1.2) that names the log's head when it was signed
+        (aegis.audit-head, docs/evidence-format.md): that batch must be in the log, byte for byte, as for --head; a
+        result without the claim fails. The report says where the result's own decision is in the log, if it is.
   verify_audit.py policy FILE --key KEY [--audience FLEET] [--min-version N] [--extract OUT.json]
         a signed policy: the signature, the claims, and that the policy inside is JSON with no name twice.
 
@@ -50,6 +53,8 @@ AUDIT_TYP = "application/vnd.aegis.audit-batch+cbor"
 AUDIT_FORMAT = "tag:github.com,2026:ismailalitech/aegis/audit/v1"
 POLICY_TYP = "application/vnd.aegis.fleet-policy+cbor"
 POLICY_FORMAT = "tag:github.com,2026:ismailalitech/aegis/policy/v1"
+RESULT_TYP = "application/eat+cwt"
+EAR_PROFILE = "tag:ietf.org,2026:rats/ear#05"
 MAX_RECORD = 16384
 MAX_POLICY = 1 << 20
 SEGMENT = re.compile(r"audit-(\d{6,12})\.cbor\Z")
@@ -203,12 +208,32 @@ def printable(v):
     return v if isinstance(v, (str, int, bool)) or v is None else repr(v)
 
 
-def check_log(paths, pubs, anchors=(), heads=(), now=None, allow_pruned=False, with_entries=False):
+def read_result_head(data, keys, what):
+    """(iat, log id, batch, SHA-256) from an attestation result signed by one of keys: its aegis.audit-head."""
+    c, _ = open_sign1(data, keys, RESULT_TYP, what, MAX_RECORD)
+    need(c.get(265) == EAR_PROFILE, "%s: not an attestation result (eat_profile)" % what)
+    sm = c.get(266)
+    need(isinstance(sm, dict) and len(sm) == 1, "%s: not one appraisal" % what)
+    a = next(iter(sm.values()))
+    ver = a.get(1006) if isinstance(a, dict) else None
+    need(isinstance(ver, dict), "%s: no verifier claims" % what)
+    log, batch, head = ver.get("aegis.audit-log"), ver.get("aegis.audit-batch"), ver.get("aegis.audit-head")
+    need(log is not None or batch is not None or head is not None,
+         "%s: names no audit-log head (a result from before Aegis 1.2, or from a verifier without an audit log, or "
+         "the first of a new log)" % what)
+    need(isinstance(log, bytes) and len(log) == 16 and is_uint(batch) and batch >= 1 and isinstance(head, bytes)
+         and len(head) == 32, "%s: aegis.audit-log, -batch and -head are not a log id, a batch number and a SHA-256"
+         % what)
+    return c.get(6), log, batch, head
+
+
+def check_log(paths, pubs, anchors=(), heads=(), now=None, allow_pruned=False, with_entries=False, results=()):
     if len(paths) == 1 and os.path.isdir(paths[0]):
         found = sorted((int(SEGMENT.match(n).group(1)), n) for n in os.listdir(paths[0]) if SEGMENT.match(n))
         paths = [os.path.join(paths[0], n) for _, n in found]
     keys = {thumbprint(p): p for p in pubs}
     logs, seen, entries, back = [], {}, [], []
+    times, by_result = {}, {}
     cur = last = None
     pruned = False
     for path in paths:
@@ -252,6 +277,13 @@ def check_log(paths, pubs, anchors=(), heads=(), now=None, allow_pruned=False, w
             cur.update(last_batch=b["batch"], to=b["time"], head=b["head"], due=b["due"],
                        entries=b["first"] + len(b["entries"]) - cur["first_entry"])
             seen[(b["log"], b["batch"])] = b["head"]
+            times[(b["log"], b["batch"])] = b["time"]
+            if results:
+                for i, e in enumerate(b["entries"]):
+                    rs = e["details"].get("result_sha256")
+                    if isinstance(rs, bytes):
+                        by_result.setdefault(rs, {"batch": b["batch"], "entry": b["first"] + i, "event": e["event"],
+                                                  "subject": e["subject"]})
             if with_entries:
                 entries += [dict(e, entry=b["first"] + i, batch=b["batch"], log=b["log"], signed=b["time"])
                             for i, e in enumerate(b["entries"])]
@@ -282,6 +314,20 @@ def check_log(paths, pubs, anchors=(), heads=(), now=None, allow_pruned=False, w
             raise Failed("--head is BATCH:SHA256, not %r" % text[:40]) from None
         anchored(None, batch, digest, "the given head")
         checked.append({"head": digest.hex(), "batch": batch})
+    for path in results:
+        with open(path, "rb") as f:
+            data = f.read()
+        what = "the result %s" % os.path.basename(path)
+        iat, log, batch, digest = read_result_head(data, keys, what)
+        anchored(log, batch, digest, "%s's audit head" % what)
+        entry = by_result.get(hashlib.sha256(data).digest())
+        checked.append({"result": os.path.basename(path), "log": log.hex(), "batch": batch, "head": digest.hex(),
+                        "iat": iat, "batch_time": times[(log, batch)],
+                        "time_order": "the result was signed at or after the batch it names" if
+                        isinstance(iat, int) and iat >= times[(log, batch)] else
+                        "the result's iat is before the time of the batch it names: the verifier's clock went back",
+                        "decision": entry or "not in the log: a decision is logged when it changes, and may still be "
+                                             "waiting for min_interval_s"})
     report = {"logs": printable(logs), "pruned": pruned, "anchors": checked, "time_goes_back_at_batch": back,
               "freshness": "not checked"}
     if now is not None:
@@ -344,6 +390,8 @@ def main(argv=None):
     ap.add_argument("--key", action="append", required=True, help="a public key the signer may have (see the text)")
     ap.add_argument("--anchor", action="append", default=[], help="log: a batch record kept earlier")
     ap.add_argument("--head", action="append", default=[], help="log: BATCH:SHA256 of a batch record, from the journal")
+    ap.add_argument("--result", action="append", default=[],
+                    help="log: an attestation result (COSE_Sign1) whose aegis.audit-head must be in the log")
     ap.add_argument("--at", type=int, help="log: check freshness as of this Unix time (default: now)")
     ap.add_argument("--no-freshness", action="store_true", help="log: do not fail a log whose last promise has lapsed")
     ap.add_argument("--allow-pruned", action="store_true", help="log: accept a log that does not begin at batch 1")
@@ -356,7 +404,7 @@ def main(argv=None):
         pubs = [p for path in a.key for p in load_keys(path)]
         if a.what == "log":
             now = None if a.no_freshness else (a.at if a.at is not None else int(time.time()))
-            report = check_log(a.paths, pubs, a.anchor, a.head, now, a.allow_pruned, a.entries)
+            report = check_log(a.paths, pubs, a.anchor, a.head, now, a.allow_pruned, a.entries, a.result)
         else:
             if len(a.paths) != 1:
                 ap.error("policy takes one file")

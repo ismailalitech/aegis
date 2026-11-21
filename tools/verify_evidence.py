@@ -17,11 +17,15 @@ calling the registered algorithm on the Sig_structure pycose built.
 It is a second, independent reading of docs/evidence-format.md: the claim numbers and rules below were written from
 that document, not from common/eat.py.
 
-  verify_evidence.py pack DIR [--verifier-key T] [--endorser-key T] [--device-key T]
+  verify_evidence.py pack DIR [--verifier-key T] [--endorser-key T] [--device-key T] [--require-signed-export]
         an evidence pack (fleet.py export-evidence): every file against the manifest, the evidence under the device
         key, the attestation result under the verifier key, the endorsement under the endorser key, and that the
         three speak of the same device, quote and measurements. T is a key's COSE Key Thumbprint in hex, as you
         trust it; without it the keys of the pack are used and their thumbprints printed for you to compare.
+        manifest.cose (Aegis 1.2) is the verifier's signature over manifest.json and the export time: checked under
+        the verifier key, and a pack whose signature fails does not verify. A pack without it (exported by Aegis 1.1)
+        verifies, and the report says "export time not signed"; --require-signed-export refuses such a pack. A pack
+        whose result says aegis.pack-signed (every result of a 1.2 verifier) and has no manifest.cose is refused.
   verify_evidence.py evidence FILE --key KEY [--nonce HEX]
   verify_evidence.py result FILE --key KEY
   verify_evidence.py endorsement FILE --key KEY
@@ -51,6 +55,11 @@ EVIDENCE_PROFILE = "tag:github.com,2026:ismailalitech/aegis/evidence/v1"
 ENDORSEMENT_PROFILE = "tag:github.com,2026:ismailalitech/aegis/endorsement/v1"
 EAR_PROFILE = "tag:ietf.org,2026:rats/ear#05"      # draft-ietf-rats-ear-06
 TIERS = {2: "affirming", 32: "warning", 96: "contraindicated", 127: "incomplete"}
+CATEGORIES = {0: "instance-identity", 1: "configuration", 2: "executables", 3: "file-system", 4: "hardware",
+              5: "runtime-opaque", 6: "storage-opaque", 7: "sourced-data"}
+PACK_TYP = "application/vnd.aegis.evidence-pack+cbor"
+PACK_FORMAT = "tag:github.com,2026:ismailalitech/aegis/evidence-pack/v1"
+PACK_SIGNATURE = "manifest.cose"
 LEGACY_QUOTE_LABEL = b"aegis-endpoint-quote-v1"
 LEGACY_ENDORSEMENT_LABEL = b"aegis-endorsement-v1"
 
@@ -100,8 +109,8 @@ def load_key(path):
     return pub
 
 
-def open_sign1(data, pub, what):
-    """Verify an Aegis COSE_Sign1 under pub; returns (claims, Sig_structure)."""
+def open_sign1(data, pub, what, typ=TYP):
+    """Verify an Aegis COSE_Sign1 of that typ under pub; returns (claims, Sig_structure)."""
     try:
         raw = cbor2.loads(data)
         msg = Sign1Message.decode(data, allow_unknown_attributes=True)
@@ -115,7 +124,7 @@ def open_sign1(data, pub, what):
     need(msg.phdr.get(headers.Algorithm) is MlDsa65, "%s: the protected algorithm is not ML-DSA-65 (-49)" % what)
     need(msg.uhdr == {}, "%s: the unprotected header is not empty" % what)
     need(set(msg.phdr) == {headers.Algorithm, headers.KID, HDR_TYP}, "%s: protected header is not {alg, kid, typ}" % what)
-    need(msg.phdr[HDR_TYP] == TYP, "%s: typ is not %s" % (what, TYP))
+    need(msg.phdr[HDR_TYP] == typ, "%s: typ is not %s" % (what, typ))
     need(msg.phdr[headers.KID] == thumbprint(pub), "%s: kid is not the thumbprint of the given key" % what)
     need(isinstance(msg.payload, bytes), "%s: no attached payload" % what)
     need(len(msg.signature) == SIG_LEN, "%s: the signature is not %d bytes" % (what, SIG_LEN))
@@ -252,7 +261,44 @@ def check_result(data, pub, now=None):
         report["ueid"] = att[256].hex()
     if 1014 in a:
         report["endorser_claims"] = {who: {str(k): v for k, v in c.items()} for who, c in a[1014].items()}
+    if isinstance(a.get(1011), dict):
+        report["vector_details"] = {CATEGORIES.get(k, str(k)): v for k, v in a[1011].items()}
+    report.update(aegis_1_2_claims(ver))
     return report
+
+
+def aegis_1_2_claims(ver):
+    """The verifier claims Aegis 1.2 added (docs/evidence-format.md), each optional: a result without them is a 1.1
+    result. One that is there and not of its form fails."""
+    out = {}
+    names = ("aegis.audit-log", "aegis.audit-batch", "aegis.audit-head")
+    if any(k in ver for k in names):
+        log, batch, head = (ver.get(k) for k in names)
+        need(all(k in ver for k in names) and isinstance(log, bytes) and len(log) == 16 and type(batch) is int
+             and 1 <= batch < 1 << 53 and isinstance(head, bytes) and len(head) == 32,
+             "attestation result: aegis.audit-log, -batch and -head are not a log id (16 bytes), a batch number and "
+             "a SHA-256 (32 bytes), all three")
+        out["audit_head"] = {"log": log.hex(), "batch": batch, "sha256": head.hex(),
+                             "meaning": "the verifier's audit log ended at this batch when the result was signed; "
+                                        "check with tools/verify_audit.py log DIR --key KEY --result FILE"}
+    if "aegis.warnings" in ver:
+        warnings = ver["aegis.warnings"]
+        need(isinstance(warnings, list) and 1 <= len(warnings) <= 8
+             and all(isinstance(w, str) and 1 <= len(w) <= 300 for w in warnings),
+             "attestation result: aegis.warnings is not 1 to 8 texts of 1 to 300 characters")
+        out["warnings"] = warnings
+    if "aegis.disabled" in ver:
+        need(ver["aegis.disabled"] is True and ver.get("aegis.admitted") is False,
+             "attestation result: aegis.disabled is not true, or comes with an admission")
+        out["disabled"] = True
+    if "aegis.pack-signed" in ver:
+        need(ver["aegis.pack-signed"] is True, "attestation result: aegis.pack-signed is not true")
+    out["pack_signed"] = "aegis.pack-signed" in ver
+    if "aegis.min-trust" in ver:
+        floor = ver["aegis.min-trust"]
+        need(isinstance(floor, str) and 1 <= len(floor) <= 64, "attestation result: aegis.min-trust is not a label")
+        out["min_trust"] = floor
+    return out
 
 
 def check_endorsement(data, pub):
@@ -298,9 +344,47 @@ def check_legacy_endorsement(data, pub):
             "quote_sha3_256": body.get("evidence", {}).get("token_sha3_256")}
 
 
-def check_pack(d, trust):
-    with open(os.path.join(d, "manifest.json")) as f:
-        man = json.load(f)
+def check_pack_signature(d, man, man_bytes, result_bytes, verifier_pub, require, result_says=False):
+    """manifest.cose: the verifier's signature over manifest.json and the export time. Returns the report's
+    "export_time". result_says: the signed result carries aegis.pack-signed (its verifier signs every pack manifest),
+    so a pack without manifest.cose had it removed."""
+    path = os.path.join(d, PACK_SIGNATURE)
+    named = man.get("signed_manifest")
+    need(named in (None, PACK_SIGNATURE), "pack: the manifest names a signature file other than %s" % PACK_SIGNATURE)
+    if not os.path.exists(path):
+        need(named is None, "pack: the manifest names %s and the pack has none" % PACK_SIGNATURE)
+        need(not result_says, "pack: the result says its verifier signs the manifest of every pack "
+                              "(aegis.pack-signed) and the pack has no %s: it was removed" % PACK_SIGNATURE)
+        need(not require, "pack: the export time is not signed (no %s: a pack from before Aegis 1.2, or one whose "
+                          "signature was removed), and --require-signed-export was given" % PACK_SIGNATURE)
+        return {"time": man.get("exported"), "signed": False,
+                "note": "export time not signed: manifest.json and its \"exported\" are not signed in this pack "
+                        "(a pack from before Aegis 1.2, or one whose %s was removed); the files are still bound by "
+                        "what the signed result names" % PACK_SIGNATURE}
+    with open(path, "rb") as f:
+        data = f.read()
+    c, _ = open_sign1(data, verifier_pub, "pack signature (%s)" % PACK_SIGNATURE, PACK_TYP)
+    need(set(c) == {1, 2, 3, 4, 5}, "pack signature: the claims are not {1, 2, 3, 4, 5}")
+    need(c[1] == PACK_FORMAT, "pack signature: the format is not %s" % PACK_FORMAT)
+    need(isinstance(c[2], str) and 0 < len(c[2]) <= 64 and type(c[3]) is int and 0 <= c[3] < 1 << 40
+         and isinstance(c[4], bytes) and len(c[4]) == 32 and isinstance(c[5], bytes) and len(c[5]) == 32,
+         "pack signature: endpoint, time or hashes are not of their form")
+    need(c[4] == hashlib.sha256(man_bytes).digest(), "pack signature: manifest.json is not the manifest the verifier "
+                                                     "signed")
+    need(c[5] == hashlib.sha256(result_bytes).digest(), "pack signature: the result is not the one the verifier "
+                                                        "signed into the pack")
+    need(c[2] == man.get("endpoint"), "pack signature: it is for another endpoint than the manifest's")
+    need(c[3] == man.get("exported"), "pack signature: the signed export time is not the manifest's")
+    return {"time": c[3], "signed": True,
+            "note": "the export time and manifest.json are signed by the verifier key (%s, typ %s)" % (
+                PACK_SIGNATURE, PACK_TYP)}
+
+
+def check_pack(d, trust, require_signed_export=False):
+    with open(os.path.join(d, "manifest.json"), "rb") as f:
+        man_bytes = f.read()
+    man = json.loads(man_bytes.decode())
+    need(isinstance(man, dict), "pack: the manifest is not an object")
     need(man.get("format") == "aegis-evidence-pack-v1", "pack: unknown manifest format")
     files = {}
     for name, digest in man["files"].items():
@@ -322,6 +406,7 @@ def check_pack(d, trust):
                                     "trusted": "given on the command line" if trust.get(role) else
                                     "NOT CHECKED: taken from the pack; compare the thumbprint with the key you trust"}
     need("verifier" in keys, "pack: no verifier key")
+    need("attestation-result.cbor" in files, "pack: no attestation result")
     res = report["attestation_result"] = check_result(files["attestation-result.cbor"], keys["verifier"])
     need(res["endpoint"] == man["endpoint"], "pack: the result is for another endpoint")
     ev = None
@@ -380,6 +465,10 @@ def check_pack(d, trust):
             if "measurements" in res and res["admitted"]:
                 same("the endorsed measurements and the result's", sorted((m["name"], m["sha256"]) for m in en["measurements"]),
                      sorted((m["name"], m["sha256"]) for m in res["measurements"]))
+    # last, so that each finding above is reported as itself: a pack whose manifest.json was edited to fit is
+    # then caught here, by the verifier's signature over it
+    report["export_time"] = check_pack_signature(d, man, man_bytes, files["attestation-result.cbor"], keys["verifier"],
+                                                 require_signed_export, res["pack_signed"])
     return report
 
 
@@ -391,10 +480,13 @@ def main(argv=None):
     ap.add_argument("--nonce", help="evidence: the challenge the evidence must answer, hex")
     for role in ("verifier", "endorser", "device"):
         ap.add_argument("--%s-key" % role, help="pack: the COSE Key Thumbprint (hex) of the %s key you trust" % role)
+    ap.add_argument("--require-signed-export", action="store_true",
+                    help="pack: refuse a pack whose export time is not signed (no manifest.cose)")
     a = ap.parse_args(argv)
     try:
         if a.what == "pack":
-            report = check_pack(a.path, {"verifier": a.verifier_key, "endorser": a.endorser_key, "device": a.device_key})
+            report = check_pack(a.path, {"verifier": a.verifier_key, "endorser": a.endorser_key, "device": a.device_key},
+                                a.require_signed_export)
         else:
             if not a.key:
                 ap.error("%s needs --key" % a.what)
