@@ -1,0 +1,106 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "tag:github.com,2026:ismailalitech/aegis/schemas/fleet-policy/v1",
+ "title": "Aegis fleet policy (fleet.json)",
+ "description": "The policy the fleet verifier runs from (gateway/aegisd/fleet.py; plain JSON, or the same bytes inside a signed policy, docs/audit-and-policy.md). The verifier ignores keys it does not know (\"note\" is the usual one), so objects here are open; within a key it is strict: a value it does not know is refused, never read as the default. What it refuses up front (fleet.py policy_errors, `fleet.py check`) is encoded below. A signed policy's JSON must also have no name twice in any object, which a schema cannot say. docs/data-formats.md.",
+ "$comment": "Aegis 1.1 as read. 1.2: entry keys \"disabled\" and \"min_trust\": see docs/data-formats.md once v12-verifier lands.",
+ "type": "object",
+ "required": ["endpoints"],
+ "properties": {
+  "endpoints": {"type": "array", "items": {"$ref": "#/$defs/endpoint"}},
+  "timeout_s": {"type": "number", "exclusiveMinimum": 0, "default": 10, "description": "seconds to wait for one endpoint's answer"},
+  "admit_ttl_s": {"type": "integer", "minimum": 0, "description": "seconds an admission lives in the enforcement set unless refreshed; 0 or absent: derived from the interval and the entries (fleet.py admit_ttl)"},
+  "enforce_cmd": {"type": "array", "minItems": 1, "items": {"type": "string"}, "description": "argv of the enforcement hook, run with the entry's name and admit|quarantine appended and AEGIS_ADMIT_TTL in the environment; on a PC verifier only with --enforce"},
+  "endorsers": {"type": "array", "items": {"$ref": "#/$defs/endorser"}, "description": "the keys whose endorsement records this policy trusts (common/endorsement.py trusted); one malformed entry refuses them all"},
+  "max_endorsement_age_s": {"$ref": "#/$defs/positive_seconds", "description": "applies to every entry that does not set its own"},
+  "attestation_results": {"type": "boolean", "default": false, "description": "only true turns on a signed attestation result for every verdict"},
+  "audit_log": {
+   "description": "true: the signed audit log with the default settings; false or null: none; an object: the settings it names, the rest default. Any other value: no log is kept and the verifier says so at error priority.",
+   "oneOf": [
+    {"type": ["boolean", "null"]},
+    {"type": "object", "additionalProperties": false,
+     "properties": {
+      "checkpoint_s": {"$ref": "#/$defs/u31", "default": 3600},
+      "min_interval_s": {"$ref": "#/$defs/u31", "default": 300},
+      "segment_bytes": {"$ref": "#/$defs/u31", "minimum": 65536, "default": 1048576},
+      "max_segments": {"$ref": "#/$defs/u31", "not": {"const": 1}, "default": 0, "description": "0 keeps every segment"}
+     }}
+   ]
+  },
+  "note": {"type": "string"}
+ },
+ "$defs": {
+  "endpoint": {
+   "type": "object",
+   "required": ["name", "host", "port"],
+   "properties": {
+    "name": {"type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$", "description": "becomes part of file names; at most 64, no leading dot"},
+    "kind": {"enum": ["psa", "aegis-pq", "aegis-device", "aegis-tee", "aegis-linux"], "default": "psa"},
+    "host": {"type": "string", "minLength": 1},
+    "port": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 65535}, {"type": "string", "pattern": "^[0-9]{1,5}$"}]},
+    "allowed": {"type": "array", "items": {"$ref": "#/$defs/allowed"}, "default": [],
+                "description": "every component the evidence reports must match one of these (type, measurement and, where given, signer)"},
+    "iak_pub_pem": {"type": "string", "minLength": 1, "description": "path (relative to the policy) of the PSA initial attestation key, PEM SubjectPublicKeyInfo, P-256"},
+    "pq_pub_file": {"type": "string", "minLength": 1, "description": "path of the device's ML-DSA-65 public key, hex"},
+    "pq_pub_sha256": {"$ref": "#/$defs/sha256", "description": "SHA-256 of that key: the policy names the key it means"},
+    "profile": {"enum": ["aegis-linux-software-v1", "aegis-rw612-els-v1", "aegis-rw612-tfm-v1", "aegis-zynqmp-optee-devhuk-v1", "aegis-zynqmp-optee-v1"],
+                "description": "the claims profile the device must report; plain-claims kinds only"},
+    "allow_dev_profile": {"type": "boolean", "description": "only true admits the development profile aegis-zynqmp-optee-devhuk-v1"},
+    "evidence_format": {"const": "eat-cose-v1", "description": "ask for standard evidence (PQEAT); absent: the older quote (PQCHAL), or CHAL for kind psa"},
+    "transcript": {"const": "v2", "description": "a session only through the exchange bound to the appraised quote"},
+    "endorsement": {"const": "required", "description": "admit only with an endorsement record by a trusted endorser for exactly the pinned key"},
+    "endorsement_sha256": {"$ref": "#/$defs/sha256", "description": "the one record accepted (its record_sha256)"},
+    "endorsement_file": {"type": "string", "minLength": 1, "default": "endorsements/<name>.json", "description": "where the record is (JSON or COSE form: its first byte says which)"},
+    "max_endorsement_age_s": {"$ref": "#/$defs/positive_seconds"},
+    "provision": {"type": "boolean", "description": "issue an ML-KEM-768 session credential to the admitted endpoint (aegis-pq and the plain-claims kinds)"},
+    "heartbeat_mac": {"enum": ["kmac256", "sha3-256"], "default": "kmac256"},
+    "verifier_pin_sha256": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$", "description": "SHA-256 of the verifier key the endpoint's firmware pins; a PC verifier issues credentials only where this names its own key"},
+    "address_from": {"type": "string", "description": "written by provision/aegis_provision.py reference; not read by the verifier"},
+    "note": {"type": "string"}
+   },
+   "allOf": [
+    {"if": {"anyOf": [{"not": {"required": ["kind"]}}, {"properties": {"kind": {"const": "psa"}}}]},
+     "then": {"required": ["iak_pub_pem"],
+              "not": {"anyOf": [{"required": ["transcript"]}, {"required": ["endorsement"]}, {"required": ["evidence_format"]},
+                                {"required": ["pq_pub_sha256"]}]},
+              "description": "kind psa: the token's ES256 key is required (unsigned tokens are refused); the post-quantum keys are refused"}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"enum": ["aegis-pq", "aegis-device", "aegis-tee", "aegis-linux"]}}},
+     "then": {"required": ["pq_pub_file"]}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "aegis-device"}}},
+     "then": {"required": ["profile"], "properties": {"profile": {"enum": ["aegis-rw612-els-v1", "aegis-rw612-tfm-v1"]}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "aegis-tee"}}},
+     "then": {"required": ["profile"], "properties": {"profile": {"enum": ["aegis-zynqmp-optee-devhuk-v1", "aegis-zynqmp-optee-v1"]}}}},
+    {"if": {"required": ["kind"], "properties": {"kind": {"const": "aegis-linux"}}},
+     "then": {"required": ["profile"], "properties": {"profile": {"const": "aegis-linux-software-v1"}}}},
+    {"if": {"required": ["kind", "profile"], "properties": {"kind": {"const": "aegis-tee"}, "profile": {"const": "aegis-zynqmp-optee-devhuk-v1"}}},
+     "then": {"required": ["allow_dev_profile"], "properties": {"allow_dev_profile": {"const": true}},
+              "not": {"required": ["endorsement"]},
+              "description": "one key for every chip: admitted only on request, and no endorsement can name one device"}}
+   ]
+  },
+  "allowed": {
+   "type": "object",
+   "required": ["type", "measurement_value"],
+   "description": "other keys (\"image\", \"note\") are ignored",
+   "properties": {
+    "type": {"type": "string", "description": "the component's name as the evidence reports it (SPE, NSPE, APP, ...)"},
+    "measurement_value": {"$ref": "#/$defs/hex", "description": "lower-case hex, as the verifier compares it"},
+    "signer_id": {"$ref": "#/$defs/hex", "description": "if given, the component's signer must be this; a component without a signer (EAT without authorities) then does not match"}
+   }
+  },
+  "endorser": {
+   "type": "object",
+   "required": ["name", "pk_file", "pk_sha256"],
+   "properties": {
+    "name": {"type": "string", "minLength": 1, "maxLength": 256},
+    "pk_file": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "the endorser's ML-DSA-65 public key, hex, path relative to the policy"},
+    "pk_sha256": {"$ref": "#/$defs/sha256"},
+    "revoked": {"type": "boolean", "default": false}
+   }
+  },
+  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+  "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$"},
+  "positive_seconds": {"type": "integer", "minimum": 1},
+  "u31": {"type": "integer", "minimum": 0, "maximum": 2147483647}
+ }
+}

@@ -1,0 +1,70 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "$id": "tag:github.com,2026:ismailalitech/aegis/schemas/endorsement/v1",
+ "title": "Aegis endorsement record, JSON form (aegis-endorsement-v1)",
+ "description": "An endorser's signed statement that one ML-DSA-65 key is the identity key of one device (common/endorsement.py, docs/enrolment.md): written by `provision/aegis_provision.py endorse`, installed by `fleet.py enroll-endorsed`. The signature is ML-DSA-65 by the endorser over \"aegis-endorsement-v1\" || 0x00 || canonical(body), canonical = JSON with sorted keys and no spaces (common/wire.py). Every key is known: a verifier refuses a record or a body with one it does not know. The COSE form (aegis-endorsement-cose-v1, a CBOR file starting 0xd2) carries the same body as EAT claims: docs/data-formats.md.",
+ "type": "object",
+ "additionalProperties": false,
+ "required": ["format", "body", "sig"],
+ "properties": {
+  "format": {"const": "aegis-endorsement-v1"},
+  "body": {"$ref": "#/$defs/body"},
+  "sig": {"type": "string", "pattern": "^[0-9a-f]{6618}$", "description": "the 3309-byte ML-DSA-65 signature, hex"},
+  "device_pk": {"type": "string", "pattern": "^[0-9a-f]{3904}$", "description": "the device's 1952-byte public key, hex; not under the signature (the body names its SHA-256). enroll-endorsed needs it."}
+ },
+ "$defs": {
+  "body": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": ["v", "type", "device", "kind", "device_pk_alg", "device_pk_sha256", "measurements", "evidence",
+                "device_state", "endorser", "endorser_pk_sha256", "issued"],
+   "properties": {
+    "v": {"const": 1},
+    "type": {"const": "endorsement"},
+    "device": {"type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$", "description": "the policy entry's name"},
+    "serial": {"$ref": "#/$defs/text256"},
+    "kind": {"enum": ["aegis-pq", "aegis-device", "aegis-tee", "aegis-linux"],
+             "description": "the policy kind; a record of another kind never matches an entry (the record itself only requires a short text)"},
+    "profile": {"enum": ["aegis-linux-software-v1", "aegis-rw612-els-v1", "aegis-rw612-tfm-v1", "aegis-zynqmp-optee-v1"],
+                "description": "the claims profile, for the plain-claims kinds; absent for aegis-pq. The development profile cannot be endorsed."},
+    "device_pk_alg": {"const": "ML-DSA-65"},
+    "device_pk_sha256": {"$ref": "#/$defs/sha256", "description": "SHA-256 of the 1952-byte public key"},
+    "measurements": {
+     "type": "array", "minItems": 1, "maxItems": 16,
+     "description": "what the device reported at the bench and the endorser found in its reference values; one per type",
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "measurement_value"],
+      "properties": {
+       "type": {"type": "string", "minLength": 1, "maxLength": 64},
+       "measurement_value": {"$ref": "#/$defs/hex"},
+       "signer_id": {"$ref": "#/$defs/hex"}
+      }
+     }
+    },
+    "instance_id": {"$ref": "#/$defs/hex"},
+    "evidence": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": ["challenge", "token_sha3_256"],
+     "description": "the quote the endorser appraised",
+     "properties": {
+      "challenge": {"$ref": "#/$defs/sha256", "description": "32 bytes, hex"},
+      "token_sha3_256": {"$ref": "#/$defs/sha256", "description": "SHA3-256 of the bytes the device signed (the token, or the EAT's Sig_structure)"}
+     }
+    },
+    "device_state": {"enum": ["development", "closed"], "description": "the operator's statement of the device's lifecycle; not measured"},
+    "endorser": {"$ref": "#/$defs/text256", "description": "the endorser's own name (the verifier uses the policy's name for the key)"},
+    "endorser_pk_sha256": {"$ref": "#/$defs/sha256"},
+    "issued": {"$ref": "#/$defs/time"},
+    "expires": {"$ref": "#/$defs/time", "description": "later than issued"},
+    "notes": {"type": "string", "minLength": 1, "maxLength": 1024}
+   }
+  },
+  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+  "hex": {"type": "string", "pattern": "^([0-9a-f]{2})+$"},
+  "text256": {"type": "string", "minLength": 1, "maxLength": 256},
+  "time": {"type": "integer", "minimum": 0, "maximum": 1099511627775}
+ }
+}
