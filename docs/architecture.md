@@ -321,10 +321,15 @@ flowchart TD
 With `"audit_log": true` in the policy (off by default) the loop also keeps a signed, hash-chained log of what it
 decided under `STATE_DIR/audit/`: an entry when a decision, a session or the policy changes, one ML-DSA-65 signature
 per batch by the gateway's identity key, nothing in a cycle where nothing changed
-([audit-and-policy.md](audit-and-policy.md); `fleet.py audit`, `tools/verify_audit.py`). It has not run on the gateway.
+([audit-and-policy.md](audit-and-policy.md); `fleet.py audit`, `tools/verify_audit.py`). It runs on the bench gateway since 21 November 2026.
 
 The verdict names the trust behind it:
-- `trustzone` for the RW612's TF-M partition;
+- `trustzone` for the RW612's TF-M partition, the ZynqMP's OP-TEE TA with the PUF-bound key, and a TF-M (kind
+  `aegis-pq`) endpoint whose token is signed with an attestation key of its own;
+- `trustzone-devkey` for a TF-M (kind `aegis-pq`) endpoint whose token is signed with TF-M's published development
+  key, as on the bench's STM32s: the token proves only what the endpoint's ML-DSA-65 key vouches for, and the signed
+  result says so;
+- `development-shared-key` for the ZynqMP's development profile (one key on every chip; refused unless allowed);
 - `device-key` for a single-image prover with a hardware key;
 - `software` for a Linux prover whose key is a file.
 

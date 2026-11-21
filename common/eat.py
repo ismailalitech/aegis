@@ -295,6 +295,10 @@ def appraisal(verdict, facts):
             details[V_EXECUTABLES] = ["the components are measured by the measured software itself (trust: %s)" % trust]
         else:
             vector[V_EXECUTABLES] = EX_BOOT_APPROVED
+            if trust == "trustzone-devkey":
+                details[V_EXECUTABLES] = ["the platform token is signed with TF-M's published development key, and "
+                                          "the device runs development signing keys: anyone with the debugger can "
+                                          "replace the secure image"]
     if not vector:
         vector[V_INSTANCE_IDENTITY] = 0     # AR4SI: no assertion; the vector may not be empty
     if not verdict.get("admitted"):

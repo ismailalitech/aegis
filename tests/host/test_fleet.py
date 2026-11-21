@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import unittest.mock
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 for p in ("common", "gateway/aegisd"):
@@ -224,6 +225,32 @@ class Fleet(unittest.TestCase):
         ep, v = self.run_pq("pq-good")
         self.assertTrue(v["admitted"], v["reasons"])
         self.assertEqual(fleet.request_pq_key("127.0.0.1", ep.port), PQ_KEYS[0][0])
+
+    def run_pq_with_iak(self, mode):
+        ep = FakeEndpoint(self.key, mode)
+        pqf = os.path.join(self.dir, "pq.pub")
+        with open(pqf, "w") as f:
+            f.write(PQ_KEYS[0][0].hex())
+        conf = {"name": mode, "kind": "aegis-pq", "host": "127.0.0.1", "port": ep.port, "pq_pub_file": pqf,
+                "iak_pub_pem": self.pem, "allowed": self.allowed}
+        return fleet.attest(conf, psa_token.verify_with_cryptography, self.dir, timeout=2)
+
+    def test_pq_trust_label_from_the_pinned_iak(self):
+        """kind aegis-pq: "trustzone" with a pinned attestation key of the device's own, "trustzone-devkey" when the
+        pinned key is TF-M's published development key (which everyone can sign with)."""
+        v = self.run_pq_with_iak("pq-good")
+        self.assertTrue(v["admitted"], v["reasons"])
+        self.assertEqual(v["trust"], "trustzone")
+        with open(self.pem, "rb") as f:
+            body = fleet.pem_body(f.read())
+        with unittest.mock.patch.object(fleet, "TFM_DEV_IAK_B64", body):
+            v = self.run_pq_with_iak("pq-good")
+        self.assertTrue(v["admitted"], v["reasons"])
+        self.assertEqual(v["trust"], "trustzone-devkey")
+
+    def test_the_repository_dev_iak_is_the_one_recognised(self):
+        with open(os.path.join(ROOT, "gateway", "policy", "keys", "tfm-dev-iak.pub.pem"), "rb") as f:
+            self.assertEqual(fleet.pem_body(f.read()), fleet.TFM_DEV_IAK_B64)
 
     def test_pq_wrong_key_quarantined(self):
         _, v = self.run_pq("pq-wrongkey")
