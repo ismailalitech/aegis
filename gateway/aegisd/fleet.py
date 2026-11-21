@@ -85,6 +85,13 @@ issued, revoked or reaches its end, when the policy changes or is refused, and w
 signature per batch, by this verifier's identity key. A cycle in which nothing changed writes nothing. Off by default.
 `fleet.py audit POLICY` checks the log and prints where it stands; tools/verify_audit.py checks a copy with
 third-party libraries only.
+
+Aegis 1.2 (docs/audit-and-policy.md, docs/evidence-format.md): an entry with "disabled": true is not contacted and is
+quarantined every cycle ("disabled by policy"); "min_trust" (per entry, or at the top level) quarantines a verdict whose
+trust label is weaker than the floor (TRUST_ORDER), and `check` names a floor an entry can never meet. A signed result
+carries the verdict's warnings (aegis.warnings), the floor, whether the entry is disabled, and, with the audit log on,
+the log's last batch on disk when it was signed (aegis.audit-log/-batch/-head). export-evidence signs the pack's
+manifest and export time (manifest.cose). Without the new policy keys nothing of this changes a verdict.
 """
 import argparse
 import base64
