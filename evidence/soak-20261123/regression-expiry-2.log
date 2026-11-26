@@ -1,0 +1,2 @@
+PASS endpoint-expiry
+passed 1, failed 0 -> logs/regression/20261123-091828

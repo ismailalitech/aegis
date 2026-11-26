@@ -1,0 +1,62 @@
+@@ now
+1795465406
+yes
+@@ boot
+338271.17 1000185.46
+4e5fc08e-22f7-4c9f-bcb6-353d0095a029
+@@ units
+unit aegis-fleet MainPID=84065 NRestarts=0 ActiveState=active 
+unit aegisd MainPID=38002 NRestarts=0 ActiveState=active 
+@@ procs
+proc aegis-fleet 84065 VmHWM: 25096 kB VmRSS: 24624 kB Threads: 1  fds 3
+proc aegisd 38002 VmHWM: 17744 kB VmRSS: 17744 kB Threads: 1  fds 4
+@@ mem
+MemTotal:         557292 kB
+MemAvailable:     454956 kB
+0.20 0.12 0.07 2/98 84164
+@@ disk
+/dev/root         14988132 338727  14021498       3% /
+1868	/var/lib/aegis
+47205	/var/lib/journal
+Archived and active journals take up 46.0M in the file system.
+@@ state
+1795465380 7540
+@@ creds
+cred frdm-rw612 5ae019bea0e024c1 1795465243 1795465843 4 "requests=17320;stack=19176/32768;clk=ref;fw=rw612-tfm-0.3.2;ttl=499"
+cred stm32h573-dk-2 b24506558ba60b79 1795465242 1795465842 6727 "uptime_s=242813;link=1;fw=0.6.0;sstack=18872/26624;ttl=502"
+cred zynqmp-te0808 0c59dc0a32efc9c3 1795465243 1795465843 4 "requests=4552;fw=zynqmp-optee-0.2.0;ttl=500"
+@@ journal
+1795465238.847689 mpfs-disco-kit-amp python3[84065]: aegis-fleet: credential lifetime 600 s (set by --credential-lifetime)
+1795465238.847689 mpfs-disco-kit-amp python3[84065]: aegis-fleet: platform polarfire, observe-only, credentials on, state /var/lib/aegis/fleet-state.json
+1795465238.865230 mpfs-disco-kit-amp python3[84065]: aegis-fleet: policy sha256 8e334f38b56ec578c3e17f0f45ce0523c53f82779b772f2a66de05e5d11420f5, signed by ops (key sha256 89df175c64a813e4...), version 13, for bench
+1795465243.717951 mpfs-disco-kit-amp python3[84065]: 20:20:43 stm32h573-dk QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]
+1795465243.720826 mpfs-disco-kit-amp python3[84065]: 20:20:43 stm32h573-dk-2 ADMITTED (trustzone-devkey trust)  [credential: issued session b24506558ba6... bound to quote 227a9a941b19... (transcript v2)] [endorsed by bench-pc] WARNING: the TF-M token is signed with TF-M's published development attestation key: anyone can sign such a token; what it says rests on the endpoint's ML-DSA-65 key
+1795465243.720826 mpfs-disco-kit-amp python3[84065]: 20:20:43 arduino-uno-legacy QUARANTINED no attestation: no token in reply: 'LEGACY-SENSOR uno v1 cannot attest; requ'
+1795465243.720826 mpfs-disco-kit-amp python3[84065]: 20:20:43 frdm-rw612 ADMITTED (trustzone trust)  [credential: issued session 5ae019bea0e0... bound to quote 2dab25a61913... (transcript v2)] [endorsed by bench-pc]
+1795465243.720826 mpfs-disco-kit-amp python3[84065]: 20:20:43 zynqmp-te0808 ADMITTED (trustzone trust)  [credential: issued session 0c59dc0a32ef... bound to quote 7d3eadd226bf... (transcript v2)] [endorsed by bench-pc]
+1795465243.806215 mpfs-disco-kit-amp python3[84065]: aegis-audit: batch 419 of log 86eca638a0af9f2569be592bdb14cf8e, entries 1964 to 1976, sha256 eb3bdb0e218c7972e4bc3ac538fb6d0c25d32c8afdb98fa24bf6bd9f46d3007b
+1795465277.977212 mpfs-disco-kit-amp python3[84065]: 20:21:17 stm32h573-dk QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]
+1795465277.977212 mpfs-disco-kit-amp python3[84065]: 20:21:17 stm32h573-dk-2 ADMITTED (trustzone-devkey trust)  [credential: valid, heartbeat 6724 (uptime_s=242710;link=1;fw=0.6.0;sstack=18872/26624;ttl=603)] [endorsed by bench-pc] WARNING: the TF-M token is signed with TF-M's published development attestation key: anyone can sign such a token; what it says rests on the endpoint's ML-DSA-65 key
+1795465277.977212 mpfs-disco-kit-amp python3[84065]: 20:21:17 arduino-uno-legacy QUARANTINED no attestation: no token in reply: 'LEGACY-SENSOR uno v1 cannot attest; requ'
+1795465277.977212 mpfs-disco-kit-amp python3[84065]: 20:21:17 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=17314;stack=19176/32768;clk=ref;fw=rw612-tfm-0.3.2;ttl=602)] [endorsed by bench-pc]
+1795465277.977212 mpfs-disco-kit-amp python3[84065]: 20:21:17 zynqmp-te0808 ADMITTED (trustzone trust)  [credential: valid, heartbeat 1 (requests=4546;fw=zynqmp-optee-0.2.0;ttl=603)] [endorsed by bench-pc]
+1795465312.110204 mpfs-disco-kit-amp python3[84065]: 20:21:52 stm32h573-dk QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]
+1795465312.113562 mpfs-disco-kit-amp python3[84065]: 20:21:52 stm32h573-dk-2 ADMITTED (trustzone-devkey trust)  [credential: valid, heartbeat 6725 (uptime_s=242745;link=1;fw=0.6.0;sstack=18872/26624;ttl=569)] [endorsed by bench-pc] WARNING: the TF-M token is signed with TF-M's published development attestation key: anyone can sign such a token; what it says rests on the endpoint's ML-DSA-65 key
+1795465312.113562 mpfs-disco-kit-amp python3[84065]: 20:21:52 arduino-uno-legacy QUARANTINED no attestation: no token in reply: 'LEGACY-SENSOR uno v1 cannot attest; requ'
+1795465312.113562 mpfs-disco-kit-amp python3[84065]: 20:21:52 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 2 (requests=17316;stack=19176/32768;clk=ref;fw=rw612-tfm-0.3.2;ttl=568)] [endorsed by bench-pc]
+1795465312.113562 mpfs-disco-kit-amp python3[84065]: 20:21:52 zynqmp-te0808 ADMITTED (trustzone trust)  [credential: valid, heartbeat 2 (requests=4548;fw=zynqmp-optee-0.2.0;ttl=569)] [endorsed by bench-pc]
+1795465346.280607 mpfs-disco-kit-amp python3[84065]: 20:22:26 stm32h573-dk QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]
+1795465346.284265 mpfs-disco-kit-amp python3[84065]: 20:22:26 stm32h573-dk-2 ADMITTED (trustzone-devkey trust)  [credential: valid, heartbeat 6726 (uptime_s=242779;link=1;fw=0.6.0;sstack=18872/26624;ttl=536)] [endorsed by bench-pc] WARNING: the TF-M token is signed with TF-M's published development attestation key: anyone can sign such a token; what it says rests on the endpoint's ML-DSA-65 key
+1795465346.284265 mpfs-disco-kit-amp python3[84065]: 20:22:26 arduino-uno-legacy QUARANTINED no attestation: no token in reply: 'LEGACY-SENSOR uno v1 cannot attest; requ'
+1795465346.284265 mpfs-disco-kit-amp python3[84065]: 20:22:26 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 3 (requests=17318;stack=19176/32768;clk=ref;fw=rw612-tfm-0.3.2;ttl=534)] [endorsed by bench-pc]
+1795465346.284265 mpfs-disco-kit-amp python3[84065]: 20:22:26 zynqmp-te0808 ADMITTED (trustzone trust)  [credential: valid, heartbeat 3 (requests=4550;fw=zynqmp-optee-0.2.0;ttl=535)] [endorsed by bench-pc]
+1795465380.727917 mpfs-disco-kit-amp python3[84065]: 20:23:00 stm32h573-dk QUARANTINED no attestation: [Errno 113] No route to host [credential: revoked]
+1795465380.727917 mpfs-disco-kit-amp python3[84065]: 20:23:00 stm32h573-dk-2 ADMITTED (trustzone-devkey trust)  [credential: valid, heartbeat 6727 (uptime_s=242813;link=1;fw=0.6.0;sstack=18872/26624;ttl=502)] [endorsed by bench-pc] WARNING: the TF-M token is signed with TF-M's published development attestation key: anyone can sign such a token; what it says rests on the endpoint's ML-DSA-65 key
+1795465380.727917 mpfs-disco-kit-amp python3[84065]: 20:23:00 arduino-uno-legacy QUARANTINED no attestation: no token in reply: 'LEGACY-SENSOR uno v1 cannot attest; requ'
+1795465380.727917 mpfs-disco-kit-amp python3[84065]: 20:23:00 frdm-rw612 ADMITTED (trustzone trust)  [credential: valid, heartbeat 4 (requests=17320;stack=19176/32768;clk=ref;fw=rw612-tfm-0.3.2;ttl=499)] [endorsed by bench-pc]
+1795465380.727917 mpfs-disco-kit-amp python3[84065]: 20:23:00 zynqmp-te0808 ADMITTED (trustzone trust)  [credential: valid, heartbeat 4 (requests=4552;fw=zynqmp-optee-0.2.0;ttl=500)] [endorsed by bench-pc]
+@@ journal_all
+37
+@@ kernel
+-- No entries --
+@@ end
