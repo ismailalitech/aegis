@@ -33,7 +33,7 @@ Every document below is in this directory unless a path says otherwise.
 | [`data-formats.md`](data-formats.md) | the reference for a program that reads Aegis' files: JSON Schemas of the pack manifest, the verdicts, the policy and the endorsement record ([`schemas/`](schemas/)), every `aegis.*` claim, the older quote, golden vectors ([`../tests/vectors/aegis-1.2/`](../tests/vectors/aegis-1.2/README.md)) |
 | [`audit-and-policy.md`](audit-and-policy.md) | the signed audit log and the signed policy |
 | [`vlan-enforcement.md`](vlan-enforcement.md) | network enforcement with one port and a VLAN switch |
-| [`soak-and-watchdogs.md`](soak-and-watchdogs.md) | the watchdogs and the 24-hour soak: what it catches, pass and fail, how to run it (a 3-hour run: [`../evidence/soak-20261121/`](../evidence/soak-20261121/NOTE.md)) |
+| [`soak-and-watchdogs.md`](soak-and-watchdogs.md) | the watchdogs and the 24-hour soak: what it catches, pass and fail, how to run it (a 3-hour run: [`../evidence/soak-20261121/`](../evidence/soak-20261121/NOTE.md); the 24-hour run: [`../evidence/soak-20261123/`](../evidence/soak-20261123/README.md)) |
 
 ## The Prover SDK (for device makers)
 
