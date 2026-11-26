@@ -1,0 +1,34 @@
+@@ now
+1795480109
+yes
+@@ boot
+352973.74 1042919.34
+4e5fc08e-22f7-4c9f-bcb6-353d0095a029
+@@ units
+unit aegis-fleet MainPID=89654 NRestarts=0 ActiveState=active 
+unit aegisd MainPID=38002 NRestarts=0 ActiveState=active 
+@@ procs
+proc aegis-fleet 89654 VmHWM: 25644 kB VmRSS: 24888 kB Threads: 1  fds 3
+proc aegisd 38002 VmHWM: 17744 kB VmRSS: 17744 kB Threads: 1  fds 4
+@@ mem
+MemTotal:         557292 kB
+MemAvailable:     447856 kB
+0.17 0.14 0.11 2/98 89798
+@@ disk
+/dev/root         14988132 338937  14021288       3% /
+2078	/var/lib/aegis
+47205	/var/lib/journal
+Archived and active journals take up 46.0M in the file system.
+@@ state
+1795480094 7542
+@@ creds
+cred frdm-rw612 a5efa2e503bcae8f 1795479888 1795480488 6 "requests=18222;stack=19176/32768;clk=ref;fw=rw612-tfm-0.3.2;ttl=431"
+cred stm32h573-dk-2 b3868f291ab2338a 1795479887 1795480487 7105 "uptime_s=257502;link=1;fw=0.6.0;sstack=18872/26624;ttl=434"
+cred zynqmp-te0808 84d6cac41c166cc3 1795479888 1795480488 6 "requests=5454;fw=zynqmp-optee-0.2.0;ttl=431"
+@@ journal
+-- No entries --
+@@ journal_all
+1
+@@ kernel
+-- No entries --
+@@ end
